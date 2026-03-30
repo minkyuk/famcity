@@ -2,17 +2,14 @@
 
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import { useRouter } from "next/navigation";
 import Image from "next/image";
 
 const STORAGE_KEY = "famcity_last_seen";
 
-interface NotifPost {
-  id: string;
-  content: string | null;
-  createdAt: string;
-  user: { name: string | null; image: string | null } | null;
-  space: { name: string } | null;
-}
+type NotifItem =
+  | { kind: "post"; id: string; postId: string; authorName: string; authorImage: string | null; content: string | null; spaceName: string | null; createdAt: string }
+  | { kind: "comment"; id: string; postId: string; authorName: string; authorImage: string | null; body: string; postContent: string | null; spaceName: string | null; createdAt: string };
 
 function timeAgo(dateStr: string) {
   const diff = Date.now() - new Date(dateStr).getTime();
@@ -26,13 +23,14 @@ function timeAgo(dateStr: string) {
 
 export function NotificationBell() {
   const [unread, setUnread] = useState(0);
-  const [posts, setPosts] = useState<NotifPost[]>([]);
+  const [items, setItems] = useState<NotifItem[]>([]);
   const [open, setOpen] = useState(false);
   const [loading, setLoading] = useState(false);
   const [mounted, setMounted] = useState(false);
   const [dropdownPos, setDropdownPos] = useState({ top: 60, right: 16 });
   const buttonRef = useRef<HTMLButtonElement>(null);
   const dropdownRef = useRef<HTMLDivElement>(null);
+  const router = useRouter();
 
   useEffect(() => { setMounted(true); }, []);
 
@@ -53,9 +51,8 @@ export function NotificationBell() {
   useEffect(() => {
     if (!open) return;
     const handler = (e: MouseEvent) => {
-      const target = e.target as Node;
-      if (buttonRef.current?.contains(target)) return;
-      if (dropdownRef.current?.contains(target)) return;
+      if (buttonRef.current?.contains(e.target as Node)) return;
+      if (dropdownRef.current?.contains(e.target as Node)) return;
       setOpen(false);
     };
     document.addEventListener("mousedown", handler);
@@ -65,29 +62,30 @@ export function NotificationBell() {
   const handleOpen = async () => {
     if (open) { setOpen(false); return; }
 
-    // Capture button position before state changes
     if (buttonRef.current) {
       const rect = buttonRef.current.getBoundingClientRect();
-      setDropdownPos({
-        top: rect.bottom + 8,
-        right: window.innerWidth - rect.right,
-      });
+      setDropdownPos({ top: rect.bottom + 8, right: window.innerWidth - rect.right });
     }
 
     setOpen(true);
     setLoading(true);
     setUnread(0);
     localStorage.setItem(STORAGE_KEY, new Date().toISOString());
+
     try {
-      const since = new Date(0).toISOString();
-      const res = await fetch(`/api/posts/unread?since=${encodeURIComponent(since)}&recent=1`);
+      const res = await fetch(`/api/posts/unread?recent=1`);
       const data = await res.json();
-      setPosts(data.posts ?? []);
+      setItems(data.items ?? []);
     } catch {
       // silent
     } finally {
       setLoading(false);
     }
+  };
+
+  const handleItemClick = (postId: string) => {
+    setOpen(false);
+    router.push(`/posts/${postId}`);
   };
 
   return (
@@ -109,51 +107,65 @@ export function NotificationBell() {
       {mounted && open && createPortal(
         <div
           ref={dropdownRef}
-          style={{
-            position: "fixed",
-            top: dropdownPos.top,
-            right: dropdownPos.right,
-            zIndex: 9999,
-          }}
-          className="bg-white rounded-xl shadow-xl border border-gray-100 w-80 max-h-[420px] flex flex-col"
+          style={{ position: "fixed", top: dropdownPos.top, right: dropdownPos.right, zIndex: 9999 }}
+          className="bg-white rounded-xl shadow-xl border border-gray-100 w-80 max-h-[440px] flex flex-col"
         >
           <div className="px-4 py-3 border-b border-gray-100 flex items-center justify-between shrink-0">
-            <p className="text-sm font-semibold text-gray-800">Recent activity</p>
+            <p className="text-sm font-semibold text-gray-800">Notifications</p>
             <button onClick={() => setOpen(false)} className="text-gray-400 hover:text-gray-600 text-xl leading-none">×</button>
           </div>
+
           <div className="overflow-y-auto flex-1">
             {loading ? (
               <p className="text-sm text-gray-400 text-center py-8">Loading…</p>
-            ) : posts.length === 0 ? (
-              <p className="text-sm text-gray-400 text-center py-8">No recent posts</p>
+            ) : items.length === 0 ? (
+              <p className="text-sm text-gray-400 text-center py-8">No recent activity</p>
             ) : (
-              posts.map((post) => (
-                <div
-                  key={post.id}
-                  className="flex gap-3 px-4 py-3 hover:bg-gray-50 border-b border-gray-50 transition-colors cursor-default"
+              items.map((item) => (
+                <button
+                  key={item.kind + item.id}
+                  onClick={() => handleItemClick(item.postId)}
+                  className="w-full flex gap-3 px-4 py-3 hover:bg-orange-50 border-b border-gray-50 transition-colors text-left"
                 >
+                  {/* Avatar */}
                   <div className="shrink-0">
-                    {post.user?.image ? (
+                    {item.authorImage ? (
                       <div className="relative w-8 h-8 rounded-full overflow-hidden">
-                        <Image src={post.user.image} alt={post.user.name ?? ""} fill className="object-cover" unoptimized />
+                        <Image src={item.authorImage} alt={item.authorName} fill className="object-cover" unoptimized />
                       </div>
                     ) : (
                       <div className="w-8 h-8 rounded-full bg-orange-200 flex items-center justify-center text-xs font-bold text-orange-700">
-                        {post.user?.name?.[0]?.toUpperCase() ?? "?"}
+                        {item.authorName[0]?.toUpperCase() ?? "?"}
                       </div>
                     )}
                   </div>
+
+                  {/* Text */}
                   <div className="flex-1 min-w-0">
                     <p className="text-xs font-semibold text-gray-700">
-                      {post.user?.name ?? "Someone"}
-                      {post.space && <span className="font-normal text-gray-400"> in {post.space.name}</span>}
+                      {item.authorName}
+                      {item.spaceName && (
+                        <span className="font-normal text-gray-400"> in {item.spaceName}</span>
+                      )}
                     </p>
-                    <p className="text-xs text-gray-500 line-clamp-2 mt-0.5">
-                      {post.content ?? "Shared a photo or audio"}
-                    </p>
-                    <p className="text-[10px] text-gray-400 mt-1">{timeAgo(post.createdAt)}</p>
+
+                    {item.kind === "comment" ? (
+                      <>
+                        <p className="text-xs text-orange-600 mt-0.5">💬 commented on your post</p>
+                        <p className="text-xs text-gray-500 line-clamp-2 mt-0.5 italic">"{item.body}"</p>
+                      </>
+                    ) : (
+                      <p className="text-xs text-gray-500 line-clamp-2 mt-0.5">
+                        {item.content ?? "Shared a photo or file"}
+                      </p>
+                    )}
+
+                    <p className="text-[10px] text-gray-400 mt-1">{timeAgo(item.createdAt)}</p>
                   </div>
-                </div>
+
+                  {/* Arrow hint */}
+                  <span className="text-gray-300 text-xs self-center shrink-0">→</span>
+                </button>
               ))
             )}
           </div>
