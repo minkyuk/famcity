@@ -44,6 +44,11 @@ export default async function RootLayout({
                   🏡 FamCity
                 </Link>
                 {session && <SpaceSwitcher />}
+                {session && (
+                  <Link href="/calendar" className="text-sm font-medium text-gray-600 hover:text-accent transition-colors hidden sm:block">
+                    📅 Events
+                  </Link>
+                )}
                 <div className="flex items-center gap-2 ml-auto">
                   {session && (
                     <>

@@ -6,6 +6,7 @@ import { prisma } from "@/lib/prisma";
 import { Feed } from "./Feed";
 import { HashtagSidebar } from "@/components/shared/HashtagSidebar";
 import { OnlineWidget } from "@/components/shared/OnlineWidget";
+import { UpcomingEvents } from "@/components/shared/UpcomingEvents";
 
 export const dynamic = "force-dynamic";
 
@@ -45,6 +46,7 @@ export default async function HomePage() {
       {/* Sidebar — hidden on mobile */}
       <aside className="hidden lg:block w-48 shrink-0 pt-1 flex flex-col gap-4">
         <OnlineWidget />
+        <UpcomingEvents />
         <Suspense>
           <HashtagSidebar />
         </Suspense>

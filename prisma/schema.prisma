@@ -51,6 +51,8 @@ model User {
   presence      OnlinePresence?
   sentDMs          DirectMessage[]  @relation("DMSent")
   receivedDMs      DirectMessage[]  @relation("DMReceived")
+  createdEvents Event[]
+  eventRsvps    EventRSVP[]
 }
 
 model VerificationToken {
@@ -72,6 +74,7 @@ model Space {
   members      SpaceMember[]
   posts        Post[]
   chatChannels ChatChannel[]
+  events       Event[]
 }
 
 model SpaceMember {
@@ -223,4 +226,40 @@ model DirectMessage {
   content    String
   createdAt  DateTime @default(now())
   read       Boolean  @default(false)
+}
+
+// --- Events / Calendar ---
+
+model Event {
+  id          String      @id @default(cuid())
+  title       String
+  description String?     @db.Text
+  location    String?
+  startAt     DateTime
+  endAt       DateTime?
+  allDay      Boolean     @default(false)
+  spaceId     String?
+  space       Space?      @relation(fields: [spaceId], references: [id], onDelete: Cascade)
+  createdById String
+  createdBy   User        @relation(fields: [createdById], references: [id], onDelete: Cascade)
+  createdAt   DateTime    @default(now())
+  rsvps       EventRSVP[]
+}
+
+model EventRSVP {
+  id      String     @id @default(cuid())
+  eventId String
+  event   Event      @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  userId  String
+  user    User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  status  RSVPStatus
+  createdAt DateTime @default(now())
+
+  @@unique([eventId, userId])
+}
+
+enum RSVPStatus {
+  YES
+  NO
+  MAYBE
 }
