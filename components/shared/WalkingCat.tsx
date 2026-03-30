@@ -247,19 +247,19 @@ export function WalkingCat() {
   }, [mounted]);
 
   const cat = useCreaturePhysics({
-    gravity: 0.28, airFriction: 0.992, groundFriction: 0.96,
-    wallBounce: 0.55, floorBounce: 0.42, ceilBounce: 0.45,
-    scrollKickY: 0.4, scrollKickX: 0.25,
-    baseSpeed: 0.7, w: CAT_W, h: CAT_H, startX: 120,
+    gravity: 0.07, airFriction: 0.998, groundFriction: 0.982,
+    wallBounce: 0.38, floorBounce: 0.28, ceilBounce: 0.22,
+    scrollKickY: 0.15, scrollKickX: 0.08,
+    baseSpeed: 0.32, w: CAT_W, h: CAT_H, startX: 120,
   }, mounted, () => {});
   catKickRef.current = cat.kick;
 
-  // Puddle: bouncier, lighter, faster scroll reaction, slightly slower walk
+  // Poodle: slightly floatier than the cat
   const puddle = useCreaturePhysics({
-    gravity: 0.2, airFriction: 0.994, groundFriction: 0.965,
-    wallBounce: 0.65, floorBounce: 0.6, ceilBounce: 0.55,
-    scrollKickY: 0.55, scrollKickX: 0.4,
-    baseSpeed: 0.55, w: PUDDLE_W, h: PUDDLE_H, startX: 260,
+    gravity: 0.055, airFriction: 0.998, groundFriction: 0.984,
+    wallBounce: 0.42, floorBounce: 0.32, ceilBounce: 0.25,
+    scrollKickY: 0.18, scrollKickX: 0.1,
+    baseSpeed: 0.28, w: PUDDLE_W, h: PUDDLE_H, startX: 260,
   }, mounted, () => {});
   puddleKickRef.current = puddle.kick;
 

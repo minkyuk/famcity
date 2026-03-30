@@ -1,6 +1,6 @@
 "use client";
 
-import { Suspense, useState } from "react";
+import { Suspense, useRef, useState } from "react";
 import { formatDistanceToNow } from "date-fns";
 import Image from "next/image";
 import { YoutubeEmbed } from "./YoutubeEmbed";
@@ -10,6 +10,7 @@ import { AudioPlayer } from "./AudioPlayer";
 import { ReactionBar } from "./ReactionBar";
 import { CommentThread } from "./CommentThread";
 import { HashtagPills } from "./HashtagPills";
+import { UserPopup } from "@/components/shared/UserPopup";
 import type { Post, Reaction, Comment, PostMedia, PostHashtag, Hashtag } from "@prisma/client";
 
 type PostWithRelations = Post & {
@@ -67,6 +68,8 @@ export function PostCard({ post, currentUserId, currentUserName, onDelete, onUpd
   const [isPrivate, setIsPrivate] = useState(post.isPrivate);
   const [saving, setSaving] = useState(false);
   const [localPost, setLocalPost] = useState(post);
+  const [showPopup, setShowPopup] = useState(false);
+  const avatarRef = useRef<HTMLButtonElement>(null);
 
   const handleDelete = async () => {
     if (!confirm("Delete this post?")) return;
@@ -93,9 +96,14 @@ export function PostCard({ post, currentUserId, currentUserName, onDelete, onUpd
   const spaceName = localPost.space?.name ?? (localPost.spaceId ? null : "Global");
 
   return (
+    <>
     <article className="bg-white rounded-2xl shadow-sm border border-gray-100 p-4 flex flex-col gap-3">
       <div className="flex items-center justify-between">
-        <div className="flex items-center gap-2">
+        <button
+          ref={avatarRef}
+          onClick={() => setShowPopup(true)}
+          className="flex items-center gap-2 text-left"
+        >
           <Avatar name={localPost.authorName} image={localPost.authorImage} />
           <div>
             <p className="text-sm font-semibold text-gray-800">{localPost.authorName}</p>
@@ -119,7 +127,7 @@ export function PostCard({ post, currentUserId, currentUserName, onDelete, onUpd
               )}
             </div>
           </div>
-        </div>
+        </button>
         <div className="flex items-center gap-2">
           <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${badge.color}`}>
             {post.type === "IMAGE" && post.media.length > 1 ? `${post.media.length} Photos` : badge.label}
@@ -218,5 +226,16 @@ export function PostCard({ post, currentUserId, currentUserName, onDelete, onUpd
       <ReactionBar postId={post.id} reactions={post.reactions} currentUserName={currentUserName} />
       <CommentThread postId={post.id} initialComments={post.comments} currentUserId={currentUserId} currentUserName={currentUserName} />
     </article>
+    {showPopup && localPost.userId && (
+      <UserPopup
+        userId={localPost.userId}
+        name={localPost.authorName}
+        image={localPost.authorImage ?? null}
+        anchorRef={avatarRef}
+        onClose={() => setShowPopup(false)}
+        currentUserId={currentUserId}
+      />
+    )}
+    </>
   );
 }
