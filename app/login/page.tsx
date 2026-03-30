@@ -1,12 +1,23 @@
 "use client";
 
-import { signIn } from "next-auth/react";
-import { useSearchParams } from "next/navigation";
-import { Suspense } from "react";
+import { signIn, useSession } from "next-auth/react";
+import { useSearchParams, useRouter } from "next/navigation";
+import { Suspense, useEffect } from "react";
 
 function LoginContent() {
+  const { data: session, status } = useSession();
+  const router = useRouter();
   const params = useSearchParams();
   const error = params.get("error");
+
+  // If already signed in, go straight to the feed
+  useEffect(() => {
+    if (status === "authenticated") router.replace("/");
+  }, [status, router]);
+
+  if (status === "loading" || status === "authenticated") {
+    return <div className="min-h-[60vh] flex items-center justify-center text-gray-400 text-sm">Loading…</div>;
+  }
 
   return (
     <div className="min-h-[60vh] flex flex-col items-center justify-center gap-6">
