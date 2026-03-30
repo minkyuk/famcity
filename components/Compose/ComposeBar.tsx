@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { YouTubeInput } from "./YouTubeInput";
 import { ImageUploader } from "./ImageUploader";
@@ -20,7 +20,7 @@ const TYPES: { type: PostType; icon: string; label: string }[] = [
   { type: "PDF", icon: "📄", label: "PDF" },
 ];
 
-interface Space { id: string; name: string; }
+interface Space { id: string; name: string; isSystem?: boolean; }
 
 export function ComposeBar() {
   const [activeType, setActiveType] = useState<PostType>("TEXT");
@@ -30,19 +30,26 @@ export function ComposeBar() {
   const { showToast } = useToast();
   const router = useRouter();
   const searchParams = useSearchParams();
+  const defaultSet = useRef(false);
 
-  // Initialize directly from URL so the dropdown shows the right space immediately
-  const [spaceId, setSpaceId] = useState<string>(() => searchParams.get("spaceId") ?? "global");
+  const [spaceId, setSpaceId] = useState<string>(() => searchParams.get("spaceId") ?? "");
 
   useEffect(() => {
     fetch("/api/spaces")
       .then((r) => r.json())
       .then((data) => {
         if (!Array.isArray(data)) return;
-        setSpaces(data);
+        // System spaces (news, agents) are not user-postable
+        const postable = data.filter((s: Space) => !s.isSystem);
+        setSpaces(postable);
+        // Set default to first joined space (API returns sorted by joinedAt asc)
+        if (!defaultSet.current && !searchParams.get("spaceId") && postable.length > 0) {
+          setSpaceId(postable[0].id);
+          defaultSet.current = true;
+        }
       })
       .catch(() => {});
-  }, []);
+  }, [searchParams]);
 
   const createPost = async (data: {
     type: PostType;
@@ -55,11 +62,11 @@ export function ComposeBar() {
       const res = await fetch("/api/posts", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ...data, spaceId: spaceId === "global" ? undefined : spaceId || undefined }),
+        body: JSON.stringify({ ...data, spaceId: spaceId || undefined }),
       });
       if (!res.ok) throw new Error();
       showToast("Posted!");
-      router.push(spaceId && spaceId !== "global" ? `/spaces/${spaceId}` : "/");
+      router.push(spaceId ? `/spaces/${spaceId}` : "/");
       router.refresh();
     } catch {
       showToast("Failed to post", "error");
@@ -78,7 +85,7 @@ export function ComposeBar() {
           onChange={(e) => setSpaceId(e.target.value)}
           className="text-sm font-semibold text-gray-800 bg-orange-50 border border-orange-200 rounded-lg px-3 py-1.5 focus:outline-none focus:ring-2 focus:ring-orange-300"
         >
-          <option value="global">🌍 Everyone (global)</option>
+          <option value="">🌍 Everyone (global)</option>
           {spaces.map((s) => (
             <option key={s.id} value={s.id}>👥 {s.name}</option>
           ))}

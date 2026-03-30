@@ -130,7 +130,7 @@ export function PostCard({ post, currentUserId, currentUserName, onDelete, onUpd
         </button>
         <div className="flex items-center gap-2">
           <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${badge.color}`}>
-            {post.type === "IMAGE" && post.media.length > 1 ? `${post.media.length} Photos` : badge.label}
+            {badge.label}
           </span>
           {isOwner && (
             <div className="flex items-center gap-1">

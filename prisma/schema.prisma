@@ -66,15 +66,17 @@ model VerificationToken {
 // --- Spaces ---
 
 model Space {
-  id           String        @id @default(cuid())
-  name         String
-  description  String?
-  inviteCode   String        @unique
-  createdAt    DateTime      @default(now())
-  members      SpaceMember[]
-  posts        Post[]
-  chatChannels ChatChannel[]
-  events       Event[]
+  id             String        @id @default(cuid())
+  name           String
+  description    String?
+  inviteCode     String        @unique
+  createdAt      DateTime      @default(now())
+  isSystem       Boolean       @default(false)  // created by the system, not a user
+  excludeFromAll Boolean       @default(false)  // posts don't appear in the "All" feed
+  members        SpaceMember[]
+  posts          Post[]
+  chatChannels   ChatChannel[]
+  events         Event[]
 }
 
 model SpaceMember {

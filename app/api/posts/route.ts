@@ -31,17 +31,23 @@ export async function GET(req: NextRequest) {
   const andClauses: object[] = [];
 
   if (spaceId) {
-    const membership = await prisma.spaceMember.findUnique({
-      where: { userId_spaceId: { userId: session.user.id, spaceId } },
-    });
-    if (!membership) return NextResponse.json({ error: "Not a member" }, { status: 403 });
+    // System spaces are readable by anyone; regular spaces require membership
+    const space = await prisma.space.findUnique({ where: { id: spaceId }, select: { isSystem: true } });
+    if (!space?.isSystem) {
+      const membership = await prisma.spaceMember.findUnique({
+        where: { userId_spaceId: { userId: session.user.id, spaceId } },
+      });
+      if (!membership) return NextResponse.json({ error: "Not a member" }, { status: 403 });
+    }
     andClauses.push({ spaceId });
   } else {
-    const memberships = await prisma.spaceMember.findMany({
-      where: { userId: session.user.id },
-      select: { spaceId: true },
-    });
-    const spaceIds = memberships.map((m) => m.spaceId);
+    // "All" feed: member spaces + global (null), but exclude system spaces marked excludeFromAll
+    const [memberships, excludedSpaces] = await Promise.all([
+      prisma.spaceMember.findMany({ where: { userId: session.user.id }, select: { spaceId: true } }),
+      prisma.space.findMany({ where: { excludeFromAll: true }, select: { id: true } }),
+    ]);
+    const excludedIds = new Set(excludedSpaces.map((s) => s.id));
+    const spaceIds = memberships.map((m) => m.spaceId).filter((id) => !excludedIds.has(id));
     andClauses.push({ OR: [{ spaceId: null }, { spaceId: { in: spaceIds } }] });
   }
 

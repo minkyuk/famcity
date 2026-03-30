@@ -11,7 +11,7 @@ interface ImageUploaderProps {
 
 const MAX_RAW_SIZE = 20 * 1024 * 1024; // 20MB hard reject — too large even to compress
 const TARGET_SIZE  =  3.5 * 1024 * 1024; // compress down to ~3.5MB to stay under Vercel's 4.5MB limit
-const MAX_FILES = 5;
+const MAX_FILES = 10;
 
 interface Preview { file: File; objectUrl: string; }
 

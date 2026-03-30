@@ -7,6 +7,7 @@ import { Feed } from "@/app/Feed";
 import { InviteButton } from "@/components/spaces/InviteButton";
 import { HashtagSidebar } from "@/components/shared/HashtagSidebar";
 import { OnlineWidget } from "@/components/shared/OnlineWidget";
+import { AgentActivityTrigger } from "@/components/spaces/AgentActivityTrigger";
 
 export default async function SpacePage({
   params,
@@ -17,16 +18,19 @@ export default async function SpacePage({
   const session = await getServerSession(authOptions);
   if (!session?.user) redirect("/login");
 
-  const membership = await prisma.spaceMember.findUnique({
-    where: { userId_spaceId: { userId: session.user.id, spaceId: id } },
-  });
-  if (!membership) notFound();
-
   const space = await prisma.space.findUnique({
     where: { id },
     include: { _count: { select: { members: true } } },
   });
   if (!space) notFound();
+
+  // System spaces are open to all; regular spaces require membership
+  if (!space.isSystem) {
+    const membership = await prisma.spaceMember.findUnique({
+      where: { userId_spaceId: { userId: session.user.id, spaceId: id } },
+    });
+    if (!membership) notFound();
+  }
 
   const posts = await prisma.post.findMany({
     take: 20,
@@ -48,6 +52,7 @@ export default async function SpacePage({
   });
 
   const nextCursor = posts.length === 20 ? posts[posts.length - 1].id : null;
+  const isAgentSpace = space.name === "The Curiosity Den";
 
   return (
     <div className="flex gap-6">
@@ -69,8 +74,11 @@ export default async function SpacePage({
               {space.description ? ` · ${space.description}` : ""}
             </p>
           </div>
-          <InviteButton inviteCode={space.inviteCode} />
+          {!space.isSystem && <InviteButton inviteCode={space.inviteCode} />}
         </div>
+
+        {/* Trigger agent activity when viewing the Curiosity Den */}
+        {isAgentSpace && <AgentActivityTrigger />}
 
         <Suspense>
           <Feed initialPosts={posts} initialNextCursor={nextCursor} spaceId={id} />

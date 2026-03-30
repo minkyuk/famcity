@@ -11,19 +11,30 @@ export async function GET() {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const memberships = await prisma.spaceMember.findMany({
-    where: { userId: session.user.id },
-    include: {
-      space: {
-        include: {
-          _count: { select: { members: true, posts: true } },
-        },
+  const [memberships, systemSpaces] = await Promise.all([
+    prisma.spaceMember.findMany({
+      where: { userId: session.user.id },
+      include: {
+        space: { include: { _count: { select: { members: true, posts: true } } } },
       },
-    },
-    orderBy: { joinedAt: "asc" },
-  });
+      orderBy: { joinedAt: "asc" },
+    }),
+    prisma.space.findMany({
+      where: { isSystem: true },
+      include: { _count: { select: { members: true, posts: true } } },
+    }),
+  ]);
 
-  return NextResponse.json(memberships.map((m) => ({ ...m.space, role: m.role })));
+  const memberSpaceIds = new Set(memberships.map((m) => m.spaceId));
+  const result = [
+    ...memberships.map((m) => ({ ...m.space, role: m.role })),
+    // System spaces appended at end (unless already in memberships)
+    ...systemSpaces
+      .filter((s) => !memberSpaceIds.has(s.id))
+      .map((s) => ({ ...s, role: "MEMBER" as const })),
+  ];
+
+  return NextResponse.json(result);
 }
 
 const CreateSpaceSchema = z.object({
