@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
+import { getAccessiblePost } from "@/lib/postAccess";
 import { z } from "zod";
 
 const Schema = z.object({ emoji: z.string().min(1).max(10) });
@@ -16,6 +17,9 @@ export async function POST(
   }
 
   const { id: postId } = await params;
+  const access = await getAccessiblePost(postId, session.user.id);
+  if (!access) return NextResponse.json({ error: "Not found" }, { status: 404 });
+
   const body = await req.json();
   const result = Schema.safeParse(body);
 

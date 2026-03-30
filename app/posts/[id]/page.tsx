@@ -1,7 +1,8 @@
-import { notFound } from "next/navigation";
+import { notFound, redirect } from "next/navigation";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
+import { getAccessiblePost } from "@/lib/postAccess";
 import Link from "next/link";
 import { PostCard } from "@/components/Feed/PostCard";
 
@@ -12,6 +13,10 @@ export default async function PostPage({
 }) {
   const { id } = await params;
   const session = await getServerSession(authOptions);
+  if (!session?.user) redirect("/login");
+
+  const access = await getAccessiblePost(id, session.user.id);
+  if (!access) notFound();
 
   const post = await prisma.post.findUnique({
     where: { id },
@@ -33,8 +38,8 @@ export default async function PostPage({
       </Link>
       <PostCard
         post={post}
-        currentUserId={session?.user.id ?? ""}
-        currentUserName={session?.user.name ?? ""}
+        currentUserId={session.user.id}
+        currentUserName={session.user.name ?? ""}
       />
     </div>
   );
