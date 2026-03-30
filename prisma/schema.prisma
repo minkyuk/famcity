@@ -141,6 +141,7 @@ enum PostType {
   YOUTUBE
   AUDIO
   VIDEO
+  PDF
 }
 
 model Reaction {

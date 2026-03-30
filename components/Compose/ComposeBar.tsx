@@ -6,9 +6,10 @@ import { YouTubeInput } from "./YouTubeInput";
 import { ImageUploader } from "./ImageUploader";
 import { AudioRecorder } from "./AudioRecorder";
 import { VideoUploader } from "./VideoUploader";
+import { PDFUploader } from "./PDFUploader";
 import { useToast } from "@/components/shared/Toast";
 
-type PostType = "TEXT" | "YOUTUBE" | "IMAGE" | "AUDIO" | "VIDEO";
+type PostType = "TEXT" | "YOUTUBE" | "IMAGE" | "AUDIO" | "VIDEO" | "PDF";
 
 const TYPES: { type: PostType; icon: string; label: string }[] = [
   { type: "TEXT", icon: "📝", label: "Text" },
@@ -16,6 +17,7 @@ const TYPES: { type: PostType; icon: string; label: string }[] = [
   { type: "IMAGE", icon: "🖼", label: "Photo" },
   { type: "VIDEO", icon: "🎥", label: "Video" },
   { type: "AUDIO", icon: "🎙", label: "Audio" },
+  { type: "PDF", icon: "📄", label: "PDF" },
 ];
 
 interface Space { id: string; name: string; }
@@ -142,6 +144,9 @@ export function ComposeBar() {
       )}
       {activeType === "AUDIO" && (
         <AudioRecorder submitting={submitting} onSubmit={(data) => createPost({ type: "AUDIO", ...data })} />
+      )}
+      {activeType === "PDF" && (
+        <PDFUploader submitting={submitting} onSubmit={(data) => createPost({ type: "PDF", ...data })} />
       )}
     </div>
   );

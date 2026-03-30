@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-export const PostTypeSchema = z.enum(["TEXT", "IMAGE", "YOUTUBE", "AUDIO", "VIDEO"]);
+export const PostTypeSchema = z.enum(["TEXT", "IMAGE", "YOUTUBE", "AUDIO", "VIDEO", "PDF"]);
 
 export const CreatePostSchema = z.object({
   content: z.string().max(2000).optional(),

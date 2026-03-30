@@ -27,7 +27,13 @@ const TYPE_BADGE: Record<string, { label: string; color: string }> = {
   YOUTUBE: { label: "Video", color: "bg-red-100 text-red-600" },
   AUDIO: { label: "Audio", color: "bg-purple-100 text-purple-600" },
   VIDEO: { label: "Video", color: "bg-orange-100 text-orange-600" },
+  PDF: { label: "PDF", color: "bg-sky-100 text-sky-600" },
 };
+
+function pdfThumbnail(url: string): string {
+  // Cloudinary: insert f_jpg,pg_1 transformation to render page 1 as JPEG
+  return url.replace("/upload/", "/upload/f_jpg,pg_1/").replace(/\.pdf$/i, ".jpg");
+}
 
 interface PostCardProps {
   post: PostWithRelations;
@@ -190,6 +196,23 @@ export function PostCard({ post, currentUserId, currentUserName, onDelete, onUpd
           className="w-full rounded-xl max-h-96 bg-black"
           preload="metadata"
         />
+      )}
+      {post.type === "PDF" && post.mediaUrl && (
+        <div className="flex flex-col gap-2">
+          <img
+            src={pdfThumbnail(post.mediaUrl)}
+            alt="PDF preview"
+            className="w-full rounded-xl border border-gray-100"
+          />
+          <a
+            href={post.mediaUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="flex items-center gap-2 text-sm text-orange-600 hover:text-orange-700 font-medium"
+          >
+            📄 Download PDF
+          </a>
+        </div>
       )}
 
       <ReactionBar postId={post.id} reactions={post.reactions} currentUserName={currentUserName} />
