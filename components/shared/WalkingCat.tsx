@@ -59,48 +59,73 @@ function CatSVG({ speed }: { speed: number }) {
   );
 }
 
-// ─── Black cat SVG ────────────────────────────────────────────────────────────
-// Identical silhouette to the orange cat but fully black, with white eyes.
+// ─── Black poodle SVG ────────────────────────────────────────────────────────
+// Cartoon black poodle with pompom head, chest, feet, and tail.
 
 function PuddleSVG({ speed }: { speed: number }) {
   const dur = Math.max(0.3, 0.7 - speed * 0.05) + "s";
   return (
     <svg width={PUDDLE_W} height={PUDDLE_H} viewBox="0 0 88 58" xmlns="http://www.w3.org/2000/svg" style={{ overflow: "visible" }}>
       <style>{`
-        .pcb{animation:pbob ${dur} ease-in-out infinite;transform-box:fill-box;transform-origin:center}
-        .plfl{animation:plA ${dur} ease-in-out infinite;transform-box:fill-box;transform-origin:top center}
-        .plfr{animation:plB ${dur} ease-in-out infinite;transform-box:fill-box;transform-origin:top center}
-        .plbl{animation:plB ${dur} ease-in-out infinite;transform-box:fill-box;transform-origin:top center}
-        .plbr{animation:plA ${dur} ease-in-out infinite;transform-box:fill-box;transform-origin:top center}
-        .ptail{animation:ptailSway 0.9s ease-in-out infinite;transform-box:fill-box;transform-origin:90% 40%}
-        @keyframes pbob{0%,100%{transform:translateY(0)}50%{transform:translateY(-2.5px)}}
-        @keyframes plA{0%,100%{transform:rotate(-28deg) translateY(1px)}50%{transform:rotate(22deg) translateY(-1px)}}
-        @keyframes plB{0%,100%{transform:rotate(22deg) translateY(-1px)}50%{transform:rotate(-28deg) translateY(1px)}}
-        @keyframes ptailSway{0%,100%{transform:rotate(-18deg)}50%{transform:rotate(22deg)}}
+        .pdcb{animation:pdbob ${dur} ease-in-out infinite;transform-box:fill-box;transform-origin:center}
+        .pdlfl{animation:pdlA ${dur} ease-in-out infinite;transform-box:fill-box;transform-origin:top center}
+        .pdlfr{animation:pdlB ${dur} ease-in-out infinite;transform-box:fill-box;transform-origin:top center}
+        .pdlbl{animation:pdlB ${dur} ease-in-out infinite;transform-box:fill-box;transform-origin:top center}
+        .pdlbr{animation:pdlA ${dur} ease-in-out infinite;transform-box:fill-box;transform-origin:top center}
+        .pdtail{animation:pdtailSway 1s ease-in-out infinite;transform-box:fill-box;transform-origin:20% 80%}
+        @keyframes pdbob{0%,100%{transform:translateY(0)}50%{transform:translateY(-2px)}}
+        @keyframes pdlA{0%,100%{transform:rotate(-25deg)}50%{transform:rotate(20deg)}}
+        @keyframes pdlB{0%,100%{transform:rotate(20deg)}50%{transform:rotate(-25deg)}}
+        @keyframes pdtailSway{0%,100%{transform:rotate(-25deg)}50%{transform:rotate(15deg)}}
       `}</style>
-      {/* Tail */}
-      <g className="ptail">
-        <path d="M18,34 Q6,22 10,10 Q14,2 19,7" stroke="#111" strokeWidth="4.5" fill="none" strokeLinecap="round"/>
+
+      {/* Tail — curly with pompom at tip */}
+      <g className="pdtail">
+        <path d="M17,33 Q5,26 7,16 Q9,8 15,12" stroke="#111" strokeWidth="3.5" fill="none" strokeLinecap="round"/>
+        <circle cx="15" cy="10" r="5" fill="#111"/>
       </g>
-      {/* Body + head */}
-      <g className="pcb">
-        <ellipse cx="40" cy="37" rx="21" ry="13" fill="#111"/>
-        <circle cx="60" cy="22" r="15" fill="#111"/>
-        {/* Ears */}
-        <polygon points="49,11 52,1 58,11" fill="#111"/>
-        <polygon points="61,11 65,1 70,11" fill="#111"/>
-        {/* Eyes — white with black pupils */}
-        <ellipse cx="55" cy="20" rx="3.2" ry="3.8" fill="white"/>
-        <ellipse cx="55" cy="20" rx="1.6" ry="2.2" fill="#111"/>
-        <circle cx="55.8" cy="18.8" r="0.7" fill="white"/>
-        <ellipse cx="65" cy="20" rx="3.2" ry="3.8" fill="white"/>
-        <ellipse cx="65" cy="20" rx="1.6" ry="2.2" fill="#111"/>
-        <circle cx="65.8" cy="18.8" r="0.7" fill="white"/>
-        {/* Legs */}
-        <g className="plbl"><rect x="22" y="47" width="7" height="12" rx="3.5" fill="#111"/></g>
-        <g className="plbr"><rect x="31" y="47" width="7" height="12" rx="3.5" fill="#111"/></g>
-        <g className="plfl"><rect x="49" y="47" width="7" height="12" rx="3.5" fill="#111"/></g>
-        <g className="plfr"><rect x="58" y="47" width="7" height="12" rx="3.5" fill="#111"/></g>
+
+      <g className="pdcb">
+        {/* Body */}
+        <ellipse cx="38" cy="36" rx="19" ry="11" fill="#111"/>
+        {/* Chest pompom */}
+        <circle cx="52" cy="36" r="7" fill="#111"/>
+
+        {/* Head */}
+        <circle cx="62" cy="22" r="11" fill="#111"/>
+        {/* Topknot pompom */}
+        <circle cx="62" cy="10" r="7" fill="#111"/>
+        {/* Droopy ears */}
+        <ellipse cx="53" cy="29" rx="5" ry="10" fill="#111"/>
+        <ellipse cx="71" cy="29" rx="5" ry="10" fill="#111"/>
+
+        {/* Eyes — white with dark pupils */}
+        <ellipse cx="58" cy="20" rx="3" ry="3.5" fill="white"/>
+        <ellipse cx="58" cy="20" rx="1.5" ry="2" fill="#111"/>
+        <circle cx="58.8" cy="18.8" r="0.7" fill="white"/>
+        <ellipse cx="67" cy="20" rx="3" ry="3.5" fill="white"/>
+        <ellipse cx="67" cy="20" rx="1.5" ry="2" fill="#111"/>
+        <circle cx="67.8" cy="18.8" r="0.7" fill="white"/>
+        {/* Nose */}
+        <ellipse cx="62" cy="27" rx="2.2" ry="1.4" fill="white"/>
+
+        {/* Legs — thin with pompom feet */}
+        <g className="pdlbl">
+          <rect x="22" y="45" width="5" height="11" rx="2.5" fill="#111"/>
+          <circle cx="24.5" cy="58" r="4.5" fill="#111"/>
+        </g>
+        <g className="pdlbr">
+          <rect x="30" y="45" width="5" height="11" rx="2.5" fill="#111"/>
+          <circle cx="32.5" cy="58" r="4.5" fill="#111"/>
+        </g>
+        <g className="pdlfl">
+          <rect x="47" y="45" width="5" height="11" rx="2.5" fill="#111"/>
+          <circle cx="49.5" cy="58" r="4.5" fill="#111"/>
+        </g>
+        <g className="pdlfr">
+          <rect x="55" y="45" width="5" height="11" rx="2.5" fill="#111"/>
+          <circle cx="57.5" cy="58" r="4.5" fill="#111"/>
+        </g>
       </g>
     </svg>
   );
