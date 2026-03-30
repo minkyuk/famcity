@@ -5,14 +5,16 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { YouTubeInput } from "./YouTubeInput";
 import { ImageUploader } from "./ImageUploader";
 import { AudioRecorder } from "./AudioRecorder";
+import { VideoUploader } from "./VideoUploader";
 import { useToast } from "@/components/shared/Toast";
 
-type PostType = "TEXT" | "YOUTUBE" | "IMAGE" | "AUDIO";
+type PostType = "TEXT" | "YOUTUBE" | "IMAGE" | "AUDIO" | "VIDEO";
 
 const TYPES: { type: PostType; icon: string; label: string }[] = [
   { type: "TEXT", icon: "📝", label: "Text" },
   { type: "YOUTUBE", icon: "🎬", label: "YouTube" },
   { type: "IMAGE", icon: "🖼", label: "Photo" },
+  { type: "VIDEO", icon: "🎥", label: "Video" },
   { type: "AUDIO", icon: "🎙", label: "Audio" },
 ];
 
@@ -134,6 +136,9 @@ export function ComposeBar() {
           submitting={submitting}
           onSubmit={(data) => createPost({ type: "IMAGE", mediaUrls: data.mediaUrls, content: data.content })}
         />
+      )}
+      {activeType === "VIDEO" && (
+        <VideoUploader submitting={submitting} onSubmit={(data) => createPost({ type: "VIDEO", ...data })} />
       )}
       {activeType === "AUDIO" && (
         <AudioRecorder submitting={submitting} onSubmit={(data) => createPost({ type: "AUDIO", ...data })} />

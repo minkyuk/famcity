@@ -140,6 +140,7 @@ enum PostType {
   IMAGE
   YOUTUBE
   AUDIO
+  VIDEO
 }
 
 model Reaction {

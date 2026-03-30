@@ -26,6 +26,7 @@ const TYPE_BADGE: Record<string, { label: string; color: string }> = {
   IMAGE: { label: "Photo", color: "bg-blue-100 text-blue-600" },
   YOUTUBE: { label: "Video", color: "bg-red-100 text-red-600" },
   AUDIO: { label: "Audio", color: "bg-purple-100 text-purple-600" },
+  VIDEO: { label: "Video", color: "bg-orange-100 text-orange-600" },
 };
 
 interface PostCardProps {
@@ -182,6 +183,14 @@ export function PostCard({ post, currentUserId, currentUserName, onDelete, onUpd
       {post.type === "IMAGE" && post.media.length === 0 && post.mediaUrl && <ImagePost url={post.mediaUrl} />}
       {post.type === "YOUTUBE" && post.mediaUrl && <YoutubeEmbed url={post.mediaUrl} />}
       {post.type === "AUDIO" && post.mediaUrl && <AudioPlayer url={post.mediaUrl} />}
+      {post.type === "VIDEO" && post.mediaUrl && (
+        <video
+          src={post.mediaUrl}
+          controls
+          className="w-full rounded-xl max-h-96 bg-black"
+          preload="metadata"
+        />
+      )}
 
       <ReactionBar postId={post.id} reactions={post.reactions} currentUserName={currentUserName} />
       <CommentThread postId={post.id} initialComments={post.comments} currentUserId={currentUserId} currentUserName={currentUserName} />
