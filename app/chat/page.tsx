@@ -3,22 +3,28 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 
+type Space = { id: string; name: string };
+
 type Channel = {
   id: string;
   name: string;
   description: string | null;
   isGlobal: boolean;
   hasPassword: boolean;
+  spaceId: string | null;
+  space: { name: string } | null;
   _count: { messages: number; presence: number };
 };
 
 export default function ChatPage() {
   const [channels, setChannels] = useState<Channel[]>([]);
+  const [spaces, setSpaces] = useState<Space[]>([]);
   const [loading, setLoading] = useState(true);
   const [showCreate, setShowCreate] = useState(false);
   const [newName, setNewName] = useState("");
   const [newDesc, setNewDesc] = useState("");
   const [newPass, setNewPass] = useState("");
+  const [newSpaceId, setNewSpaceId] = useState("global");
   const [creating, setCreating] = useState(false);
 
   const fetchChannels = () =>
@@ -26,7 +32,12 @@ export default function ChatPage() {
       .then((r) => r.json())
       .then((d) => { setChannels(d); setLoading(false); });
 
-  useEffect(() => { fetchChannels(); }, []);
+  useEffect(() => {
+    fetchChannels();
+    fetch("/api/spaces")
+      .then((r) => r.json())
+      .then((d) => Array.isArray(d) && setSpaces(d));
+  }, []);
 
   const createChannel = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -35,13 +46,27 @@ export default function ChatPage() {
     await fetch("/api/chat/channels", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name: newName.trim(), description: newDesc.trim() || undefined, password: newPass || undefined }),
+      body: JSON.stringify({
+        name: newName.trim(),
+        description: newDesc.trim() || undefined,
+        password: newPass || undefined,
+        spaceId: newSpaceId === "global" ? undefined : newSpaceId,
+      }),
     });
-    setNewName(""); setNewDesc(""); setNewPass("");
+    setNewName(""); setNewDesc(""); setNewPass(""); setNewSpaceId("global");
     setShowCreate(false);
     setCreating(false);
     fetchChannels();
   };
+
+  // Group channels
+  const globalChannels = channels.filter((c) => c.isGlobal);
+  const spaceChannels = channels.filter((c) => !c.isGlobal);
+  const bySpace = spaceChannels.reduce<Record<string, Channel[]>>((acc, ch) => {
+    const key = ch.space?.name ?? ch.spaceId ?? "Unknown";
+    acc[key] = [...(acc[key] ?? []), ch];
+    return acc;
+  }, {});
 
   return (
     <div className="max-w-2xl mx-auto flex flex-col gap-6">
@@ -84,6 +109,16 @@ export default function ChatPage() {
                 maxLength={200}
                 className="border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-orange-300"
               />
+              <select
+                value={newSpaceId}
+                onChange={(e) => setNewSpaceId(e.target.value)}
+                className="border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-orange-300 bg-white"
+              >
+                <option value="global">🌍 Global (everyone)</option>
+                {spaces.map((s) => (
+                  <option key={s.id} value={s.id}>👥 {s.name} only</option>
+                ))}
+              </select>
               <input
                 type="password"
                 value={newPass}
@@ -116,43 +151,58 @@ export default function ChatPage() {
 
       {loading ? (
         <div className="text-center py-12 text-gray-400 text-sm">Loading…</div>
-      ) : channels.length === 0 ? (
-        <div className="text-center py-12 text-gray-400 text-sm">No channels yet. Create one!</div>
       ) : (
-        <div className="flex flex-col gap-3">
-          {channels.map((ch) => (
-            <Link
-              key={ch.id}
-              href={`/chat/${ch.id}`}
-              className="bg-white rounded-2xl shadow-sm border border-gray-100 p-4 flex items-center justify-between hover:border-orange-200 transition-colors group"
-            >
-              <div className="flex flex-col gap-0.5">
-                <div className="flex items-center gap-2">
-                  <span className="font-semibold text-gray-900 group-hover:text-accent transition-colors">
-                    {ch.isGlobal ? "🌍 " : ch.hasPassword ? "🔒 " : "# "}
-                    {ch.name}
-                  </span>
-                  {ch.hasPassword && (
-                    <span className="text-xs bg-yellow-50 text-yellow-600 px-2 py-0.5 rounded-full">Private</span>
-                  )}
-                  {ch.isGlobal && (
-                    <span className="text-xs bg-green-50 text-green-600 px-2 py-0.5 rounded-full">Global</span>
-                  )}
-                </div>
-                {ch.description && (
-                  <p className="text-xs text-gray-400">{ch.description}</p>
-                )}
-              </div>
-              <div className="flex flex-col items-end gap-1 text-xs text-gray-400 shrink-0 ml-4">
-                <span>{ch._count.messages} msgs</span>
-                {ch._count.presence > 0 && (
-                  <span className="text-green-500 font-medium">● {ch._count.presence} online</span>
-                )}
-              </div>
-            </Link>
+        <div className="flex flex-col gap-6">
+          {/* Global channels */}
+          {globalChannels.length > 0 && (
+            <section className="flex flex-col gap-2">
+              <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide">Global</p>
+              {globalChannels.map((ch) => <ChannelRow key={ch.id} ch={ch} />)}
+            </section>
+          )}
+
+          {/* Space channels grouped by space */}
+          {Object.entries(bySpace).map(([spaceName, chs]) => (
+            <section key={spaceName} className="flex flex-col gap-2">
+              <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide">👥 {spaceName}</p>
+              {chs.map((ch) => <ChannelRow key={ch.id} ch={ch} />)}
+            </section>
           ))}
+
+          {channels.length === 0 && (
+            <div className="text-center py-12 text-gray-400 text-sm">No channels yet. Create one!</div>
+          )}
         </div>
       )}
     </div>
+  );
+}
+
+function ChannelRow({ ch }: { ch: Channel }) {
+  return (
+    <Link
+      href={`/chat/${ch.id}`}
+      className="bg-white rounded-2xl shadow-sm border border-gray-100 p-4 flex items-center justify-between hover:border-orange-200 transition-colors group"
+    >
+      <div className="flex flex-col gap-0.5">
+        <div className="flex items-center gap-2">
+          <span className="font-semibold text-gray-900 group-hover:text-accent transition-colors">
+            {ch.hasPassword ? "🔒" : "#"} {ch.name}
+          </span>
+          {ch.hasPassword && (
+            <span className="text-xs bg-yellow-50 text-yellow-600 px-2 py-0.5 rounded-full">Private</span>
+          )}
+        </div>
+        {ch.description && (
+          <p className="text-xs text-gray-400">{ch.description}</p>
+        )}
+      </div>
+      <div className="flex flex-col items-end gap-1 text-xs text-gray-400 shrink-0 ml-4">
+        <span>{ch._count.messages} msgs</span>
+        {ch._count.presence > 0 && (
+          <span className="text-green-500 font-medium">● {ch._count.presence} online</span>
+        )}
+      </div>
+    </Link>
   );
 }

@@ -62,13 +62,14 @@ model VerificationToken {
 // --- Spaces ---
 
 model Space {
-  id          String        @id @default(cuid())
-  name        String
-  description String?
-  inviteCode  String        @unique
-  createdAt   DateTime      @default(now())
-  members     SpaceMember[]
-  posts       Post[]
+  id           String        @id @default(cuid())
+  name         String
+  description  String?
+  inviteCode   String        @unique
+  createdAt    DateTime      @default(now())
+  members      SpaceMember[]
+  posts        Post[]
+  chatChannels ChatChannel[]
 }
 
 model SpaceMember {
@@ -177,6 +178,8 @@ model ChatChannel {
   name         String
   description  String?
   isGlobal     Boolean       @default(false)
+  spaceId      String?       // null = global, set = space-only
+  space        Space?        @relation(fields: [spaceId], references: [id], onDelete: Cascade)
   passwordHash String?       // null = open channel
   createdById  String?
   createdAt    DateTime      @default(now())
