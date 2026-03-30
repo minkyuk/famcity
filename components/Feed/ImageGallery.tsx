@@ -213,7 +213,7 @@ export function ImageGallery({ images }: ImageGalleryProps) {
                 alt={`Photo ${i + 1}`}
                 fill
                 sizes={count === 1 ? "100vw" : "(max-width: 768px) 50vw, 33vw"}
-                className="object-cover hover:opacity-95 transition-opacity"
+                className={`${count === 1 ? "object-contain bg-gray-50" : "object-cover"} hover:opacity-95 transition-opacity`}
                 unoptimized
               />
               {count > 4 && i === 3 && (

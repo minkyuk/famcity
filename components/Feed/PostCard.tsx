@@ -1,6 +1,6 @@
 "use client";
 
-import { Suspense, useRef, useState } from "react";
+import { Suspense, useEffect, useRef, useState } from "react";
 import { formatDistanceToNow } from "date-fns";
 import Image from "next/image";
 import { YoutubeEmbed } from "./YoutubeEmbed";
@@ -66,10 +66,23 @@ export function PostCard({ post, currentUserId, currentUserName, onDelete, onUpd
   const [editing, setEditing] = useState(false);
   const [editContent, setEditContent] = useState(post.content ?? "");
   const [isPrivate, setIsPrivate] = useState(post.isPrivate);
+  const [editSpaceId, setEditSpaceId] = useState<string>(post.spaceId ?? "");
+  const [spaces, setSpaces] = useState<{ id: string; name: string }[]>([]);
   const [saving, setSaving] = useState(false);
   const [localPost, setLocalPost] = useState(post);
   const [showPopup, setShowPopup] = useState(false);
   const avatarRef = useRef<HTMLButtonElement>(null);
+
+  // Fetch spaces lazily when edit mode opens
+  useEffect(() => {
+    if (!editing || spaces.length > 0) return;
+    fetch("/api/spaces")
+      .then((r) => r.json())
+      .then((data) => {
+        if (Array.isArray(data)) setSpaces(data.filter((s: { isSystem?: boolean }) => !s.isSystem));
+      })
+      .catch(() => {});
+  }, [editing, spaces.length]);
 
   const handleDelete = async () => {
     if (!confirm("Delete this post?")) return;
@@ -82,11 +95,25 @@ export function PostCard({ post, currentUserId, currentUserName, onDelete, onUpd
     const res = await fetch(`/api/posts/${post.id}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ content: editContent, isPrivate }),
+      body: JSON.stringify({
+        content: editContent,
+        isPrivate,
+        spaceId: editSpaceId || null,
+      }),
     });
     if (res.ok) {
       const updated = await res.json();
-      setLocalPost((p) => ({ ...p, content: updated.content, isPrivate: updated.isPrivate }));
+      // Refetch space name if spaceId changed
+      const newSpace = editSpaceId
+        ? (spaces.find((s) => s.id === editSpaceId) ?? localPost.space)
+        : null;
+      setLocalPost((p) => ({
+        ...p,
+        content: updated.content,
+        isPrivate: updated.isPrivate,
+        spaceId: updated.spaceId,
+        space: newSpace,
+      }));
       onUpdate?.(updated);
     }
     setEditing(false);
@@ -135,7 +162,7 @@ export function PostCard({ post, currentUserId, currentUserName, onDelete, onUpd
           {isOwner && (
             <div className="flex items-center gap-1">
               <button
-                onClick={() => { setEditing(true); setEditContent(localPost.content ?? ""); setIsPrivate(localPost.isPrivate); }}
+                onClick={() => { setEditing(true); setEditContent(localPost.content ?? ""); setIsPrivate(localPost.isPrivate); setEditSpaceId(localPost.spaceId ?? ""); }}
                 className="text-xs text-gray-300 hover:text-blue-400 transition-colors"
                 title="Edit post"
               >
@@ -158,6 +185,17 @@ export function PostCard({ post, currentUserId, currentUserName, onDelete, onUpd
             rows={3}
             className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm resize-none focus:outline-none focus:ring-2 focus:ring-orange-300"
           />
+          {/* Space selector */}
+          <select
+            value={editSpaceId}
+            onChange={(e) => setEditSpaceId(e.target.value)}
+            className="text-sm text-gray-700 border border-gray-200 rounded-lg px-3 py-1.5 focus:outline-none focus:ring-2 focus:ring-orange-200 bg-white"
+          >
+            <option value="">🌍 My network (no space)</option>
+            {spaces.map((s) => (
+              <option key={s.id} value={s.id}>👥 {s.name}</option>
+            ))}
+          </select>
           <label className="flex items-center gap-2 text-sm text-gray-600 cursor-pointer select-none">
             <input
               type="checkbox"

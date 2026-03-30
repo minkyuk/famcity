@@ -17,7 +17,7 @@ export function ImagePost({ url }: { url: string }) {
           alt="Post image"
           width={800}
           height={600}
-          className="w-full object-cover max-h-96"
+          className="w-full object-contain max-h-[480px] bg-gray-50"
           unoptimized
         />
       </button>
