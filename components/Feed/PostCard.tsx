@@ -38,7 +38,11 @@ interface PostCardProps {
 
 function Avatar({ name, image }: { name: string; image?: string | null }) {
   if (image) {
-    return <Image src={image} alt={name} width={36} height={36} className="rounded-full object-cover shrink-0" unoptimized />;
+    return (
+      <div className="relative w-9 h-9 rounded-full overflow-hidden shrink-0">
+        <Image src={image} alt={name} fill className="object-cover" unoptimized />
+      </div>
+    );
   }
   return (
     <div className="w-9 h-9 rounded-full bg-orange-100 flex items-center justify-center text-sm font-bold text-orange-600 shrink-0">

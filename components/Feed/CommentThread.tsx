@@ -16,15 +16,9 @@ interface CommentThreadProps {
 function Avatar({ name, image }: { name: string; image?: string | null }) {
   if (image) {
     return (
-      <Image
-        src={image}
-        alt={name}
-        width={28}
-        height={28}
-        className="rounded-full object-cover shrink-0"
-        style={{ width: 28, height: 28 }}
-        unoptimized
-      />
+      <div className="relative w-7 h-7 rounded-full overflow-hidden shrink-0">
+        <Image src={image} alt={name} fill className="object-cover" unoptimized />
+      </div>
     );
   }
   return (

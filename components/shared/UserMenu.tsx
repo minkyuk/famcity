@@ -23,14 +23,9 @@ export function UserMenu() {
     <div className="relative">
       <button onClick={() => setOpen((o) => !o)} className="focus:outline-none">
         {session.user.image ? (
-          <Image
-            src={session.user.image}
-            alt={session.user.name ?? ""}
-            width={32}
-            height={32}
-            className="rounded-full border-2 border-orange-200"
-            unoptimized
-          />
+          <div className="relative w-8 h-8 rounded-full overflow-hidden border-2 border-orange-200">
+            <Image src={session.user.image} alt={session.user.name ?? ""} fill className="object-cover" unoptimized />
+          </div>
         ) : (
           <div className="w-8 h-8 rounded-full bg-orange-200 flex items-center justify-center text-sm font-bold text-orange-700">
             {session.user.name?.[0]?.toUpperCase() ?? "?"}

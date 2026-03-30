@@ -29,7 +29,13 @@ type Message = {
 type OnlineUser = { userId: string; name: string; image: string | null };
 
 function Avatar({ name, image, size = 24 }: { name: string; image?: string | null; size?: number }) {
-  if (image) return <Image src={image} alt={name} width={size} height={size} className="rounded-full shrink-0" unoptimized />;
+  if (image) {
+    return (
+      <div className="relative rounded-full overflow-hidden shrink-0" style={{ width: size, height: size }}>
+        <Image src={image} alt={name} fill className="object-cover" unoptimized />
+      </div>
+    );
+  }
   return (
     <div style={{ width: size, height: size }} className="rounded-full bg-orange-100 flex items-center justify-center text-[10px] font-bold text-orange-600 shrink-0">
       {name[0]?.toUpperCase() ?? "?"}
