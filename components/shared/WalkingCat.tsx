@@ -5,8 +5,8 @@ import { createPortal } from "react-dom";
 
 const CAT_W = 88;
 const CAT_H = 58;
-const PUDDLE_W = 64;
-const PUDDLE_H = 52;
+const PUDDLE_W = 88;
+const PUDDLE_H = 58;
 
 // ─── Orange cat SVG ──────────────────────────────────────────────────────────
 
@@ -59,64 +59,49 @@ function CatSVG({ speed }: { speed: number }) {
   );
 }
 
-// ─── Black puddle SVG ─────────────────────────────────────────────────────────
-// Uses CSS <style> animations (same approach as CatSVG) with pu-prefixed class
-// names to avoid any conflict with the cat's global class names.
+// ─── Black cat SVG ────────────────────────────────────────────────────────────
+// Identical silhouette to the orange cat but fully black, with white eyes.
 
 function PuddleSVG({ speed }: { speed: number }) {
-  const dur = Math.max(0.35, 0.8 - speed * 0.05) + "s";
+  const dur = Math.max(0.3, 0.7 - speed * 0.05) + "s";
   return (
-    <svg width={PUDDLE_W} height={PUDDLE_H} viewBox="0 0 64 52" xmlns="http://www.w3.org/2000/svg" style={{ overflow: "visible" }}>
+    <svg width={PUDDLE_W} height={PUDDLE_H} viewBox="0 0 88 58" xmlns="http://www.w3.org/2000/svg" style={{ overflow: "visible" }}>
       <style>{`
-        .pul1{animation:puA ${dur} ease-in-out infinite;transform-box:fill-box;transform-origin:top center}
-        .pul2{animation:puB ${dur} ease-in-out infinite;transform-box:fill-box;transform-origin:top center}
-        .pul3{animation:puA ${dur} ease-in-out infinite;transform-box:fill-box;transform-origin:top center}
-        .pul4{animation:puB ${dur} ease-in-out infinite;transform-box:fill-box;transform-origin:top center}
-        .putail{animation:puTail 1.1s ease-in-out infinite;transform-box:fill-box;transform-origin:80% 50%}
-        @keyframes puA{0%,100%{transform:rotate(-15deg)}50%{transform:rotate(15deg)}}
-        @keyframes puB{0%,100%{transform:rotate(15deg)}50%{transform:rotate(-15deg)}}
-        @keyframes puTail{0%,100%{transform:rotate(-20deg)}50%{transform:rotate(20deg)}}
+        .pcb{animation:pbob ${dur} ease-in-out infinite;transform-box:fill-box;transform-origin:center}
+        .plfl{animation:plA ${dur} ease-in-out infinite;transform-box:fill-box;transform-origin:top center}
+        .plfr{animation:plB ${dur} ease-in-out infinite;transform-box:fill-box;transform-origin:top center}
+        .plbl{animation:plB ${dur} ease-in-out infinite;transform-box:fill-box;transform-origin:top center}
+        .plbr{animation:plA ${dur} ease-in-out infinite;transform-box:fill-box;transform-origin:top center}
+        .ptail{animation:ptailSway 0.9s ease-in-out infinite;transform-box:fill-box;transform-origin:90% 40%}
+        @keyframes pbob{0%,100%{transform:translateY(0)}50%{transform:translateY(-2.5px)}}
+        @keyframes plA{0%,100%{transform:rotate(-28deg) translateY(1px)}50%{transform:rotate(22deg) translateY(-1px)}}
+        @keyframes plB{0%,100%{transform:rotate(22deg) translateY(-1px)}50%{transform:rotate(-28deg) translateY(1px)}}
+        @keyframes ptailSway{0%,100%{transform:rotate(-18deg)}50%{transform:rotate(22deg)}}
       `}</style>
-
       {/* Tail */}
-      <g className="putail">
-        <path d="M14,34 Q3,22 7,12 Q10,4 15,8" stroke="#4a2a6e" strokeWidth="4" fill="none" strokeLinecap="round"/>
+      <g className="ptail">
+        <path d="M18,34 Q6,22 10,10 Q14,2 19,7" stroke="#111" strokeWidth="4.5" fill="none" strokeLinecap="round"/>
       </g>
-
-      {/* Body */}
-      <ellipse cx="32" cy="36" rx="20" ry="11" fill="#3b1f5e"/>
-      <ellipse cx="30" cy="31" rx="9" ry="5" fill="#5a3a80" opacity="0.7"/>
-
-      {/* Head */}
-      <circle cx="44" cy="22" r="13" fill="#3b1f5e"/>
-      <ellipse cx="42" cy="17" rx="5" ry="4" fill="#5a3a80" opacity="0.5"/>
-
-      {/* Ears */}
-      <ellipse cx="35" cy="11" rx="4" ry="5" fill="#3b1f5e"/>
-      <ellipse cx="52" cy="11" rx="4" ry="5" fill="#3b1f5e"/>
-      <ellipse cx="35" cy="11" rx="2" ry="3" fill="#c060c0" opacity="0.8"/>
-      <ellipse cx="52" cy="11" rx="2" ry="3" fill="#c060c0" opacity="0.8"/>
-
-      {/* Left eye */}
-      <circle cx="39" cy="21" r="5" fill="#0a0520"/>
-      <circle cx="39" cy="21" r="3.5" fill="#dde0ff"/>
-      <circle cx="39" cy="21" r="2" fill="#0a0520"/>
-      <circle cx="40.2" cy="19.8" r="1" fill="white"/>
-
-      {/* Right eye */}
-      <circle cx="50" cy="21" r="5" fill="#0a0520"/>
-      <circle cx="50" cy="21" r="3.5" fill="#dde0ff"/>
-      <circle cx="50" cy="21" r="2" fill="#0a0520"/>
-      <circle cx="51.2" cy="19.8" r="1" fill="white"/>
-
-      {/* Nose */}
-      <ellipse cx="44" cy="27" rx="2" ry="1.3" fill="#7a4a9a"/>
-
-      {/* Legs — CSS animated via pu-prefixed classes */}
-      <g className="pul1"><rect x="20" y="42" width="6" height="10" rx="3" fill="#2a1040"/></g>
-      <g className="pul2"><rect x="28" y="42" width="6" height="10" rx="3" fill="#2a1040"/></g>
-      <g className="pul3"><rect x="36" y="42" width="6" height="10" rx="3" fill="#2a1040"/></g>
-      <g className="pul4"><rect x="44" y="42" width="6" height="10" rx="3" fill="#2a1040"/></g>
+      {/* Body + head */}
+      <g className="pcb">
+        <ellipse cx="40" cy="37" rx="21" ry="13" fill="#111"/>
+        <circle cx="60" cy="22" r="15" fill="#111"/>
+        {/* Ears */}
+        <polygon points="49,11 52,1 58,11" fill="#111"/>
+        <polygon points="61,11 65,1 70,11" fill="#111"/>
+        {/* Eyes — white with black pupils */}
+        <ellipse cx="55" cy="20" rx="3.2" ry="3.8" fill="white"/>
+        <ellipse cx="55" cy="20" rx="1.6" ry="2.2" fill="#111"/>
+        <circle cx="55.8" cy="18.8" r="0.7" fill="white"/>
+        <ellipse cx="65" cy="20" rx="3.2" ry="3.8" fill="white"/>
+        <ellipse cx="65" cy="20" rx="1.6" ry="2.2" fill="#111"/>
+        <circle cx="65.8" cy="18.8" r="0.7" fill="white"/>
+        {/* Legs */}
+        <g className="plbl"><rect x="22" y="47" width="7" height="12" rx="3.5" fill="#111"/></g>
+        <g className="plbr"><rect x="31" y="47" width="7" height="12" rx="3.5" fill="#111"/></g>
+        <g className="plfl"><rect x="49" y="47" width="7" height="12" rx="3.5" fill="#111"/></g>
+        <g className="plfr"><rect x="58" y="47" width="7" height="12" rx="3.5" fill="#111"/></g>
+      </g>
     </svg>
   );
 }

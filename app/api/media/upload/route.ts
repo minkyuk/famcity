@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { cloudinary } from "@/lib/cloudinary";
 
+export const maxDuration = 60;
+
 export async function POST(req: NextRequest) {
   const formData = await req.formData();
   const file = formData.get("file") as File | null;
