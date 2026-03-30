@@ -28,15 +28,14 @@ export function ImageGallery({ images }: ImageGalleryProps) {
             <button
               key={i}
               onClick={() => setLightbox(i)}
-              className={`relative overflow-hidden focus:outline-none ${
-                isOddThird ? "col-span-2" : ""
-              } ${isFive && i >= 3 ? "" : ""}`}
-              style={{ aspectRatio: isOddThird ? "2/1" : count === 1 ? "16/10" : "1/1" }}
+              className={`relative overflow-hidden focus:outline-none ${isOddThird ? "col-span-2" : ""}`}
+              style={{ aspectRatio: isOddThird ? "2/1" : count === 1 ? "16/9" : "1/1", maxHeight: count === 1 ? 360 : undefined }}
             >
               <Image
                 src={img.url}
                 alt={`Photo ${i + 1}`}
                 fill
+                sizes={count === 1 ? "100vw" : "(max-width: 768px) 50vw, 33vw"}
                 className="object-cover hover:opacity-95 transition-opacity"
                 unoptimized
               />

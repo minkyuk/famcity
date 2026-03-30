@@ -87,19 +87,19 @@ export function ImageUploader({ onSubmit, submitting }: ImageUploaderProps) {
             <p className="text-xs mt-1">Up to {MAX_FILES} photos · JPG, PNG, GIF · max 10MB each</p>
           </div>
         ) : (
-          <div className={`grid gap-2 ${previews.length === 1 ? "grid-cols-1" : "grid-cols-2 sm:grid-cols-3"}`}>
+          <div className="flex flex-wrap gap-2">
             {previews.map((p, i) => (
-              <div key={i} className="relative aspect-square rounded-lg overflow-hidden group">
-                <Image src={p.objectUrl} alt="" fill className="object-cover" unoptimized />
+              <div key={i} className="relative w-20 h-20 rounded-lg overflow-hidden group shrink-0">
+                <Image src={p.objectUrl} alt="" fill className="object-cover" unoptimized sizes="80px" />
                 <button
                   type="button"
                   onClick={(e) => { e.stopPropagation(); remove(i); }}
-                  className="absolute top-1 right-1 bg-black/60 text-white rounded-full w-6 h-6 flex items-center justify-center text-xs opacity-0 group-hover:opacity-100 transition-opacity"
+                  className="absolute top-1 right-1 bg-black/60 text-white rounded-full w-5 h-5 flex items-center justify-center text-xs opacity-0 group-hover:opacity-100 transition-opacity"
                 >✕</button>
               </div>
             ))}
             {previews.length < MAX_FILES && (
-              <div className="aspect-square rounded-lg border-2 border-dashed border-gray-200 flex items-center justify-center text-gray-400 text-2xl hover:border-orange-300 transition-colors">
+              <div className="w-20 h-20 rounded-lg border-2 border-dashed border-gray-200 flex items-center justify-center text-gray-400 text-2xl hover:border-orange-300 transition-colors shrink-0">
                 +
               </div>
             )}
