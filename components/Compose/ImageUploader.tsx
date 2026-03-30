@@ -9,7 +9,7 @@ interface ImageUploaderProps {
   submitting: boolean;
 }
 
-const MAX_SIZE = 10 * 1024 * 1024;
+const MAX_SIZE = 4 * 1024 * 1024; // 4MB — stays under Vercel's 4.5MB serverless body limit
 const MAX_FILES = 5;
 
 interface Preview { file: File; objectUrl: string; }
@@ -31,7 +31,7 @@ export function ImageUploader({ onSubmit, submitting }: ImageUploaderProps) {
     const valid: Preview[] = [];
     for (const f of arr.slice(0, remaining)) {
       if (!f.type.startsWith("image/")) { showToast("Images only", "error"); continue; }
-      if (f.size > MAX_SIZE) { showToast(`${f.name} is over 10MB`, "error"); continue; }
+      if (f.size > MAX_SIZE) { showToast(`${f.name} is over 4MB`, "error"); continue; }
       valid.push({ file: f, objectUrl: URL.createObjectURL(f) });
     }
     setPreviews((prev) => [...prev, ...valid]);
@@ -91,7 +91,7 @@ export function ImageUploader({ onSubmit, submitting }: ImageUploaderProps) {
           <div className="text-center text-gray-400 py-6">
             <div className="text-3xl mb-2">🖼</div>
             <p className="text-sm">Drag photos here or click to browse</p>
-            <p className="text-xs mt-1">Up to {MAX_FILES} photos · JPG, PNG, GIF · max 10MB each</p>
+            <p className="text-xs mt-1">Up to {MAX_FILES} photos · JPG, PNG, GIF · max 4MB each</p>
           </div>
         ) : (
           <div className="flex flex-wrap gap-2">
