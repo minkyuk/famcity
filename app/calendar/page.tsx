@@ -26,7 +26,7 @@ type EventWithRSVPs = {
   rsvps: RSVPEntry[];
 };
 
-type Space = { id: string; name: string };
+type Space = { id: string; name: string; isSystem?: boolean };
 
 const DAYS_OF_WEEK = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
@@ -59,6 +59,7 @@ export default function CalendarPage() {
 
   const [events, setEvents] = useState<EventWithRSVPs[]>([]);
   const [spaces, setSpaces] = useState<Space[]>([]);
+  const [activeSpaceId, setActiveSpaceId] = useState<string>("");
   const [loadingEvents, setLoadingEvents] = useState(true);
   const [showCreate, setShowCreate] = useState(false);
   const [selectedDay, setSelectedDay] = useState<Date | null>(null);
@@ -73,22 +74,29 @@ export default function CalendarPage() {
     if (status === "unauthenticated") router.push("/login");
   }, [status, router]);
 
+  // Load spaces once, default activeSpaceId to first non-system space
   useEffect(() => {
-    fetch("/api/events")
-      .then((r) => r.json())
-      .then((data) => {
-        if (Array.isArray(data)) setEvents(data);
-      })
-      .catch(() => {})
-      .finally(() => setLoadingEvents(false));
-
     fetch("/api/spaces")
       .then((r) => r.json())
-      .then((data) => {
-        if (Array.isArray(data)) setSpaces(data);
+      .then((data: Space[]) => {
+        if (!Array.isArray(data)) return;
+        const postable = data.filter((s) => !s.isSystem);
+        setSpaces(postable);
+        if (postable.length > 0) setActiveSpaceId(postable[0].id);
       })
       .catch(() => {});
   }, []);
+
+  // Reload events whenever activeSpaceId changes
+  useEffect(() => {
+    if (!activeSpaceId) return;
+    setLoadingEvents(true);
+    fetch(`/api/events?spaceId=${activeSpaceId}`)
+      .then((r) => r.json())
+      .then((data) => { if (Array.isArray(data)) setEvents(data); })
+      .catch(() => {})
+      .finally(() => setLoadingEvents(false));
+  }, [activeSpaceId]);
 
   const handleCreated = (event: EventWithRSVPs) => {
     setEvents((prev) => [...prev, event].sort((a, b) => new Date(a.startAt).getTime() - new Date(b.startAt).getTime()));
@@ -167,14 +175,28 @@ export default function CalendarPage() {
   return (
     <div className="flex flex-col gap-6">
       {/* Page header */}
-      <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-bold text-gray-900">📅 Family Calendar</h1>
-        <button
-          onClick={() => setShowCreate(true)}
-          className="bg-orange-500 text-white text-sm font-semibold px-4 py-2 rounded-xl hover:bg-orange-600 transition-colors"
-        >
-          + Create Event
-        </button>
+      <div className="flex items-center justify-between gap-3 flex-wrap">
+        <h1 className="text-2xl font-bold text-gray-900">📅 Calendar</h1>
+        <div className="flex items-center gap-2 ml-auto">
+          {/* Space selector */}
+          {spaces.length > 1 && (
+            <select
+              value={activeSpaceId}
+              onChange={(e) => setActiveSpaceId(e.target.value)}
+              className="text-sm font-semibold text-gray-800 bg-orange-50 border border-orange-200 rounded-lg px-3 py-1.5 focus:outline-none focus:ring-2 focus:ring-orange-300"
+            >
+              {spaces.map((s) => (
+                <option key={s.id} value={s.id}>{s.name}</option>
+              ))}
+            </select>
+          )}
+          <button
+            onClick={() => setShowCreate(true)}
+            className="bg-orange-500 text-white text-sm font-semibold px-4 py-2 rounded-xl hover:bg-orange-600 transition-colors"
+          >
+            + Event
+          </button>
+        </div>
       </div>
 
       {/* Month grid */}
@@ -292,6 +314,7 @@ export default function CalendarPage() {
           onClose={() => setShowCreate(false)}
           onCreated={handleCreated}
           spaces={spaces}
+          defaultSpaceId={activeSpaceId}
         />
       )}
     </div>

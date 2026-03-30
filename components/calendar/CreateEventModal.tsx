@@ -7,9 +7,10 @@ interface CreateEventModalProps {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   onCreated: (event: any) => void;
   spaces: { id: string; name: string }[];
+  defaultSpaceId?: string;
 }
 
-export function CreateEventModal({ onClose, onCreated, spaces }: CreateEventModalProps) {
+export function CreateEventModal({ onClose, onCreated, spaces, defaultSpaceId }: CreateEventModalProps) {
   const [title, setTitle] = useState("");
   const [date, setDate] = useState("");
   const [startTime, setStartTime] = useState("");
@@ -17,7 +18,7 @@ export function CreateEventModal({ onClose, onCreated, spaces }: CreateEventModa
   const [allDay, setAllDay] = useState(false);
   const [location, setLocation] = useState("");
   const [description, setDescription] = useState("");
-  const [spaceId, setSpaceId] = useState("");
+  const [spaceId, setSpaceId] = useState(defaultSpaceId ?? "");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 

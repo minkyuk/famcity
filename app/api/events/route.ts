@@ -14,6 +14,26 @@ export async function GET(req: NextRequest) {
   const session = await getServerSession(authOptions);
   if (!session?.user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
+  const spaceId = req.nextUrl.searchParams.get("spaceId");
+
+  if (spaceId) {
+    // Space-specific: verify membership (or system space)
+    const space = await prisma.space.findUnique({ where: { id: spaceId }, select: { isSystem: true } });
+    if (!space?.isSystem) {
+      const membership = await prisma.spaceMember.findUnique({
+        where: { userId_spaceId: { userId: session.user.id, spaceId } },
+      });
+      if (!membership) return NextResponse.json({ error: "Not a member" }, { status: 403 });
+    }
+    const events = await prisma.event.findMany({
+      where: { spaceId },
+      orderBy: { startAt: "asc" },
+      include: EVENT_INCLUDE,
+    });
+    return NextResponse.json(events);
+  }
+
+  // No filter: return events from all user's spaces (excluding system spaces)
   const memberships = await prisma.spaceMember.findMany({
     where: { userId: session.user.id },
     select: { spaceId: true },
@@ -21,9 +41,7 @@ export async function GET(req: NextRequest) {
   const spaceIds = memberships.map((m) => m.spaceId);
 
   const events = await prisma.event.findMany({
-    where: {
-      OR: [{ spaceId: null }, { spaceId: { in: spaceIds } }],
-    },
+    where: { OR: [{ spaceId: null }, { spaceId: { in: spaceIds } }] },
     orderBy: { startAt: "asc" },
     include: EVENT_INCLUDE,
   });
