@@ -53,13 +53,6 @@ export function UserMenu() {
             >
               View profile
             </Link>
-            <Link
-              href="/chat"
-              onClick={() => setOpen(false)}
-              className="block w-full text-left px-4 py-2 text-sm text-gray-600 hover:bg-gray-50 transition-colors"
-            >
-              💬 Chat
-            </Link>
             <button
               onClick={() => signOut({ callbackUrl: "/login" })}
               className="w-full text-left px-4 py-2 text-sm text-red-500 hover:bg-red-50 transition-colors"

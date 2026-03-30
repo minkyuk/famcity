@@ -9,6 +9,7 @@ import { PushNotifications } from "@/components/shared/PushNotifications";
 import { UserMenu } from "@/components/shared/UserMenu";
 import { SpaceSwitcher } from "@/components/shared/SpaceSwitcher";
 import { PostButton } from "@/components/shared/PostButton";
+import { ChatWidget } from "@/components/chat/ChatWidget";
 import Link from "next/link";
 
 export const metadata: Metadata = {
@@ -47,6 +48,7 @@ export default async function RootLayout({
               </div>
             </header>
             <main className="max-w-4xl mx-auto px-4 py-6">{children}</main>
+            <ChatWidget />
           </ToastProvider>
         </SessionProvider>
       </body>
