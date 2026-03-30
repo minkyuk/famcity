@@ -39,7 +39,9 @@ export async function GET(req: NextRequest) {
       where: { userId: session.user.id },
       select: { spaceId: true },
     });
-    spaceFilter = { spaceId: { in: memberships.map((m) => m.spaceId) } };
+    const spaceIds = memberships.map((m) => m.spaceId);
+    // Show global posts (spaceId = null) + posts from user's spaces
+    spaceFilter = { OR: [{ spaceId: null }, { spaceId: { in: spaceIds } }] };
   }
 
   // Hashtag filter

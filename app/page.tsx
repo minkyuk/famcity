@@ -21,7 +21,7 @@ export default async function HomePage() {
 
   const posts = await prisma.post.findMany({
     take: 20,
-    where: spaceIds.length > 0 ? { spaceId: { in: spaceIds } } : { id: { in: [] } },
+    where: { OR: [{ spaceId: null }, ...(spaceIds.length > 0 ? [{ spaceId: { in: spaceIds } }] : [])] },
     orderBy: { createdAt: "desc" },
     include: {
       reactions: true,

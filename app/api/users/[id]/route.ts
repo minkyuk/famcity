@@ -19,8 +19,19 @@ export async function GET(
   });
   if (!user) return NextResponse.json({ error: "Not found" }, { status: 404 });
 
+  // Find spaces the viewer belongs to
+  const viewerMemberships = await prisma.spaceMember.findMany({
+    where: { userId: session.user.id },
+    select: { spaceId: true },
+  });
+  const viewerSpaceIds = viewerMemberships.map((m) => m.spaceId);
+
+  // Only show posts that are global (spaceId = null) or in a space the viewer is also in
   const posts = await prisma.post.findMany({
-    where: { userId: id },
+    where: {
+      userId: id,
+      OR: [{ spaceId: null }, { spaceId: { in: viewerSpaceIds } }],
+    },
     orderBy: { createdAt: "desc" },
     take: 20,
     include: {
