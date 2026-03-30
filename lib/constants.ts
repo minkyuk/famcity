@@ -6,4 +6,4 @@ export const FAMILY_MEMBERS = [
   "Grandpa",
 ];
 
-export const REACTION_EMOJIS = ["❤️", "😂", "🎉", "😢", "🙌"];
+export const REACTION_EMOJIS = ["❤️", "😂", "🎉", "😢", "🙌", "👍", "😮", "🔥", "😍", "🥰", "💪", "🤣"];

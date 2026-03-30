@@ -11,6 +11,7 @@ type PostWithRelations = Post & {
   comments: Comment[];
   media: PostMedia[];
   hashtags: (PostHashtag & { hashtag: Hashtag })[];
+  space: { name: string } | null;
   _count: { reactions: number; comments: number };
 };
 

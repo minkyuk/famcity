@@ -101,6 +101,7 @@ model Post {
   space       Space?        @relation(fields: [spaceId], references: [id], onDelete: Cascade)
   content     String?
   type        PostType
+  isPrivate   Boolean       @default(false)
   mediaUrl    String?       // used for YOUTUBE and AUDIO
   media       PostMedia[]   // used for IMAGE (multiple photos)
   hashtags    PostHashtag[]

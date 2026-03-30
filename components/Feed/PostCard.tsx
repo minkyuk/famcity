@@ -1,6 +1,6 @@
 "use client";
 
-import { Suspense } from "react";
+import { Suspense, useState } from "react";
 import { formatDistanceToNow } from "date-fns";
 import Image from "next/image";
 import { YoutubeEmbed } from "./YoutubeEmbed";
@@ -17,6 +17,7 @@ type PostWithRelations = Post & {
   comments: Comment[];
   media: PostMedia[];
   hashtags: (PostHashtag & { hashtag: Hashtag })[];
+  space: { name: string } | null;
   _count: { reactions: number; comments: number };
 };
 
@@ -32,22 +33,29 @@ interface PostCardProps {
   currentUserId: string;
   currentUserName: string;
   onDelete?: (id: string) => void;
+  onUpdate?: (updated: Partial<Post>) => void;
 }
 
 function Avatar({ name, image }: { name: string; image?: string | null }) {
   if (image) {
-    return <Image src={image} alt={name} width={36} height={36} className="rounded-full" unoptimized />;
+    return <Image src={image} alt={name} width={36} height={36} className="rounded-full object-cover shrink-0" unoptimized />;
   }
   return (
-    <div className="w-9 h-9 rounded-full bg-orange-100 flex items-center justify-center text-sm font-bold text-orange-600">
+    <div className="w-9 h-9 rounded-full bg-orange-100 flex items-center justify-center text-sm font-bold text-orange-600 shrink-0">
       {name[0]}
     </div>
   );
 }
 
-export function PostCard({ post, currentUserId, currentUserName, onDelete }: PostCardProps) {
+export function PostCard({ post, currentUserId, currentUserName, onDelete, onUpdate }: PostCardProps) {
   const badge = TYPE_BADGE[post.type];
   const isOwner = post.userId === currentUserId;
+
+  const [editing, setEditing] = useState(false);
+  const [editContent, setEditContent] = useState(post.content ?? "");
+  const [isPrivate, setIsPrivate] = useState(post.isPrivate);
+  const [saving, setSaving] = useState(false);
+  const [localPost, setLocalPost] = useState(post);
 
   const handleDelete = async () => {
     if (!confirm("Delete this post?")) return;
@@ -55,16 +63,50 @@ export function PostCard({ post, currentUserId, currentUserName, onDelete }: Pos
     onDelete?.(post.id);
   };
 
+  const handleSave = async () => {
+    setSaving(true);
+    const res = await fetch(`/api/posts/${post.id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ content: editContent, isPrivate }),
+    });
+    if (res.ok) {
+      const updated = await res.json();
+      setLocalPost((p) => ({ ...p, content: updated.content, isPrivate: updated.isPrivate }));
+      onUpdate?.(updated);
+    }
+    setEditing(false);
+    setSaving(false);
+  };
+
+  const spaceName = localPost.space?.name ?? (localPost.spaceId ? null : "Global");
+
   return (
     <article className="bg-white rounded-2xl shadow-sm border border-gray-100 p-4 flex flex-col gap-3">
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
-          <Avatar name={post.authorName} image={post.authorImage} />
+          <Avatar name={localPost.authorName} image={localPost.authorImage} />
           <div>
-            <p className="text-sm font-semibold text-gray-800">{post.authorName}</p>
-            <p className="text-xs text-gray-400">
-              {formatDistanceToNow(new Date(post.createdAt), { addSuffix: true })}
-            </p>
+            <p className="text-sm font-semibold text-gray-800">{localPost.authorName}</p>
+            <div className="flex items-center gap-1.5">
+              <p className="text-xs text-gray-400">
+                {formatDistanceToNow(new Date(localPost.createdAt), { addSuffix: true })}
+              </p>
+              {spaceName && (
+                <>
+                  <span className="text-xs text-gray-300">·</span>
+                  <span className="text-xs text-gray-400">
+                    {spaceName === "Global" ? "🌍 Global" : `👥 ${spaceName}`}
+                  </span>
+                </>
+              )}
+              {localPost.isPrivate && (
+                <>
+                  <span className="text-xs text-gray-300">·</span>
+                  <span className="text-xs text-yellow-600">🔒 Only me</span>
+                </>
+              )}
+            </div>
           </div>
         </div>
         <div className="flex items-center gap-2">
@@ -72,20 +114,62 @@ export function PostCard({ post, currentUserId, currentUserName, onDelete }: Pos
             {post.type === "IMAGE" && post.media.length > 1 ? `${post.media.length} Photos` : badge.label}
           </span>
           {isOwner && (
-            <button onClick={handleDelete} className="text-xs text-gray-300 hover:text-red-400 transition-colors" title="Delete post">
-              ✕
-            </button>
+            <div className="flex items-center gap-1">
+              <button
+                onClick={() => { setEditing(true); setEditContent(localPost.content ?? ""); setIsPrivate(localPost.isPrivate); }}
+                className="text-xs text-gray-300 hover:text-blue-400 transition-colors"
+                title="Edit post"
+              >
+                ✏️
+              </button>
+              <button onClick={handleDelete} className="text-xs text-gray-300 hover:text-red-400 transition-colors" title="Delete post">
+                ✕
+              </button>
+            </div>
           )}
         </div>
       </div>
 
-      {post.content && (
-        <p className="text-gray-800 text-sm leading-relaxed whitespace-pre-wrap">{post.content}</p>
+      {/* Inline edit */}
+      {editing ? (
+        <div className="flex flex-col gap-2">
+          <textarea
+            value={editContent}
+            onChange={(e) => setEditContent(e.target.value)}
+            rows={3}
+            className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm resize-none focus:outline-none focus:ring-2 focus:ring-orange-300"
+          />
+          <label className="flex items-center gap-2 text-sm text-gray-600 cursor-pointer select-none">
+            <input
+              type="checkbox"
+              checked={isPrivate}
+              onChange={(e) => setIsPrivate(e.target.checked)}
+              className="accent-orange-500"
+            />
+            🔒 Only visible to me
+          </label>
+          <div className="flex gap-2 justify-end">
+            <button onClick={() => setEditing(false)} className="text-sm text-gray-400 hover:text-gray-600 px-3 py-1">
+              Cancel
+            </button>
+            <button
+              onClick={handleSave}
+              disabled={saving}
+              className="bg-accent text-white text-sm font-semibold px-4 py-1.5 rounded-full hover:bg-orange-600 disabled:opacity-50 transition-colors"
+            >
+              {saving ? "Saving…" : "Save"}
+            </button>
+          </div>
+        </div>
+      ) : (
+        localPost.content && (
+          <p className="text-gray-800 text-sm leading-relaxed whitespace-pre-wrap">{localPost.content}</p>
+        )
       )}
 
-      {post.hashtags.length > 0 && (
+      {localPost.hashtags.length > 0 && (
         <Suspense>
-          <HashtagPills hashtags={post.hashtags} />
+          <HashtagPills hashtags={localPost.hashtags} />
         </Suspense>
       )}
 
@@ -96,7 +180,7 @@ export function PostCard({ post, currentUserId, currentUserName, onDelete }: Pos
       {post.type === "AUDIO" && post.mediaUrl && <AudioPlayer url={post.mediaUrl} />}
 
       <ReactionBar postId={post.id} reactions={post.reactions} currentUserName={currentUserName} />
-      <CommentThread postId={post.id} initialComments={post.comments} currentUserName={currentUserName} />
+      <CommentThread postId={post.id} initialComments={post.comments} currentUserId={currentUserId} currentUserName={currentUserName} />
     </article>
   );
 }

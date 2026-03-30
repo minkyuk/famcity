@@ -13,6 +13,7 @@ const POST_INCLUDE = {
   comments: { orderBy: { createdAt: "asc" as const } },
   media: { orderBy: { order: "asc" as const } },
   hashtags: { include: { hashtag: true } },
+  space: { select: { name: true } },
   _count: { select: { reactions: true, comments: true } },
 };
 
@@ -55,7 +56,7 @@ export async function GET(req: NextRequest) {
   const posts = await prisma.post.findMany({
     take: PAGE_SIZE,
     ...(cursor ? { skip: 1, cursor: { id: cursor } } : {}),
-    where: { ...spaceFilter, ...hashtagFilter },
+    where: { ...spaceFilter, ...hashtagFilter, OR: [{ isPrivate: false }, { userId: session.user.id }] },
     orderBy: { createdAt: "desc" },
     include: POST_INCLUDE,
   });
