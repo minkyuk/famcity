@@ -32,13 +32,18 @@ export function AudioRecorder({ onSubmit, submitting }: AudioRecorderProps) {
   const startRecording = async () => {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      const mr = new MediaRecorder(stream);
+
+      // Pick the first MIME type the browser actually supports
+      const mimeType = ["audio/webm", "audio/mp4", "audio/ogg", "audio/wav"]
+        .find((t) => MediaRecorder.isTypeSupported(t)) ?? "";
+
+      const mr = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
       mediaRecorderRef.current = mr;
       chunksRef.current = [];
 
-      mr.ondataavailable = (e) => chunksRef.current.push(e.data);
+      mr.ondataavailable = (e) => { if (e.data.size > 0) chunksRef.current.push(e.data); };
       mr.onstop = () => {
-        const b = new Blob(chunksRef.current, { type: "audio/webm" });
+        const b = new Blob(chunksRef.current, { type: mimeType || "audio/webm" });
         setBlob(b);
         setPreviewUrl(URL.createObjectURL(b));
         setState("recorded");
@@ -49,8 +54,15 @@ export function AudioRecorder({ onSubmit, submitting }: AudioRecorderProps) {
       setState("recording");
       setSeconds(0);
       timerRef.current = setInterval(() => setSeconds((s) => s + 1), 1000);
-    } catch {
-      showToast("Mic access denied — please allow microphone permission", "error");
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (msg.includes("denied") || msg.includes("Permission") || msg.includes("NotAllowed")) {
+        showToast("Mic access denied — please allow microphone in browser settings", "error");
+      } else if (msg.includes("found") || msg.includes("NotFound")) {
+        showToast("No microphone found on this device", "error");
+      } else {
+        showToast(`Recording error: ${msg}`, "error");
+      }
     }
   };
 

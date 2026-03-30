@@ -9,7 +9,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "No file provided" }, { status: 400 });
   }
 
-  const allowedTypes = ["image/jpeg", "image/png", "image/gif", "image/webp", "audio/webm", "audio/mp4", "audio/mpeg", "audio/ogg"];
+  const allowedTypes = ["image/jpeg", "image/png", "image/gif", "image/webp", "audio/webm", "audio/mp4", "audio/mpeg", "audio/ogg", "audio/wav", "audio/x-m4a", "audio/aac"];
   if (!allowedTypes.includes(file.type)) {
     return NextResponse.json({ error: "Unsupported file type" }, { status: 400 });
   }
