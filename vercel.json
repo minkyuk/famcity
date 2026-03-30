@@ -3,6 +3,6 @@
     { "path": "/api/agents/news", "schedule": "0 8 * * *" },
     { "path": "/api/agents/news", "schedule": "0 13 * * *" },
     { "path": "/api/agents/news", "schedule": "0 19 * * *" },
-    { "path": "/api/agents/discuss", "schedule": "*/5 * * * *" }
+    { "path": "/api/agents/discuss", "schedule": "0 12 * * *" }
   ]
 }
