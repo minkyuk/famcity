@@ -18,7 +18,7 @@ export function MusicWidget() {
   const [currentIndex, setCurrentIndex] = useState(0);
   const [shuffle, setShuffle] = useState(false);
   const [loop, setLoop] = useState(false);
-  const [volume, setVolume] = useState(70);
+  const [volume, setVolume] = useState(25);
   const [progress, setProgress] = useState(0);
   const [duration, setDuration] = useState(0);
   const [titles, setTitles] = useState<string[]>(PLAYLIST.map((p) => p.title));
@@ -53,7 +53,7 @@ export function MusicWidget() {
         videoId: PLAYLIST[0].id,
         playerVars: { autoplay: 0, controls: 0, rel: 0, modestbranding: 1, playsinline: 1 },
         events: {
-          onReady: (e: any) => { e.target.setVolume(70); },
+          onReady: (e: any) => { e.target.setVolume(25); },
           onStateChange: (e: any) => {
             const S = window.YT.PlayerState;
             if (e.data === S.PLAYING) {
