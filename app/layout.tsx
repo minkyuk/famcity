@@ -10,6 +10,7 @@ import { UserMenu } from "@/components/shared/UserMenu";
 import { SpaceSwitcher } from "@/components/shared/SpaceSwitcher";
 import { PostButton } from "@/components/shared/PostButton";
 import { ChatWidget } from "@/components/chat/ChatWidget";
+import { WalkingCat } from "@/components/shared/WalkingCat";
 import Link from "next/link";
 
 export const metadata: Metadata = {
@@ -49,6 +50,7 @@ export default async function RootLayout({
             </header>
             <main className="max-w-4xl mx-auto px-4 py-6">{children}</main>
             <ChatWidget />
+            <WalkingCat />
           </ToastProvider>
         </SessionProvider>
       </body>
