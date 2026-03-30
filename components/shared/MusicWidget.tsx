@@ -19,6 +19,7 @@ export function MusicWidget() {
   const [shuffle, setShuffle] = useState(false);
   const [loop, setLoop] = useState(false);
   const [volume, setVolume] = useState(25);
+  const [muted, setMuted] = useState(true);
   const [progress, setProgress] = useState(0);
   const [duration, setDuration] = useState(0);
   const [titles, setTitles] = useState<string[]>(PLAYLIST.map((p) => p.title));
@@ -51,9 +52,9 @@ export function MusicWidget() {
       playerRef.current = new window.YT.Player(ytDivRef.current, {
         height: "1", width: "1",
         videoId: PLAYLIST[0].id,
-        playerVars: { autoplay: 0, controls: 0, rel: 0, modestbranding: 1, playsinline: 1 },
+        playerVars: { autoplay: 1, mute: 1, controls: 0, rel: 0, modestbranding: 1, playsinline: 1 },
         events: {
-          onReady: (e: any) => { e.target.setVolume(25); },
+          onReady: (e: any) => { e.target.setVolume(25); e.target.mute(); e.target.playVideo(); },
           onStateChange: (e: any) => {
             const S = window.YT.PlayerState;
             if (e.data === S.PLAYING) {
@@ -127,7 +128,20 @@ export function MusicWidget() {
 
   const handleVolume = (v: number) => {
     setVolume(v);
-    playerRef.current?.setVolume(v);
+    if (playerRef.current) {
+      playerRef.current.setVolume(v);
+      if (v > 0 && muted) {
+        playerRef.current.unMute();
+        setMuted(false);
+      }
+    }
+  };
+
+  const handleUnmute = () => {
+    if (!playerRef.current) return;
+    playerRef.current.unMute();
+    playerRef.current.setVolume(volume);
+    setMuted(false);
   };
 
   const handleSeek = (t: number) => {
@@ -158,6 +172,16 @@ export function MusicWidget() {
             <p className="text-sm font-semibold text-gray-800 flex-1">FamCity Radio</p>
             <button onClick={() => setOpen(false)} className="text-gray-400 hover:text-gray-600 text-xl leading-none">×</button>
           </div>
+
+          {/* Unmute banner */}
+          {muted && (
+            <button
+              onClick={handleUnmute}
+              className="w-full flex items-center justify-center gap-2 bg-orange-50 hover:bg-orange-100 text-orange-600 text-sm font-semibold py-2 transition-colors"
+            >
+              🔇 Tap to unmute
+            </button>
+          )}
 
           {/* Thumbnail + title */}
           <div className="px-4 pt-3 pb-2">
@@ -227,7 +251,7 @@ export function MusicWidget() {
       <button
         onClick={() => setOpen((o) => !o)}
         className={`w-12 h-12 rounded-full shadow-lg flex items-center justify-center text-xl transition-all ${
-          playing ? "bg-orange-500 text-white" : "bg-white text-gray-600 border border-gray-200 hover:border-orange-300"
+          playing && !muted ? "bg-orange-500 text-white" : "bg-white text-gray-600 border border-gray-200 hover:border-orange-300"
         }`}
         title="Music player"
       >
