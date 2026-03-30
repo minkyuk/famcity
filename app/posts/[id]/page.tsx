@@ -18,6 +18,8 @@ export default async function PostPage({
     include: {
       reactions: true,
       comments: { orderBy: { createdAt: "asc" } },
+      media: { orderBy: { order: "asc" } },
+      hashtags: { include: { hashtag: true } },
       _count: { select: { reactions: true, comments: true } },
     },
   });

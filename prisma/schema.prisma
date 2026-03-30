@@ -36,15 +36,19 @@ model Session {
 }
 
 model User {
-  id            String    @id @default(cuid())
+  id            String         @id @default(cuid())
   name          String?
-  email         String?   @unique
+  email         String?        @unique
   emailVerified DateTime?
   image         String?
+  bio           String?        @db.Text
   accounts      Account[]
   sessions      Session[]
   posts         Post[]
   comments      Comment[]
+  spaces        SpaceMember[]
+  chatMessages  ChatMessage[]
+  presence      OnlinePresence?
 }
 
 model VerificationToken {
@@ -55,20 +59,76 @@ model VerificationToken {
   @@unique([identifier, token])
 }
 
+// --- Spaces ---
+
+model Space {
+  id          String        @id @default(cuid())
+  name        String
+  description String?
+  inviteCode  String        @unique
+  createdAt   DateTime      @default(now())
+  members     SpaceMember[]
+  posts       Post[]
+}
+
+model SpaceMember {
+  id       String    @id @default(cuid())
+  userId   String
+  spaceId  String
+  role     SpaceRole @default(MEMBER)
+  joinedAt DateTime  @default(now())
+  user     User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  space    Space     @relation(fields: [spaceId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, spaceId])
+}
+
+enum SpaceRole {
+  OWNER
+  MEMBER
+}
+
 // --- App models ---
 
 model Post {
-  id         String     @id @default(cuid())
-  authorName String
+  id          String        @id @default(cuid())
+  authorName  String
   authorImage String?
-  userId     String?
-  user       User?      @relation(fields: [userId], references: [id], onDelete: SetNull)
-  content    String?
-  type       PostType
-  mediaUrl   String?
-  createdAt  DateTime   @default(now())
-  reactions  Reaction[]
-  comments   Comment[]
+  userId      String?
+  user        User?         @relation(fields: [userId], references: [id], onDelete: SetNull)
+  spaceId     String?
+  space       Space?        @relation(fields: [spaceId], references: [id], onDelete: Cascade)
+  content     String?
+  type        PostType
+  mediaUrl    String?       // used for YOUTUBE and AUDIO
+  media       PostMedia[]   // used for IMAGE (multiple photos)
+  hashtags    PostHashtag[]
+  createdAt   DateTime      @default(now())
+  reactions   Reaction[]
+  comments    Comment[]
+}
+
+model PostMedia {
+  id     String @id @default(cuid())
+  postId String
+  post   Post   @relation(fields: [postId], references: [id], onDelete: Cascade)
+  url    String
+  order  Int    @default(0)
+}
+
+model Hashtag {
+  id    String        @id @default(cuid())
+  tag   String        @unique // lowercase, no #
+  posts PostHashtag[]
+}
+
+model PostHashtag {
+  postId    String
+  hashtagId String
+  post      Post    @relation(fields: [postId], references: [id], onDelete: Cascade)
+  hashtag   Hashtag @relation(fields: [hashtagId], references: [id], onDelete: Cascade)
+
+  @@id([postId, hashtagId])
 }
 
 enum PostType {
@@ -108,4 +168,40 @@ model PushSubscription {
   auth      String
   name      String
   createdAt DateTime @default(now())
+}
+
+// --- Chat ---
+
+model ChatChannel {
+  id           String        @id @default(cuid())
+  name         String
+  description  String?
+  isGlobal     Boolean       @default(false)
+  passwordHash String?       // null = open channel
+  createdById  String?
+  createdAt    DateTime      @default(now())
+  messages     ChatMessage[]
+  presence     OnlinePresence[]
+}
+
+model ChatMessage {
+  id        String      @id @default(cuid())
+  channelId String
+  channel   ChatChannel @relation(fields: [channelId], references: [id], onDelete: Cascade)
+  userId    String
+  user      User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userName  String
+  userImage String?
+  content   String      // AES-256-GCM encrypted at rest
+  createdAt DateTime    @default(now())
+}
+
+model OnlinePresence {
+  userId    String      @id
+  user      User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name      String
+  image     String?
+  channelId String?
+  channel   ChatChannel? @relation(fields: [channelId], references: [id], onDelete: SetNull)
+  lastSeen  DateTime    @default(now())
 }

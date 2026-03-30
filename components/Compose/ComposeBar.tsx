@@ -1,7 +1,7 @@
 "use client";
 
-import { useState } from "react";
-import { useRouter } from "next/navigation";
+import { useEffect, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import { YouTubeInput } from "./YouTubeInput";
 import { ImageUploader } from "./ImageUploader";
 import { AudioRecorder } from "./AudioRecorder";
@@ -16,16 +16,35 @@ const TYPES: { type: PostType; icon: string; label: string }[] = [
   { type: "AUDIO", icon: "🎙", label: "Audio" },
 ];
 
+interface Space { id: string; name: string; }
+
 export function ComposeBar() {
   const [activeType, setActiveType] = useState<PostType>("TEXT");
   const [textContent, setTextContent] = useState("");
   const [submitting, setSubmitting] = useState(false);
+  const [spaces, setSpaces] = useState<Space[]>([]);
+  const [spaceId, setSpaceId] = useState<string>("");
   const { showToast } = useToast();
   const router = useRouter();
+  const searchParams = useSearchParams();
+
+  useEffect(() => {
+    fetch("/api/spaces")
+      .then((r) => r.json())
+      .then((data) => {
+        if (!Array.isArray(data)) return;
+        setSpaces(data);
+        // Pre-select from URL param or first space
+        const preselect = searchParams.get("spaceId");
+        setSpaceId(preselect ?? data[0]?.id ?? "");
+      })
+      .catch(() => {});
+  }, [searchParams]);
 
   const createPost = async (data: {
     type: PostType;
     mediaUrl?: string;
+    mediaUrls?: string[];
     content?: string;
   }) => {
     setSubmitting(true);
@@ -33,11 +52,11 @@ export function ComposeBar() {
       const res = await fetch("/api/posts", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(data),
+        body: JSON.stringify({ ...data, spaceId: spaceId || undefined }),
       });
       if (!res.ok) throw new Error();
       showToast("Posted!");
-      router.push("/");
+      router.push(spaceId ? `/spaces/${spaceId}` : "/");
       router.refresh();
     } catch {
       showToast("Failed to post", "error");
@@ -48,6 +67,29 @@ export function ComposeBar() {
 
   return (
     <div className="flex flex-col gap-5">
+      {/* Space selector */}
+      {spaces.length > 0 && (
+        <div className="flex items-center gap-2">
+          <span className="text-sm text-gray-500">Post to</span>
+          <select
+            value={spaceId}
+            onChange={(e) => setSpaceId(e.target.value)}
+            className="text-sm font-semibold text-gray-800 bg-orange-50 border border-orange-200 rounded-lg px-3 py-1.5 focus:outline-none focus:ring-2 focus:ring-orange-300"
+          >
+            {spaces.map((s) => (
+              <option key={s.id} value={s.id}>{s.name}</option>
+            ))}
+          </select>
+        </div>
+      )}
+
+      {spaces.length === 0 && (
+        <div className="text-sm text-gray-400 bg-gray-50 rounded-xl px-4 py-3">
+          You're not in any spaces yet.{" "}
+          <a href="/" className="text-accent hover:underline">Create one first</a>.
+        </div>
+      )}
+
       {/* Type selector */}
       <div className="flex gap-2">
         {TYPES.map(({ type, icon, label }) => (
@@ -85,7 +127,7 @@ export function ComposeBar() {
           />
           <button
             type="submit"
-            disabled={!textContent.trim() || submitting}
+            disabled={!textContent.trim() || submitting || !spaceId}
             className="bg-accent text-white rounded-xl py-2.5 text-sm font-semibold disabled:opacity-40 hover:bg-orange-600 transition-colors"
           >
             {submitting ? "Posting…" : "Share"}
@@ -94,24 +136,16 @@ export function ComposeBar() {
       )}
 
       {activeType === "YOUTUBE" && (
-        <YouTubeInput
-          submitting={submitting}
-          onSubmit={(data) => createPost({ type: "YOUTUBE", ...data })}
-        />
+        <YouTubeInput submitting={submitting} onSubmit={(data) => createPost({ type: "YOUTUBE", ...data })} />
       )}
-
       {activeType === "IMAGE" && (
         <ImageUploader
           submitting={submitting}
-          onSubmit={(data) => createPost({ type: "IMAGE", ...data })}
+          onSubmit={(data) => createPost({ type: "IMAGE", mediaUrls: data.mediaUrls, content: data.content })}
         />
       )}
-
       {activeType === "AUDIO" && (
-        <AudioRecorder
-          submitting={submitting}
-          onSubmit={(data) => createPost({ type: "AUDIO", ...data })}
-        />
+        <AudioRecorder submitting={submitting} onSubmit={(data) => createPost({ type: "AUDIO", ...data })} />
       )}
     </div>
   );

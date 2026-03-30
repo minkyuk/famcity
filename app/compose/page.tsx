@@ -1,3 +1,4 @@
+import { Suspense } from "react";
 import { ComposeBar } from "@/components/Compose/ComposeBar";
 import Link from "next/link";
 
@@ -11,7 +12,9 @@ export default function ComposePage() {
         <h1 className="text-lg font-bold text-gray-800">New Post</h1>
       </div>
       <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-5">
-        <ComposeBar />
+        <Suspense>
+          <ComposeBar />
+        </Suspense>
       </div>
     </div>
   );

@@ -1,46 +1,51 @@
 import { NextRequest } from "next/server";
+import { getServerSession } from "next-auth";
+import { authOptions } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
 export async function GET(req: NextRequest) {
+  const session = await getServerSession(authOptions);
+  if (!session?.user) {
+    return new Response("Unauthorized", { status: 401 });
+  }
+
   const since = req.nextUrl.searchParams.get("since");
+  const spaceId = req.nextUrl.searchParams.get("spaceId");
   let lastSeen = since ? new Date(since) : new Date();
+
+  // Build space filter
+  let spaceFilter = {};
+  if (spaceId) {
+    spaceFilter = { spaceId };
+  } else {
+    const memberships = await prisma.spaceMember.findMany({
+      where: { userId: session.user.id },
+      select: { spaceId: true },
+    });
+    spaceFilter = { spaceId: { in: memberships.map((m) => m.spaceId) } };
+  }
 
   const encoder = new TextEncoder();
 
   const stream = new ReadableStream({
     async start(controller) {
       let closed = false;
+      req.signal.addEventListener("abort", () => { closed = true; });
 
-      req.signal.addEventListener("abort", () => {
-        closed = true;
-      });
-
-      // Heartbeat keeps the connection alive through proxies/load balancers
       const heartbeat = setInterval(() => {
-        if (closed) {
-          clearInterval(heartbeat);
-          return;
-        }
-        try {
-          controller.enqueue(encoder.encode(": heartbeat\n\n"));
-        } catch {
-          closed = true;
-          clearInterval(heartbeat);
-        }
+        if (closed) { clearInterval(heartbeat); return; }
+        try { controller.enqueue(encoder.encode(": heartbeat\n\n")); }
+        catch { closed = true; clearInterval(heartbeat); }
       }, 20_000);
 
       const poll = async () => {
-        if (closed) {
-          clearInterval(heartbeat);
-          return;
-        }
-
+        if (closed) { clearInterval(heartbeat); return; }
         try {
           const newPosts = await prisma.post.findMany({
-            where: { createdAt: { gt: lastSeen } },
+            where: { createdAt: { gt: lastSeen }, ...spaceFilter },
             orderBy: { createdAt: "asc" },
             include: {
               reactions: true,
@@ -48,16 +53,11 @@ export async function GET(req: NextRequest) {
               _count: { select: { reactions: true, comments: true } },
             },
           });
-
           if (newPosts.length > 0) {
             lastSeen = newPosts[newPosts.length - 1].createdAt;
-            const payload = `data: ${JSON.stringify(newPosts)}\n\n`;
-            controller.enqueue(encoder.encode(payload));
+            controller.enqueue(encoder.encode(`data: ${JSON.stringify(newPosts)}\n\n`));
           }
-        } catch {
-          // DB hiccup — skip this tick
-        }
-
+        } catch { /* skip */ }
         if (!closed) setTimeout(poll, 2_000);
       };
 

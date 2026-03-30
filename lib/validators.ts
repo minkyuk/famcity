@@ -6,6 +6,8 @@ export const CreatePostSchema = z.object({
   content: z.string().max(2000).optional(),
   type: PostTypeSchema,
   mediaUrl: z.string().url().optional(),
+  mediaUrls: z.array(z.string().url()).max(5).optional(),
+  spaceId: z.string().optional(),
 });
 
 export const CreateCommentSchema = z.object({

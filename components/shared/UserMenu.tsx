@@ -2,6 +2,7 @@
 
 import { useSession, signIn, signOut } from "next-auth/react";
 import Image from "next/image";
+import Link from "next/link";
 import { useState } from "react";
 
 export function UserMenu() {
@@ -12,10 +13,7 @@ export function UserMenu() {
 
   if (!session) {
     return (
-      <button
-        onClick={() => signIn("google")}
-        className="text-sm font-semibold text-accent hover:underline"
-      >
+      <button onClick={() => signIn("google")} className="text-sm font-semibold text-accent hover:underline">
         Sign in
       </button>
     );
@@ -31,10 +29,11 @@ export function UserMenu() {
             width={32}
             height={32}
             className="rounded-full border-2 border-orange-200"
+            unoptimized
           />
         ) : (
           <div className="w-8 h-8 rounded-full bg-orange-200 flex items-center justify-center text-sm font-bold text-orange-700">
-            {session.user.name?.[0] ?? "?"}
+            {session.user.name?.[0]?.toUpperCase() ?? "?"}
           </div>
         )}
       </button>
@@ -47,6 +46,20 @@ export function UserMenu() {
               <p className="text-sm font-semibold text-gray-800 truncate">{session.user.name}</p>
               <p className="text-xs text-gray-400 truncate">{session.user.email}</p>
             </div>
+            <Link
+              href={`/profile/${session.user.id}`}
+              onClick={() => setOpen(false)}
+              className="block w-full text-left px-4 py-2 text-sm text-gray-600 hover:bg-gray-50 transition-colors"
+            >
+              View profile
+            </Link>
+            <Link
+              href="/chat"
+              onClick={() => setOpen(false)}
+              className="block w-full text-left px-4 py-2 text-sm text-gray-600 hover:bg-gray-50 transition-colors"
+            >
+              💬 Chat
+            </Link>
             <button
               onClick={() => signOut({ callbackUrl: "/login" })}
               className="w-full text-left px-4 py-2 text-sm text-red-500 hover:bg-red-50 transition-colors"

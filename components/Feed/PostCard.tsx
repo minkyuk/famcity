@@ -1,17 +1,22 @@
 "use client";
 
+import { Suspense } from "react";
 import { formatDistanceToNow } from "date-fns";
 import Image from "next/image";
 import { YoutubeEmbed } from "./YoutubeEmbed";
+import { ImageGallery } from "./ImageGallery";
 import { ImagePost } from "./ImagePost";
 import { AudioPlayer } from "./AudioPlayer";
 import { ReactionBar } from "./ReactionBar";
 import { CommentThread } from "./CommentThread";
-import type { Post, Reaction, Comment } from "@prisma/client";
+import { HashtagPills } from "./HashtagPills";
+import type { Post, Reaction, Comment, PostMedia, PostHashtag, Hashtag } from "@prisma/client";
 
 type PostWithRelations = Post & {
   reactions: Reaction[];
   comments: Comment[];
+  media: PostMedia[];
+  hashtags: (PostHashtag & { hashtag: Hashtag })[];
   _count: { reactions: number; comments: number };
 };
 
@@ -31,16 +36,7 @@ interface PostCardProps {
 
 function Avatar({ name, image }: { name: string; image?: string | null }) {
   if (image) {
-    return (
-      <Image
-        src={image}
-        alt={name}
-        width={36}
-        height={36}
-        className="rounded-full"
-        unoptimized
-      />
-    );
+    return <Image src={image} alt={name} width={36} height={36} className="rounded-full" unoptimized />;
   }
   return (
     <div className="w-9 h-9 rounded-full bg-orange-100 flex items-center justify-center text-sm font-bold text-orange-600">
@@ -73,14 +69,10 @@ export function PostCard({ post, currentUserId, currentUserName, onDelete }: Pos
         </div>
         <div className="flex items-center gap-2">
           <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${badge.color}`}>
-            {badge.label}
+            {post.type === "IMAGE" && post.media.length > 1 ? `${post.media.length} Photos` : badge.label}
           </span>
           {isOwner && (
-            <button
-              onClick={handleDelete}
-              className="text-xs text-gray-300 hover:text-red-400 transition-colors"
-              title="Delete post"
-            >
+            <button onClick={handleDelete} className="text-xs text-gray-300 hover:text-red-400 transition-colors" title="Delete post">
               ✕
             </button>
           )}
@@ -91,21 +83,20 @@ export function PostCard({ post, currentUserId, currentUserName, onDelete }: Pos
         <p className="text-gray-800 text-sm leading-relaxed whitespace-pre-wrap">{post.content}</p>
       )}
 
+      {post.hashtags.length > 0 && (
+        <Suspense>
+          <HashtagPills hashtags={post.hashtags} />
+        </Suspense>
+      )}
+
+      {post.type === "IMAGE" && post.media.length > 1 && <ImageGallery images={post.media} />}
+      {post.type === "IMAGE" && post.media.length === 1 && <ImagePost url={post.media[0].url} />}
+      {post.type === "IMAGE" && post.media.length === 0 && post.mediaUrl && <ImagePost url={post.mediaUrl} />}
       {post.type === "YOUTUBE" && post.mediaUrl && <YoutubeEmbed url={post.mediaUrl} />}
-      {post.type === "IMAGE" && post.mediaUrl && <ImagePost url={post.mediaUrl} />}
       {post.type === "AUDIO" && post.mediaUrl && <AudioPlayer url={post.mediaUrl} />}
 
-      <ReactionBar
-        postId={post.id}
-        reactions={post.reactions}
-        currentUserName={currentUserName}
-      />
-
-      <CommentThread
-        postId={post.id}
-        initialComments={post.comments}
-        currentUserName={currentUserName}
-      />
+      <ReactionBar postId={post.id} reactions={post.reactions} currentUserName={currentUserName} />
+      <CommentThread postId={post.id} initialComments={post.comments} currentUserName={currentUserName} />
     </article>
   );
 }
