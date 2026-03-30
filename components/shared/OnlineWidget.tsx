@@ -21,18 +21,15 @@ export function OnlineWidget() {
         .then((d) => Array.isArray(d) && setOnline(d))
         .catch(() => {});
 
-    ping();
-    fetchOnline();
+    ping().then(fetchOnline);
 
-    const pingInterval = setInterval(ping, 30_000);
-    const pollInterval = setInterval(fetchOnline, 30_000);
+    const pingInterval = setInterval(() => ping().then(fetchOnline), 30_000);
 
     const handleUnload = () => fetch("/api/chat/online", { method: "DELETE", keepalive: true });
     window.addEventListener("beforeunload", handleUnload);
 
     return () => {
       clearInterval(pingInterval);
-      clearInterval(pollInterval);
       window.removeEventListener("beforeunload", handleUnload);
     };
   }, []);
