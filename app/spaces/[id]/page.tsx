@@ -6,6 +6,7 @@ import { prisma } from "@/lib/prisma";
 import { Feed } from "@/app/Feed";
 import { InviteButton } from "@/components/spaces/InviteButton";
 import { HashtagSidebar } from "@/components/shared/HashtagSidebar";
+import { OnlineWidget } from "@/components/shared/OnlineWidget";
 
 export default async function SpacePage({
   params,
@@ -45,7 +46,8 @@ export default async function SpacePage({
   return (
     <div className="flex gap-6">
       {/* Sidebar */}
-      <aside className="hidden lg:block w-48 shrink-0 pt-1">
+      <aside className="hidden lg:block w-48 shrink-0 pt-1 flex flex-col gap-4">
+        <OnlineWidget />
         <Suspense>
           <HashtagSidebar spaceId={id} />
         </Suspense>
