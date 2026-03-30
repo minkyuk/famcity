@@ -17,16 +17,18 @@ export async function GET(req: NextRequest) {
   let lastSeen = since ? new Date(since) : new Date();
 
   // Build space filter
-  let spaceFilter = {};
+  const andClauses: object[] = [];
   if (spaceId) {
-    spaceFilter = { spaceId };
+    andClauses.push({ spaceId });
   } else {
     const memberships = await prisma.spaceMember.findMany({
       where: { userId: session.user.id },
       select: { spaceId: true },
     });
-    spaceFilter = { spaceId: { in: memberships.map((m) => m.spaceId) } };
+    const spaceIds = memberships.map((m) => m.spaceId);
+    andClauses.push({ OR: [{ spaceId: null }, { spaceId: { in: spaceIds } }] });
   }
+  andClauses.push({ OR: [{ isPrivate: false }, { userId: session.user.id }] });
 
   const encoder = new TextEncoder();
 
@@ -45,7 +47,7 @@ export async function GET(req: NextRequest) {
         if (closed) { clearInterval(heartbeat); return; }
         try {
           const newPosts = await prisma.post.findMany({
-            where: { createdAt: { gt: lastSeen }, ...spaceFilter },
+            where: { AND: [{ createdAt: { gt: lastSeen } }, ...andClauses] },
             orderBy: { createdAt: "asc" },
             include: {
               reactions: true,

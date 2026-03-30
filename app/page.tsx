@@ -21,7 +21,12 @@ export default async function HomePage() {
 
   const posts = await prisma.post.findMany({
     take: 20,
-    where: { OR: [{ spaceId: null }, ...(spaceIds.length > 0 ? [{ spaceId: { in: spaceIds } }] : [])] },
+    where: {
+      AND: [
+        { OR: [{ spaceId: null }, ...(spaceIds.length > 0 ? [{ spaceId: { in: spaceIds } }] : [])] },
+        { OR: [{ isPrivate: false }, { userId: session.user.id }] },
+      ],
+    },
     orderBy: { createdAt: "desc" },
     include: {
       reactions: true,

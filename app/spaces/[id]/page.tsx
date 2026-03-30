@@ -30,7 +30,12 @@ export default async function SpacePage({
 
   const posts = await prisma.post.findMany({
     take: 20,
-    where: { spaceId: id },
+    where: {
+      AND: [
+        { spaceId: id },
+        { OR: [{ isPrivate: false }, { userId: session.user.id }] },
+      ],
+    },
     orderBy: { createdAt: "desc" },
     include: {
       reactions: true,

@@ -27,36 +27,36 @@ export async function GET(req: NextRequest) {
   const spaceId = req.nextUrl.searchParams.get("spaceId");
   const hashtag = req.nextUrl.searchParams.get("hashtag");
 
-  // Space filter
-  let spaceFilter = {};
+  // Space filter — must use AND so it doesn't collide with other OR clauses
+  const andClauses: object[] = [];
+
   if (spaceId) {
     const membership = await prisma.spaceMember.findUnique({
       where: { userId_spaceId: { userId: session.user.id, spaceId } },
     });
     if (!membership) return NextResponse.json({ error: "Not a member" }, { status: 403 });
-    spaceFilter = { spaceId };
+    andClauses.push({ spaceId });
   } else {
     const memberships = await prisma.spaceMember.findMany({
       where: { userId: session.user.id },
       select: { spaceId: true },
     });
     const spaceIds = memberships.map((m) => m.spaceId);
-    // Show global posts (spaceId = null) + posts from user's spaces
-    spaceFilter = { OR: [{ spaceId: null }, { spaceId: { in: spaceIds } }] };
+    andClauses.push({ OR: [{ spaceId: null }, { spaceId: { in: spaceIds } }] });
   }
 
+  // Privacy: show public posts + own private posts
+  andClauses.push({ OR: [{ isPrivate: false }, { userId: session.user.id }] });
+
   // Hashtag filter
-  let hashtagFilter = {};
   if (hashtag) {
-    hashtagFilter = {
-      hashtags: { some: { hashtag: { tag: hashtag.toLowerCase() } } },
-    };
+    andClauses.push({ hashtags: { some: { hashtag: { tag: hashtag.toLowerCase() } } } });
   }
 
   const posts = await prisma.post.findMany({
     take: PAGE_SIZE,
     ...(cursor ? { skip: 1, cursor: { id: cursor } } : {}),
-    where: { ...spaceFilter, ...hashtagFilter, OR: [{ isPrivate: false }, { userId: session.user.id }] },
+    where: { AND: andClauses },
     orderBy: { createdAt: "desc" },
     include: POST_INCLUDE,
   });
