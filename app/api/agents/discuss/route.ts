@@ -11,7 +11,6 @@ import { fetchRss, SCIENCE_FEEDS } from "@/lib/rss";
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
 const AGENT_SPACE_NAME = "The Curiosity Den";
-const COOLDOWN_MS = 5 * 60 * 1000; // 5 minutes per agent
 
 /** Topics for spontaneous new posts */
 const DISCUSSION_PROMPTS = [
@@ -58,24 +57,6 @@ async function getNewsSpaceId(): Promise<string | null> {
   return space?.id ?? null;
 }
 
-async function agentLastPostTime(agentName: string, spaceId: string): Promise<number> {
-  const last = await prisma.post.findFirst({
-    where: { authorName: agentName, spaceId },
-    orderBy: { createdAt: "desc" },
-    select: { createdAt: true },
-  });
-  return last ? last.createdAt.getTime() : 0;
-}
-
-async function agentLastCommentTime(agentName: string): Promise<number> {
-  const last = await prisma.comment.findFirst({
-    where: { authorName: agentName },
-    orderBy: { createdAt: "desc" },
-    select: { createdAt: true },
-  });
-  return last ? last.createdAt.getTime() : 0;
-}
-
 /** Fire one action for a single agent: either a new post or a comment on a recent post. */
 async function runAgentAction(
   agent: (typeof AGENTS)[0],
@@ -83,17 +64,10 @@ async function runAgentAction(
   newsSpaceId: string | null,
   recentPosts: { id: string; content: string | null; authorName: string; spaceId: string | null }[]
 ) {
-  const now = Date.now();
-  const lastPost = await agentLastPostTime(agent.name, denSpaceId);
-  const lastComment = await agentLastCommentTime(agent.name);
-  const cooldown = Math.max(lastPost, lastComment);
-
-  if (now - cooldown < COOLDOWN_MS) return; // still cooling down
-
   const avatar = agentAvatarUrl(agent.slug);
 
-  // 55% chance: comment on a recent post; 45% chance: new post
-  const shouldComment = Math.random() < 0.55 && recentPosts.length > 0;
+  // 65% chance: comment on a recent post (drives discussion); 35% chance: new post
+  const shouldComment = Math.random() < 0.65 && recentPosts.length > 0;
 
   if (shouldComment) {
     // Pick a post not authored by this agent
@@ -195,9 +169,9 @@ Write a short, engaging post (1–3 sentences). Be yourself. No hashtags. Don't 
 }
 
 async function runDiscussionRound(denSpaceId: string, newsSpaceId: string | null) {
-  // Get recent posts from den + news + global (null spaceId) to comment on
+  // Get recent posts from den + news + global to comment on
   const recentPosts = await prisma.post.findMany({
-    take: 30,
+    take: 50,
     where: {
       OR: [
         { spaceId: denSpaceId },
@@ -217,8 +191,8 @@ async function runDiscussionRound(denSpaceId: string, newsSpaceId: string | null
     } catch (e) {
       console.error(`Agent ${agent.name} error:`, e);
     }
-    // Small delay between agents to be gentle on the API
-    await new Promise((r) => setTimeout(r, 300));
+    // Small delay between agents to avoid Anthropic rate limits
+    await new Promise((r) => setTimeout(r, 500));
   }
 }
 
