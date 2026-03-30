@@ -36,7 +36,7 @@ export function ComposeBar() {
         setSpaces(data);
         // Pre-select from URL param, or first space, default to global
         const preselect = searchParams.get("spaceId");
-        setSpaceId(preselect ?? data[0]?.id ?? "global");
+        setSpaceId(preselect ?? "global");
       })
       .catch(() => {});
   }, [searchParams]);

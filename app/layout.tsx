@@ -8,6 +8,7 @@ import { NotificationBell } from "@/components/shared/NotificationBell";
 import { PushNotifications } from "@/components/shared/PushNotifications";
 import { UserMenu } from "@/components/shared/UserMenu";
 import { SpaceSwitcher } from "@/components/shared/SpaceSwitcher";
+import { PostButton } from "@/components/shared/PostButton";
 import Link from "next/link";
 
 export const metadata: Metadata = {
@@ -38,12 +39,7 @@ export default async function RootLayout({
                     <>
                       <PushNotifications />
                       <NotificationBell />
-                      <Link
-                        href="/compose"
-                        className="bg-accent text-white text-sm font-semibold px-4 py-1.5 rounded-full hover:bg-orange-600 transition-colors"
-                      >
-                        + Post
-                      </Link>
+                      <PostButton />
                     </>
                   )}
                   <UserMenu />
