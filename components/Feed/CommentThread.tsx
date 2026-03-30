@@ -11,6 +11,7 @@ interface CommentThreadProps {
   initialComments: Comment[];
   currentUserId: string;
   currentUserName: string;
+  isAdmin?: boolean; // site admin can delete any comment
 }
 
 function Avatar({ name, image }: { name: string; image?: string | null }) {
@@ -28,7 +29,7 @@ function Avatar({ name, image }: { name: string; image?: string | null }) {
   );
 }
 
-export function CommentThread({ postId, initialComments, currentUserId, currentUserName }: CommentThreadProps) {
+export function CommentThread({ postId, initialComments, currentUserId, currentUserName, isAdmin }: CommentThreadProps) {
   const [comments, setComments] = useState<Comment[]>(initialComments);
   const [open, setOpen] = useState(false);
   const [body, setBody] = useState("");
@@ -98,6 +99,7 @@ export function CommentThread({ postId, initialComments, currentUserId, currentU
         <div className="mt-3 flex flex-col gap-2">
           {comments.map((c) => {
             const isOwn = c.userId === currentUserId;
+            const canDelete = isOwn || isAdmin;
             return (
               <div key={c.id} className="flex gap-2">
                 <Avatar name={c.authorName} image={c.authorImage} />
@@ -109,12 +111,14 @@ export function CommentThread({ postId, initialComments, currentUserId, currentU
                         · {formatDistanceToNow(new Date(c.createdAt), { addSuffix: true })}
                       </span>
                     </div>
-                    {isOwn && editingId !== c.id && (
+                    {canDelete && editingId !== c.id && (
                       <div className="flex items-center gap-1 shrink-0">
-                        <button
-                          onClick={() => { setEditingId(c.id); setEditBody(c.body); }}
-                          className="text-[10px] text-gray-300 hover:text-blue-400 transition-colors"
-                        >✏️</button>
+                        {isOwn && (
+                          <button
+                            onClick={() => { setEditingId(c.id); setEditBody(c.body); }}
+                            className="text-[10px] text-gray-300 hover:text-blue-400 transition-colors"
+                          >✏️</button>
+                        )}
                         <button
                           onClick={() => deleteComment(c.id)}
                           className="text-[10px] text-gray-300 hover:text-red-400 transition-colors"

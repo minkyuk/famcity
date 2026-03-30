@@ -19,9 +19,10 @@ interface FeedProps {
   initialPosts: PostWithRelations[];
   initialNextCursor: string | null;
   spaceId?: string;
+  isAdmin?: boolean;
 }
 
-export function Feed({ initialPosts, initialNextCursor, spaceId }: FeedProps) {
+export function Feed({ initialPosts, initialNextCursor, spaceId, isAdmin }: FeedProps) {
   const [posts, setPosts] = useState<PostWithRelations[]>(initialPosts);
   const [nextCursor, setNextCursor] = useState<string | null>(initialNextCursor);
   const [loadingMore, setLoadingMore] = useState(false);
@@ -148,6 +149,7 @@ export function Feed({ initialPosts, initialNextCursor, spaceId }: FeedProps) {
           post={post}
           currentUserId={session.user.id}
           currentUserName={session.user.name ?? ""}
+          isAdmin={isAdmin}
           onDelete={(id) => setPosts((prev) => prev.filter((p) => p.id !== id))}
         />
       ))}

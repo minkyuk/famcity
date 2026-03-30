@@ -8,6 +8,7 @@ import { InviteButton } from "@/components/spaces/InviteButton";
 import { HashtagSidebar } from "@/components/shared/HashtagSidebar";
 import { OnlineWidget } from "@/components/shared/OnlineWidget";
 import { AgentActivityTrigger } from "@/components/spaces/AgentActivityTrigger";
+import { isAdmin } from "@/lib/admin";
 
 export default async function SpacePage({
   params,
@@ -81,7 +82,7 @@ export default async function SpacePage({
         {isAgentSpace && <AgentActivityTrigger />}
 
         <Suspense>
-          <Feed initialPosts={posts} initialNextCursor={nextCursor} spaceId={id} />
+          <Feed initialPosts={posts} initialNextCursor={nextCursor} spaceId={id} isAdmin={isAdmin(session)} />
         </Suspense>
       </div>
     </div>

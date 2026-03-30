@@ -4,6 +4,7 @@ import { authOptions } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { getAccessiblePost } from "@/lib/postAccess";
 import { z } from "zod";
+import { isAdmin } from "@/lib/admin";
 
 const EditSchema = z.object({
   content: z.string().max(5000).optional(),
@@ -46,7 +47,9 @@ export async function DELETE(
   const { id } = await params;
   const post = await prisma.post.findUnique({ where: { id } });
   if (!post) return NextResponse.json({ error: "Not found" }, { status: 404 });
-  if (post.userId !== session.user.id) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+
+  const canDelete = post.userId === session.user.id || isAdmin(session);
+  if (!canDelete) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
 
   await prisma.post.delete({ where: { id } });
   return NextResponse.json({ success: true });

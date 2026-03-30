@@ -40,6 +40,7 @@ interface PostCardProps {
   post: PostWithRelations;
   currentUserId: string;
   currentUserName: string;
+  isAdmin?: boolean;
   onDelete?: (id: string) => void;
   onUpdate?: (updated: Partial<Post>) => void;
 }
@@ -59,9 +60,10 @@ function Avatar({ name, image }: { name: string; image?: string | null }) {
   );
 }
 
-export function PostCard({ post, currentUserId, currentUserName, onDelete, onUpdate }: PostCardProps) {
+export function PostCard({ post, currentUserId, currentUserName, isAdmin, onDelete, onUpdate }: PostCardProps) {
   const badge = TYPE_BADGE[post.type];
   const isOwner = post.userId === currentUserId;
+  const canModerate = isOwner || isAdmin;
 
   const [editing, setEditing] = useState(false);
   const [editContent, setEditContent] = useState(post.content ?? "");
@@ -159,15 +161,17 @@ export function PostCard({ post, currentUserId, currentUserName, onDelete, onUpd
           <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${badge.color}`}>
             {badge.label}
           </span>
-          {isOwner && (
+          {canModerate && (
             <div className="flex items-center gap-1">
-              <button
-                onClick={() => { setEditing(true); setEditContent(localPost.content ?? ""); setIsPrivate(localPost.isPrivate); setEditSpaceId(localPost.spaceId ?? ""); }}
-                className="text-xs text-gray-300 hover:text-blue-400 transition-colors"
-                title="Edit post"
-              >
-                ✏️
-              </button>
+              {isOwner && (
+                <button
+                  onClick={() => { setEditing(true); setEditContent(localPost.content ?? ""); setIsPrivate(localPost.isPrivate); setEditSpaceId(localPost.spaceId ?? ""); }}
+                  className="text-xs text-gray-300 hover:text-blue-400 transition-colors"
+                  title="Edit post"
+                >
+                  ✏️
+                </button>
+              )}
               <button onClick={handleDelete} className="text-xs text-gray-300 hover:text-red-400 transition-colors" title="Delete post">
                 ✕
               </button>
@@ -262,7 +266,7 @@ export function PostCard({ post, currentUserId, currentUserName, onDelete, onUpd
       )}
 
       <ReactionBar postId={post.id} reactions={post.reactions} currentUserName={currentUserName} />
-      <CommentThread postId={post.id} initialComments={post.comments} currentUserId={currentUserId} currentUserName={currentUserName} />
+      <CommentThread postId={post.id} initialComments={post.comments} currentUserId={currentUserId} currentUserName={currentUserName} isAdmin={isAdmin} />
     </article>
     {showPopup && localPost.userId && (
       <UserPopup

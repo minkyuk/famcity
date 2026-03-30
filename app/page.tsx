@@ -7,6 +7,7 @@ import { Feed } from "./Feed";
 import { HashtagSidebar } from "@/components/shared/HashtagSidebar";
 import { OnlineWidget } from "@/components/shared/OnlineWidget";
 import { UpcomingEvents } from "@/components/shared/UpcomingEvents";
+import { isAdmin } from "@/lib/admin";
 
 export const dynamic = "force-dynamic";
 
@@ -61,7 +62,7 @@ export default async function HomePage() {
           </Suspense>
         </div>
         <Suspense>
-          <Feed initialPosts={posts} initialNextCursor={nextCursor} />
+          <Feed initialPosts={posts} initialNextCursor={nextCursor} isAdmin={isAdmin(session)} />
         </Suspense>
       </div>
     </div>
