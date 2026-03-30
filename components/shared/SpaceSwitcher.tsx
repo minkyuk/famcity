@@ -38,9 +38,15 @@ export function SpaceSwitcher() {
     ? pathname.split("/spaces/")[1]
     : null;
 
-  const currentLabel = currentSpaceId
+  const currentSpaceName = currentSpaceId
     ? (spaces.find((s) => s.id === currentSpaceId)?.name ?? "Space")
-    : "All";
+    : null;
+
+  // Abbreviate long space names to initials so the button never wraps
+  const initials = (name: string) =>
+    name.split(/\s+/).map((w) => w[0]?.toUpperCase() ?? "").join("").slice(0, 3);
+
+  const currentLabel = currentSpaceName ? initials(currentSpaceName) : "All";
 
   const navigate = (path: string) => {
     setOpen(false);

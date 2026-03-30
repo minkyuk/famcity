@@ -11,9 +11,10 @@ export function PostButton() {
   return (
     <Link
       href={href}
-      className="bg-accent text-white text-sm font-semibold px-4 py-1.5 rounded-full hover:bg-orange-600 transition-colors"
+      className="bg-accent text-white text-sm font-semibold px-3 py-1.5 rounded-full hover:bg-orange-600 transition-colors flex items-center gap-1"
     >
-      + Post
+      <span>+</span>
+      <span className="hidden sm:inline">Post</span>
     </Link>
   );
 }
