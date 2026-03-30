@@ -18,6 +18,7 @@ export function ImageUploader({ onSubmit, submitting }: ImageUploaderProps) {
   const [previews, setPreviews] = useState<Preview[]>([]);
   const [caption, setCaption] = useState("");
   const [uploading, setUploading] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState(0);
   const [dragOver, setDragOver] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
   const { showToast } = useToast();
@@ -46,25 +47,31 @@ export function ImageUploader({ onSubmit, submitting }: ImageUploaderProps) {
     if (previews.length === 0) return;
 
     setUploading(true);
+    setUploadProgress(0);
     try {
-      const urls = await Promise.all(
-        previews.map(async ({ file }) => {
-          const fd = new FormData();
-          fd.append("file", file);
-          const res = await fetch("/api/media/upload", { method: "POST", body: fd });
-          if (!res.ok) throw new Error("Upload failed");
-          const { url } = await res.json();
-          return url as string;
-        })
-      );
+      const urls: string[] = [];
+      for (let i = 0; i < previews.length; i++) {
+        const { file } = previews[i];
+        const fd = new FormData();
+        fd.append("file", file);
+        const res = await fetch("/api/media/upload", { method: "POST", body: fd });
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({}));
+          throw new Error(err.error ?? "Upload failed");
+        }
+        const { url } = await res.json();
+        urls.push(url as string);
+        setUploadProgress(i + 1);
+      }
       await onSubmit({ mediaUrls: urls, content: caption || undefined });
       previews.forEach((p) => URL.revokeObjectURL(p.objectUrl));
       setPreviews([]);
       setCaption("");
-    } catch {
-      showToast("One or more uploads failed", "error");
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : "Upload failed", "error");
     } finally {
       setUploading(false);
+      setUploadProgress(0);
     }
   };
 
@@ -127,7 +134,7 @@ export function ImageUploader({ onSubmit, submitting }: ImageUploaderProps) {
         disabled={previews.length === 0 || submitting || uploading}
         className="bg-accent text-white rounded-xl py-2.5 text-sm font-semibold disabled:opacity-40 hover:bg-orange-600 transition-colors"
       >
-        {uploading ? `Uploading ${previews.length} photo${previews.length > 1 ? "s" : ""}…` : submitting ? "Posting…" : `Share ${previews.length > 1 ? `${previews.length} Photos` : "Photo"}`}
+        {uploading ? `Uploading ${uploadProgress}/${previews.length}…` : submitting ? "Posting…" : `Share ${previews.length > 1 ? `${previews.length} Photos` : "Photo"}`}
       </button>
     </form>
   );

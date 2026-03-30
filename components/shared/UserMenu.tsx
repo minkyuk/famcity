@@ -13,7 +13,7 @@ export function UserMenu() {
 
   if (!session) {
     return (
-      <button onClick={() => signIn("google")} className="text-sm font-semibold text-accent hover:underline">
+      <button onClick={() => signIn("google", { callbackUrl: "/" })} className="text-sm font-semibold text-accent hover:underline">
         Sign in
       </button>
     );

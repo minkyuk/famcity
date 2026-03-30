@@ -23,10 +23,12 @@ export function ComposeBar() {
   const [textContent, setTextContent] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [spaces, setSpaces] = useState<Space[]>([]);
-  const [spaceId, setSpaceId] = useState<string>("");
   const { showToast } = useToast();
   const router = useRouter();
   const searchParams = useSearchParams();
+
+  // Initialize directly from URL so the dropdown shows the right space immediately
+  const [spaceId, setSpaceId] = useState<string>(() => searchParams.get("spaceId") ?? "global");
 
   useEffect(() => {
     fetch("/api/spaces")
@@ -34,12 +36,9 @@ export function ComposeBar() {
       .then((data) => {
         if (!Array.isArray(data)) return;
         setSpaces(data);
-        // Pre-select from URL param, or first space, default to global
-        const preselect = searchParams.get("spaceId");
-        setSpaceId(preselect ?? "global");
       })
       .catch(() => {});
-  }, [searchParams]);
+  }, []);
 
   const createPost = async (data: {
     type: PostType;

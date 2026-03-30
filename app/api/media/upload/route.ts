@@ -24,19 +24,25 @@ export async function POST(req: NextRequest) {
 
   const resourceType = file.type.startsWith("audio/") ? "video" : "image";
 
-  const result = await new Promise<{ secure_url: string; public_id: string }>(
-    (resolve, reject) => {
-      cloudinary.uploader
-        .upload_stream(
-          { folder: "famcity", resource_type: resourceType },
-          (error, result) => {
-            if (error || !result) return reject(error);
-            resolve(result);
-          }
-        )
-        .end(buffer);
-    }
-  );
+  let result: { secure_url: string; public_id: string };
+  try {
+    result = await new Promise<{ secure_url: string; public_id: string }>(
+      (resolve, reject) => {
+        cloudinary.uploader
+          .upload_stream(
+            { folder: "famcity", resource_type: resourceType },
+            (error, res) => {
+              if (error || !res) return reject(error ?? new Error("No result"));
+              resolve(res);
+            }
+          )
+          .end(buffer);
+      }
+    );
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : "Cloudinary upload failed";
+    return NextResponse.json({ error: msg }, { status: 502 });
+  }
 
   return NextResponse.json({ url: result.secure_url, publicId: result.public_id });
 }

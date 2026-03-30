@@ -49,6 +49,8 @@ model User {
   spaces        SpaceMember[]
   chatMessages  ChatMessage[]
   presence      OnlinePresence?
+  sentDMs          DirectMessage[]  @relation("DMSent")
+  receivedDMs      DirectMessage[]  @relation("DMReceived")
 }
 
 model VerificationToken {
@@ -208,4 +210,15 @@ model OnlinePresence {
   channelId String?
   channel   ChatChannel? @relation(fields: [channelId], references: [id], onDelete: SetNull)
   lastSeen  DateTime    @default(now())
+}
+
+model DirectMessage {
+  id         String   @id @default(cuid())
+  fromUserId String
+  toUserId   String
+  fromUser   User     @relation("DMSent", fields: [fromUserId], references: [id], onDelete: Cascade)
+  toUser     User     @relation("DMReceived", fields: [toUserId], references: [id], onDelete: Cascade)
+  content    String
+  createdAt  DateTime @default(now())
+  read       Boolean  @default(false)
 }

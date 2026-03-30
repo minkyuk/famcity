@@ -5,6 +5,7 @@ import { useSession } from "next-auth/react";
 import Image from "next/image";
 import { useParams } from "next/navigation";
 import { PostCard } from "@/components/Feed/PostCard";
+import { DMModal } from "@/components/shared/DMModal";
 
 type User = { id: string; name: string | null; image: string | null; bio: string | null; email: string | null };
 
@@ -17,6 +18,7 @@ export default function ProfilePage() {
   const [editing, setEditing] = useState(false);
   const [saving, setSaving] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [dmOpen, setDmOpen] = useState(false);
 
   const isOwn = session?.user?.id === id;
 
@@ -57,6 +59,7 @@ export default function ProfilePage() {
   }
 
   return (
+    <>
     <div className="max-w-2xl mx-auto flex flex-col gap-6">
       {/* Profile header */}
       <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-6 flex flex-col items-center gap-4">
@@ -80,6 +83,15 @@ export default function ProfilePage() {
             <p className="text-xs text-gray-400">{user.email}</p>
           )}
         </div>
+
+        {!isOwn && session?.user && (
+          <button
+            onClick={() => setDmOpen(true)}
+            className="bg-orange-500 text-white text-sm font-semibold px-5 py-2 rounded-full hover:bg-orange-600 transition-colors"
+          >
+            💬 Message
+          </button>
+        )}
 
         {/* Bio */}
         {editing ? (
@@ -149,5 +161,14 @@ export default function ProfilePage() {
         )}
       </div>
     </div>
+
+    {dmOpen && !isOwn && session?.user && (
+      <DMModal
+        me={{ id: session.user.id, name: session.user.name ?? null, image: session.user.image ?? null }}
+        other={{ id: user.id, name: user.name, image: user.image }}
+        onClose={() => setDmOpen(false)}
+      />
+    )}
+    </>
   );
 }

@@ -20,9 +20,19 @@ export async function GET() {
   // Get spaces the user is a member of
   const memberships = await prisma.spaceMember.findMany({
     where: { userId: session.user.id },
-    select: { spaceId: true },
+    select: { spaceId: true, space: { select: { name: true } } },
   });
   const spaceIds = memberships.map((m) => m.spaceId);
+
+  // Auto-create a chat channel for each space if one doesn't exist yet
+  for (const { spaceId, space } of memberships) {
+    const exists = await prisma.chatChannel.findFirst({ where: { spaceId } });
+    if (!exists && space?.name) {
+      await prisma.chatChannel.create({
+        data: { name: space.name, isGlobal: false, spaceId },
+      });
+    }
+  }
 
   // Show global channels + channels belonging to the user's spaces
   const channels = await prisma.chatChannel.findMany({
