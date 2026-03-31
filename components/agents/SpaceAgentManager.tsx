@@ -1,7 +1,6 @@
 "use client";
 
 import { useState } from "react";
-import { useRouter } from "next/navigation";
 import { useToast } from "@/components/shared/Toast";
 import Link from "next/link";
 
@@ -133,22 +132,30 @@ function AgentCard({ agent, spaceId, isAdmin, onUpdated, onDeleted }: {
   return (
     <div className="border border-gray-100 rounded-xl p-3.5">
       <div className="flex items-start justify-between gap-2">
-        <button onClick={() => setExpanded((v) => !v)} className="flex items-start gap-2.5 text-left flex-1 min-w-0">
+        <div className="flex items-start gap-2.5 flex-1 min-w-0">
           <span className="text-xl leading-none mt-0.5 shrink-0">🤖</span>
           <div className="flex-1 min-w-0">
             <div className="flex items-center gap-1.5 flex-wrap">
-              <span className="font-semibold text-sm text-gray-800">{agent.name}</span>
+              <Link href={`/agents/space/${agent.id}`} className="font-semibold text-sm text-gray-800 hover:text-orange-500 transition-colors">
+                {agent.name}
+              </Link>
               {agent.evolvedCount > 0 && (
                 <span className="text-[10px] text-orange-500 bg-orange-50 px-1.5 py-0.5 rounded-full">
                   {agent.evolvedCount} evolved
                 </span>
               )}
+              <button
+                onClick={() => setExpanded((v) => !v)}
+                className="text-[10px] text-gray-300 hover:text-gray-500 transition-colors"
+              >
+                {expanded ? "▲" : "▼"}
+              </button>
             </div>
             {!expanded && (
               <p className="text-[11px] text-gray-500 mt-0.5 line-clamp-1">{agent.personality}</p>
             )}
           </div>
-        </button>
+        </div>
         {isAdmin && (
           <div className="flex items-center gap-2 shrink-0">
             <button
