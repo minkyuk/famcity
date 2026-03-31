@@ -22,7 +22,15 @@ const TYPES: { type: PostType; icon: string; label: string }[] = [
 
 interface Space { id: string; name: string; isSystem?: boolean; }
 
-export function ComposeBar() {
+interface ComposeBarProps {
+  /** When true: don't navigate after posting; call onSuccess instead */
+  inline?: boolean;
+  onSuccess?: () => void;
+  /** Pre-select this space (overrides URL param) */
+  defaultSpaceId?: string;
+}
+
+export function ComposeBar({ inline, onSuccess, defaultSpaceId }: ComposeBarProps = {}) {
   const [activeType, setActiveType] = useState<PostType>("TEXT");
   const [textContent, setTextContent] = useState("");
   const [submitting, setSubmitting] = useState(false);
@@ -32,7 +40,7 @@ export function ComposeBar() {
   const searchParams = useSearchParams();
   const defaultSet = useRef(false);
 
-  const [spaceId, setSpaceId] = useState<string>(() => searchParams.get("spaceId") ?? "");
+  const [spaceId, setSpaceId] = useState<string>(() => defaultSpaceId ?? searchParams.get("spaceId") ?? "");
 
   useEffect(() => {
     fetch("/api/spaces")
@@ -43,7 +51,7 @@ export function ComposeBar() {
         const postable = data.filter((s: Space) => !s.isSystem);
         setSpaces(postable);
         // Set default to first joined space (API returns sorted by joinedAt asc)
-        if (!defaultSet.current && !searchParams.get("spaceId") && postable.length > 0) {
+        if (!defaultSet.current && !defaultSpaceId && !searchParams.get("spaceId") && postable.length > 0) {
           setSpaceId(postable[0].id);
           defaultSet.current = true;
         }
@@ -66,8 +74,14 @@ export function ComposeBar() {
       });
       if (!res.ok) throw new Error();
       showToast("Posted!");
-      router.push(spaceId ? `/spaces/${spaceId}` : "/");
-      router.refresh();
+      if (inline) {
+        setActiveType("TEXT");
+        setTextContent("");
+        onSuccess?.();
+      } else {
+        router.push(spaceId ? `/spaces/${spaceId}` : "/");
+        router.refresh();
+      }
     } catch {
       showToast("Failed to post", "error");
     } finally {

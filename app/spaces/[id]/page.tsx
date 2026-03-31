@@ -8,6 +8,7 @@ import { InviteButton } from "@/components/spaces/InviteButton";
 import { HashtagSidebar } from "@/components/shared/HashtagSidebar";
 import { OnlineWidget } from "@/components/shared/OnlineWidget";
 import { AgentActivityTrigger } from "@/components/spaces/AgentActivityTrigger";
+import { InlineComposeCard } from "@/components/shared/InlineComposeCard";
 import { isAdmin } from "@/lib/admin";
 
 export default async function SpacePage({
@@ -80,6 +81,8 @@ export default async function SpacePage({
 
         {/* Trigger agent activity when viewing the Curiosity Den */}
         {isAgentSpace && <AgentActivityTrigger />}
+
+        {!isAgentSpace && <InlineComposeCard defaultSpaceId={id} />}
 
         <Suspense>
           <Feed initialPosts={posts} initialNextCursor={nextCursor} spaceId={id} isAdmin={isAdmin(session)} />

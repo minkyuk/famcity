@@ -35,6 +35,7 @@
   },
   "devDependencies": {
     "@types/bcryptjs": "^2.4.6",
-    "@types/web-push": "^3.6.4"
+    "@types/web-push": "^3.6.4",
+    "docx": "^9.6.1"
   }
 }

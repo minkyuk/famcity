@@ -7,6 +7,7 @@ import { Feed } from "./Feed";
 import { HashtagSidebar } from "@/components/shared/HashtagSidebar";
 import { OnlineWidget } from "@/components/shared/OnlineWidget";
 import { UpcomingEvents } from "@/components/shared/UpcomingEvents";
+import { InlineComposeCard } from "@/components/shared/InlineComposeCard";
 import { isAdmin } from "@/lib/admin";
 
 export const dynamic = "force-dynamic";
@@ -54,13 +55,14 @@ export default async function HomePage() {
       </aside>
 
       {/* Feed */}
-      <div className="flex-1 min-w-0">
+      <div className="flex-1 min-w-0 flex flex-col gap-4">
         {/* Mobile hashtag sidebar as horizontal scroll */}
-        <div className="lg:hidden mb-4">
+        <div className="lg:hidden">
           <Suspense>
             <MobileHashtags />
           </Suspense>
         </div>
+        <InlineComposeCard />
         <Suspense>
           <Feed initialPosts={posts} initialNextCursor={nextCursor} isAdmin={isAdmin(session)} />
         </Suspense>
