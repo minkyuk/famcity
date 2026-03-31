@@ -16,17 +16,43 @@ export default async function HomePage() {
   const session = await getServerSession(authOptions);
   if (!session?.user) redirect("/login");
 
-  const memberships = await prisma.spaceMember.findMany({
-    where: { userId: session.user.id },
-    select: { spaceId: true },
-  });
-  const spaceIds = memberships.map((m) => m.spaceId);
+  const [memberships, excludedSpaces] = await Promise.all([
+    prisma.spaceMember.findMany({ where: { userId: session.user.id }, select: { spaceId: true } }),
+    prisma.space.findMany({ where: { excludeFromAll: true }, select: { id: true } }),
+  ]);
+  const excludedIds = new Set(excludedSpaces.map((s) => s.id));
+  const spaceIds = memberships.map((m) => m.spaceId).filter((id) => !excludedIds.has(id));
 
-  const posts = await prisma.post.findMany({
+  // Build userId -> first shared space name for "via 👥" label
+  const firstSharedSpaceByUser = new Map<string, string>();
+  let coMemberIds: string[] = [];
+  if (spaceIds.length > 0) {
+    const [coMemberships, spaceNames] = await Promise.all([
+      prisma.spaceMember.findMany({ where: { spaceId: { in: spaceIds } }, select: { userId: true, spaceId: true } }),
+      prisma.space.findMany({ where: { id: { in: spaceIds } }, select: { id: true, name: true } }),
+    ]);
+    const spaceNameById = new Map(spaceNames.map((s) => [s.id, s.name]));
+    for (const m of coMemberships) {
+      if (!firstSharedSpaceByUser.has(m.userId)) {
+        const n = spaceNameById.get(m.spaceId);
+        if (n) firstSharedSpaceByUser.set(m.userId, n);
+      }
+    }
+    coMemberIds = [...firstSharedSpaceByUser.keys()];
+  }
+
+  const rawPosts = await prisma.post.findMany({
     take: 20,
     where: {
       AND: [
-        { OR: [{ spaceId: null }, ...(spaceIds.length > 0 ? [{ spaceId: { in: spaceIds } }] : [])] },
+        {
+          OR: [
+            ...(spaceIds.length > 0 ? [{ spaceId: { in: spaceIds } }] : []),
+            ...(coMemberIds.length > 0 ? [{ spaceId: null, userId: { in: coMemberIds } }] : []),
+            { spaceId: null, userId: session.user.id },
+            { spaceId: null, userId: null },
+          ],
+        },
         { OR: [{ isPrivate: false }, { userId: session.user.id }] },
       ],
     },
@@ -40,6 +66,14 @@ export default async function HomePage() {
       _count: { select: { reactions: true, comments: true } },
     },
   });
+
+  const posts = rawPosts.map((post) => ({
+    ...post,
+    mutualSpace:
+      !post.spaceId && post.userId && post.userId !== session.user.id
+        ? (firstSharedSpaceByUser.get(post.userId) ?? null)
+        : null,
+  }));
 
   const nextCursor = posts.length === 20 ? posts[posts.length - 1].id : null;
 

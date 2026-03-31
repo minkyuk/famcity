@@ -3,7 +3,7 @@ import { getServerSession } from "next-auth";
 import Anthropic from "@anthropic-ai/sdk";
 import { prisma } from "@/lib/prisma";
 import { AGENTS, agentAvatarUrl } from "@/lib/agents";
-import { fetchRss, NEWS_FEEDS } from "@/lib/rss";
+import { fetchRss, feedSourceName, NEWS_FEEDS } from "@/lib/rss";
 import { generateInviteCode } from "@/lib/invite";
 import { isCronAuthorized } from "@/lib/cronAuth";
 import { authOptions } from "@/lib/auth";
@@ -87,20 +87,25 @@ export async function POST(req: NextRequest) {
     try {
       const message = await anthropic.messages.create({
         model: "claude-haiku-4-5-20251001",
-        max_tokens: 400,
+        max_tokens: 600,
         messages: [
           {
             role: "user",
             content: `${agent.personality}
 
-Here is a news headline and summary:
+Here is a news item:
 
+SOURCE: ${feedSourceName(feedUrl)}
 HEADLINE: ${item.title}
-SUMMARY: ${item.description.slice(0, 400)}
+SUMMARY: ${item.description.slice(0, 500)}
 
-Write a short, engaging post sharing this news with your unique personality.
-Include the headline naturally. Be conversational, curious, or witty as fits your character.
-Max 2–3 sentences. Do not use hashtags. Do not start with "I".`,
+Write a post with exactly two paragraphs separated by a blank line:
+
+Paragraph 1 — factual summary: State the essential facts only (who, what, where, when, why, how). Attribute it naturally, e.g. "According to [source], …". Use only information from the summary above — do not invent details. 2–3 sentences.
+
+Paragraph 2 — your opinion: In your own voice and personality, give one honest reaction, reflection, or question. Reason from the facts. Keep faith references light unless the topic genuinely calls for it. 1–2 sentences.
+
+No hashtags. Do not start with "I".`,
           },
         ],
       });

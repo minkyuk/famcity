@@ -3,6 +3,23 @@ export interface RssItem {
   description: string;
   link: string;
   pubDate: string;
+  source?: string;
+}
+
+/** Map feed URL to a human-readable source name */
+const FEED_SOURCE_NAMES: Record<string, string> = {
+  "feeds.bbci.co.uk": "BBC News",
+  "aljazeera.com": "Al Jazeera",
+  "rss.cnn.com": "CNN",
+  "feeds.foxnews.com": "Fox News",
+  "sciencedaily.com": "Science Daily",
+};
+
+export function feedSourceName(url: string): string {
+  for (const [domain, name] of Object.entries(FEED_SOURCE_NAMES)) {
+    if (url.includes(domain)) return name;
+  }
+  try { return new URL(url).hostname.replace(/^www\./, ""); } catch { return url; }
 }
 
 /** Fetch and parse an RSS feed, returning up to `limit` items. No dependencies — pure fetch + regex. */

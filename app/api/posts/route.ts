@@ -29,6 +29,7 @@ export async function GET(req: NextRequest) {
 
   // Space filter — must use AND so it doesn't collide with other OR clauses
   const andClauses: object[] = [];
+  let firstSharedSpaceByUser: Map<string, string> | null = null;
 
   if (spaceId) {
     // System spaces are readable by anyone; regular spaces require membership
@@ -41,7 +42,7 @@ export async function GET(req: NextRequest) {
     }
     andClauses.push({ spaceId });
   } else {
-    // "All" feed: member spaces (excl. system) + all global posts
+    // "All" feed: member spaces (excl. system) + global posts from co-members
     const [memberships, excludedSpaces] = await Promise.all([
       prisma.spaceMember.findMany({ where: { userId: session.user.id }, select: { spaceId: true } }),
       prisma.space.findMany({ where: { excludeFromAll: true }, select: { id: true } }),
@@ -49,10 +50,30 @@ export async function GET(req: NextRequest) {
     const excludedIds = new Set(excludedSpaces.map((s) => s.id));
     const spaceIds = memberships.map((m) => m.spaceId).filter((id) => !excludedIds.has(id));
 
+    // Build userId -> first shared space name (for "via 👥 SpaceName" label)
+    firstSharedSpaceByUser = new Map<string, string>();
+    if (spaceIds.length > 0) {
+      const [coMemberships, spaceNames] = await Promise.all([
+        prisma.spaceMember.findMany({ where: { spaceId: { in: spaceIds } }, select: { userId: true, spaceId: true } }),
+        prisma.space.findMany({ where: { id: { in: spaceIds } }, select: { id: true, name: true } }),
+      ]);
+      const spaceNameById = new Map(spaceNames.map((s) => [s.id, s.name]));
+      for (const m of coMemberships) {
+        if (!firstSharedSpaceByUser.has(m.userId)) {
+          const n = spaceNameById.get(m.spaceId);
+          if (n) firstSharedSpaceByUser.set(m.userId, n);
+        }
+      }
+    }
+
+    const coMemberIds = [...firstSharedSpaceByUser.keys()];
+
     andClauses.push({
       OR: [
         ...(spaceIds.length > 0 ? [{ spaceId: { in: spaceIds } }] : []),
-        { spaceId: null }, // all global posts visible to all users
+        ...(coMemberIds.length > 0 ? [{ spaceId: null, userId: { in: coMemberIds } }] : []),
+        { spaceId: null, userId: session.user.id },
+        { spaceId: null, userId: null },
       ],
     });
   }
@@ -74,7 +95,17 @@ export async function GET(req: NextRequest) {
   });
 
   const nextCursor = posts.length === PAGE_SIZE ? posts[posts.length - 1].id : null;
-  return NextResponse.json({ posts, nextCursor });
+
+  // Attach mutualSpace to global posts from co-members
+  const postsWithMutual = posts.map((post) => ({
+    ...post,
+    mutualSpace:
+      !post.spaceId && post.userId && post.userId !== session.user.id && firstSharedSpaceByUser
+        ? (firstSharedSpaceByUser.get(post.userId) ?? null)
+        : null,
+  }));
+
+  return NextResponse.json({ posts: postsWithMutual, nextCursor });
 }
 
 export async function POST(req: NextRequest) {
