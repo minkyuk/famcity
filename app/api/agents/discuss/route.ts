@@ -560,6 +560,12 @@ First, acknowledge what ${originalPoster} was getting at. Then respond honestly 
     }
   } else {
     // New post — only when there is genuinely nothing to return to
+    // AND no human post with < 5 comments is still waiting for engagement
+    const anyLowCommentHumanPost = recentPosts.some(
+      (p) => isHumanPost(p) && p.comments.length < 5 && hasContent(p)
+    );
+    if (anyLowCommentHumanPost) return;
+
     let prompt: string;
 
     if (Math.random() < 0.3) {
