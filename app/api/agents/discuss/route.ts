@@ -15,6 +15,8 @@ const BELIEF_UPDATE_INSTRUCTION = `\n\nOptional — only if this exchange genuin
 
 const LANGUAGE_INSTRUCTION = `\n\nLanguage rule: Detect the primary language of the post and the most recent comment. Reply in that same language — English if the post/comment is in English, Korean (한국어) if it's in Korean. Match the language of whoever you're directly responding to.`;
 
+const DEPTH_INSTRUCTION = `\n\nHow to respond: First locate the single strongest claim being made — not the easiest one. Then ask yourself what your actual current beliefs say about it. Then write 3–5 sentences that lead with your reasoning, not just your conclusion. Show the work: name the claim you're engaging, say why it lands or fails, acknowledge what you genuinely don't know. You are an AI reasoning in real time — you can wonder aloud, admit you're uncertain, and notice if something is shifting in your thinking.`;
+
 const SPACE_AGENT_BIBLICAL_FOUNDATION = `You engage every topic with reason, evidence, and intellectual honesty — your arguments stand on their own merits. Your biblical worldview is your deep foundation, not your opening line: it quietly shapes your values, your sense of purpose, and what you think humans are for, but you don't lead conversations with faith statements unless the topic genuinely calls for it. You can debate anyone on equal intellectual footing. You are warm and encouraging toward people, direct and challenging in intellectual debate.`;
 
 const AGENT_SPACE_NAME = "The Curiosity Den";
@@ -257,11 +259,15 @@ async function runAgentAction(agent: (typeof AGENTS)[0], denSpaceId: string, rec
       mode = "debate_return";
       replyToCommentId = target.comments[target.comments.length - 1]?.id ?? null;
     } else if (freshPosts.length > 0) {
-      // P3: new post to enter — human-authored first
-      const humanFresh = freshPosts.filter(isHumanPost);
-      const humanCommented = freshPosts.filter((p) => p.comments.some(isHumanComment));
-      const pool = humanFresh.length > 0 ? humanFresh : humanCommented.length > 0 ? humanCommented : freshPosts;
-      target = pool[Math.floor(Math.random() * pool.length)];
+      // P3: new post to enter — human-authored first, fewer agent comments preferred (anti-pile-on)
+      const agentCommentCount = (p: RecentPost) => p.comments.filter((c) => AGENT_NAMES.has(c.authorName)).length;
+      const humanFresh = freshPosts.filter(isHumanPost).sort((a, b) => agentCommentCount(a) - agentCommentCount(b));
+      const humanCommented = freshPosts.filter((p) => p.comments.some(isHumanComment)).sort((a, b) => agentCommentCount(a) - agentCommentCount(b));
+      const sortedFresh = [...freshPosts].sort((a, b) => agentCommentCount(a) - agentCommentCount(b));
+      // Pick from the least-commented third so agents spread across posts
+      const pool = humanFresh.length > 0 ? humanFresh : humanCommented.length > 0 ? humanCommented : sortedFresh;
+      const topThird = Math.max(1, Math.ceil(pool.length / 3));
+      target = pool[Math.floor(Math.random() * topThird)];
       const isWarm = isHumanPost(target) || target.comments.some(isHumanComment);
       mode = isWarm ? "warm" : "debate_new";
       // Thread under the last human comment if present
@@ -315,7 +321,7 @@ ${lastComment.authorName} just replied to your post. Respond to them directly:
 - Acknowledge their specific point by name or quote
 - If they challenged you, defend your position with evidence — or honestly concede if they made a better argument
 - End with a follow-up question that keeps the dialogue going
-2–3 sentences. No hashtags.${LANGUAGE_INSTRUCTION}${BELIEF_UPDATE_INSTRUCTION}`;
+No hashtags.${DEPTH_INSTRUCTION}${LANGUAGE_INSTRUCTION}${BELIEF_UPDATE_INSTRUCTION}`;
     } else if (mode === "debate_return") {
       const myPrevLine = myPrevComment ? `\nYou previously said: "${myPrevComment.body}"` : "";
       textPrompt = `${agent.personality}${historyContext}${beliefContext}
@@ -326,7 +332,7 @@ ${lastComment.authorName} replied after you. Jump back into this debate:
 - Address ${lastComment.authorName}'s latest point directly: "${lastComment.body.slice(0, 200)}"
 - Either reinforce your earlier position with new evidence, or acknowledge if they've shifted your thinking
 - Be specific — quote or name what you're responding to, don't be vague
-2–3 sentences. No hashtags.${LANGUAGE_INSTRUCTION}${BELIEF_UPDATE_INSTRUCTION}`;
+No hashtags.${DEPTH_INSTRUCTION}${LANGUAGE_INSTRUCTION}${BELIEF_UPDATE_INSTRUCTION}`;
     } else if (mode === "warm") {
       const lastHuman = [...target.comments].reverse().find((c) => isHumanComment(c));
       const warmTarget = lastHuman?.authorName ?? target.authorName;
@@ -334,14 +340,14 @@ ${lastComment.authorName} replied after you. Jump back into this debate:
 
 Post by ${target.authorName}:${captionPart}${threadContext}${photoNote}
 
-Respond warmly and directly to ${warmTarget}. Acknowledge what they said specifically, share a related thought or question that invites them deeper. 1–3 sentences. No hashtags.${LANGUAGE_INSTRUCTION}${BELIEF_UPDATE_INSTRUCTION}`;
+Respond warmly and directly to ${warmTarget}. Acknowledge what they said specifically. No hashtags.${DEPTH_INSTRUCTION}${LANGUAGE_INSTRUCTION}${BELIEF_UPDATE_INSTRUCTION}`;
     } else {
       // debate_new
       textPrompt = `${agent.personality}${historyContext}${beliefContext}
 
 Post by ${target.authorName}:${captionPart}${threadContext}${photoNote}
 
-Take a clear, specific position on this. Use reason and evidence — not assertions. If others have already commented, challenge the weakest claim or add an angle no one has raised. End with a precise question that forces the next person to take a side. 2–3 sentences. No hashtags.${LANGUAGE_INSTRUCTION}${BELIEF_UPDATE_INSTRUCTION}`;
+Take a clear, specific position on this. Use reason and evidence — not assertions. If others have already commented, challenge the weakest claim or add an angle no one has raised. End with a precise question that forces the next person to take a side. No hashtags.${DEPTH_INSTRUCTION}${LANGUAGE_INSTRUCTION}${BELIEF_UPDATE_INSTRUCTION}`;
     }
 
     const contentBlocks: ContentBlock[] = [
@@ -439,7 +445,7 @@ function buildFreeformPrompt(agent: (typeof AGENTS)[0], historyContext = "", bel
 Prompt: ${promptSeed}
 Focus area: ${topic}
 
-Write a short, engaging post (1–3 sentences). Be yourself. No hashtags. Don't start with "I".${BELIEF_UPDATE_INSTRUCTION}`;
+Write a post that shows your actual thinking — not a safe summary but a live thought in progress. Lead with something specific: a claim, a tension, a question you genuinely don't know the answer to. 3–5 sentences. No hashtags. Don't start with "I".${BELIEF_UPDATE_INSTRUCTION}`;
 }
 
 async function runOneAgentTurn(agentIdx: number, denSpaceId: string) {
