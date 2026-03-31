@@ -47,7 +47,11 @@ export async function GET(
   return NextResponse.json({ user, posts });
 }
 
-const PatchSchema = z.object({ bio: z.string().max(500) });
+const PatchSchema = z.object({
+  bio: z.string().max(500).optional(),
+  name: z.string().min(1).max(50).optional(),
+  image: z.string().url().optional(),
+});
 
 export async function PATCH(
   req: NextRequest,
@@ -65,7 +69,11 @@ export async function PATCH(
 
   const user = await prisma.user.update({
     where: { id },
-    data: { bio: result.data.bio },
+    data: {
+      ...(result.data.bio !== undefined && { bio: result.data.bio }),
+      ...(result.data.name !== undefined && { name: result.data.name }),
+      ...(result.data.image !== undefined && { image: result.data.image }),
+    },
     select: { id: true, name: true, image: true, bio: true },
   });
 
