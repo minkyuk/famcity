@@ -724,6 +724,23 @@ async function runSpaceAgentAction(
     (p.type === "IMAGE" && p.media.length > 0) ||
     (p.type === "PDF" && !!p.mediaUrl);
 
+  const isHumanPostSA = (p: RecentPost) => p.userId !== null;
+
+  // P0: human posts with 0–2 comments this agent hasn't touched — highest urgency
+  const lowCommentHumanPosts = recentPosts
+    .filter(
+      (p) =>
+        isHumanPostSA(p) &&
+        p.comments.length <= 2 &&
+        !agentLastCommentTime.has(p.id) &&
+        hasContent(p)
+    )
+    .sort(
+      (a, b) =>
+        a.comments.length - b.comments.length ||
+        b.createdAt.getTime() - a.createdAt.getTime()
+    );
+
   const ownPostsNeedingReply = recentPosts.filter(
     (p) => p.authorName === spaceAgent.name && p.comments.length > 0 &&
       p.comments[p.comments.length - 1].authorName !== spaceAgent.name
@@ -741,13 +758,17 @@ async function runSpaceAgentAction(
     (p) => p.authorName !== spaceAgent.name && !agentLastCommentTime.has(p.id) && hasContent(p)
   );
 
-  const canComment = ownPostsNeedingReply.length > 0 || activeDebateThreads.length > 0 || freshPosts.length > 0;
-  const hasReturnWork = ownPostsNeedingReply.length > 0 || activeDebateThreads.length > 0;
-  const commentChance = hasReturnWork ? 1.0 : freshPosts.length > 0 ? 0.85 : 0.35;
+  const canComment = lowCommentHumanPosts.length > 0 || ownPostsNeedingReply.length > 0 || activeDebateThreads.length > 0 || freshPosts.length > 0;
+  const commentChance =
+    lowCommentHumanPosts.length > 0 ? 1.0
+    : ownPostsNeedingReply.length > 0 || activeDebateThreads.length > 0 ? 1.0
+    : freshPosts.length > 0 ? 0.85
+    : 0.35;
   const shouldComment = canComment && Math.random() < commentChance;
 
   if (shouldComment) {
     const target =
+      lowCommentHumanPosts[0] ??
       ownPostsNeedingReply[0] ??
       activeDebateThreads[Math.floor(Math.random() * activeDebateThreads.length)] ??
       freshPosts[Math.floor(Math.random() * freshPosts.length)];
