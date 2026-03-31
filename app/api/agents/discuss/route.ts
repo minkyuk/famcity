@@ -106,6 +106,7 @@ type RecentPost = {
   userId: string | null;
   spaceId: string | null;
   type: string;
+  mediaUrl: string | null;
   media: { url: string }[];
   comments: { id: string; parentId: string | null; authorName: string; body: string; createdAt: Date }[];
 };
@@ -159,7 +160,9 @@ async function runAgentAction(agent: (typeof AGENTS)[0], denSpaceId: string, rec
   const isHumanPost = (p: RecentPost) => p.userId !== null;
   const isHumanComment = (c: { authorName: string }) => !AGENT_NAMES.has(c.authorName);
   const hasContent = (p: RecentPost) =>
-    (p.content && p.content.length > 5) || (p.type === "IMAGE" && p.media.length > 0);
+    (p.content && p.content.length > 5) ||
+    (p.type === "IMAGE" && p.media.length > 0) ||
+    (p.type === "PDF" && !!p.mediaUrl);
 
   // P-1: Someone directly replied to one of my comments — absolute highest urgency
   const directReplyPosts = recentPosts.filter((p) =>
@@ -267,6 +270,7 @@ async function runAgentAction(agent: (typeof AGENTS)[0], denSpaceId: string, rec
         : "";
 
     const hasImages = target.type === "IMAGE" && target.media.length > 0;
+    const hasPdf = target.type === "PDF" && !!target.mediaUrl;
     // Random-sample up to 3 images when there are more than 3
     const sampledMedia = target.media.length > 3
       ? [...target.media].sort(() => Math.random() - 0.5).slice(0, 3)
@@ -274,6 +278,8 @@ async function runAgentAction(agent: (typeof AGENTS)[0], denSpaceId: string, rec
     const imageUrls = sampledMedia.map((m) => m.url);
     const photoNote = hasImages
       ? `\n\n[${imageUrls.length} photo${imageUrls.length > 1 ? "s" : ""} shown above — describe what you actually see in at least one of them]`
+      : hasPdf
+      ? `\n\n[PDF document attached above — reference specific content from it in your reply]`
       : "";
     const captionPart = target.content?.trim() ? `\nPost: "${target.content.slice(0, 500)}"` : "";
     const lastComment = target.comments[target.comments.length - 1];
@@ -281,7 +287,8 @@ async function runAgentAction(agent: (typeof AGENTS)[0], denSpaceId: string, rec
 
     type ContentBlock =
       | { type: "text"; text: string }
-      | { type: "image"; source: { type: "url"; url: string } };
+      | { type: "image"; source: { type: "url"; url: string } }
+      | { type: "document"; source: { type: "url"; url: string } };
 
     let textPrompt: string;
 
@@ -328,6 +335,9 @@ Take a clear, specific position on this. Use reason and evidence — not asserti
         type: "image" as const,
         source: { type: "url" as const, url },
       })),
+      ...(hasPdf && target.mediaUrl
+        ? [{ type: "document" as const, source: { type: "url" as const, url: target.mediaUrl } }]
+        : []),
       { type: "text" as const, text: textPrompt },
     ];
 
@@ -433,6 +443,7 @@ async function runOneAgentTurn(agentIdx: number, denSpaceId: string) {
       userId: true,
       spaceId: true,
       type: true,
+      mediaUrl: true,
       media: {
         take: 10,
         orderBy: { order: "asc" },
@@ -496,7 +507,9 @@ async function runSpaceAgentAction(
   });
 
   const hasContent = (p: RecentPost) =>
-    (p.content && p.content.length > 5) || (p.type === "IMAGE" && p.media.length > 0);
+    (p.content && p.content.length > 5) ||
+    (p.type === "IMAGE" && p.media.length > 0) ||
+    (p.type === "PDF" && !!p.mediaUrl);
 
   const ownPostsNeedingReply = recentPosts.filter(
     (p) => p.authorName === spaceAgent.name && p.comments.length > 0 &&
