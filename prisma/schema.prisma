@@ -69,6 +69,7 @@ model Space {
   id             String        @id @default(cuid())
   name           String
   description    String?
+  purpose        String?       @db.Text  // optional agent orientation (e.g. "math tutoring space")
   inviteCode     String        @unique
   createdAt      DateTime      @default(now())
   isSystem       Boolean       @default(false)  // created by the system, not a user

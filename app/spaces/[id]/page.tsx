@@ -97,6 +97,9 @@ export default async function SpacePage({
               {space._count.members} member{space._count.members !== 1 ? "s" : ""}
               {space.description ? ` · ${space.description}` : ""}
             </p>
+            {space.purpose && (
+              <p className="text-[11px] text-orange-400 mt-0.5">🎯 {space.purpose}</p>
+            )}
           </div>
           <div className="flex items-center gap-2">
             <SpaceHotButton spaceId={id} />

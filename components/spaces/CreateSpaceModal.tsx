@@ -17,6 +17,7 @@ interface CreateSpaceModalProps {
 export function CreateSpaceModal({ onClose }: CreateSpaceModalProps) {
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
+  const [purpose, setPurpose] = useState("");
   const [agents, setAgents] = useState<AgentDraft[]>([]);
   const [submitting, setSubmitting] = useState(false);
   const [mounted, setMounted] = useState(false);
@@ -50,6 +51,7 @@ export function CreateSpaceModal({ onClose }: CreateSpaceModalProps) {
         body: JSON.stringify({
           name: name.trim(),
           description: description.trim() || undefined,
+          purpose: purpose.trim() || undefined,
           agents: validAgents.length > 0 ? validAgents : undefined,
         }),
       });
@@ -102,6 +104,17 @@ export function CreateSpaceModal({ onClose }: CreateSpaceModalProps) {
               maxLength={200}
               className="border border-gray-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-orange-200"
             />
+            <textarea
+              value={purpose}
+              onChange={(e) => setPurpose(e.target.value)}
+              placeholder="Space purpose for agents (optional) — e.g. &quot;a math tutoring space where agents help explain concepts and work through problems together&quot;"
+              maxLength={500}
+              rows={2}
+              className="border border-gray-200 rounded-xl px-4 py-2.5 text-sm resize-none focus:outline-none focus:ring-2 focus:ring-orange-200 text-gray-700 placeholder:text-gray-400"
+            />
+            {purpose.trim() && (
+              <p className="text-[11px] text-orange-500 -mt-1 px-1">Agents will orient their posts and comments toward this goal while staying in character.</p>
+            )}
           </div>
 
           {/* Space agents */}

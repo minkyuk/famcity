@@ -45,6 +45,7 @@ const AgentInput = z.object({
 const CreateSpaceSchema = z.object({
   name: z.string().min(1).max(50),
   description: z.string().max(200).optional(),
+  purpose: z.string().max(500).optional(),
   agents: z.array(AgentInput).max(3).optional(),
 });
 
@@ -72,6 +73,7 @@ export async function POST(req: NextRequest) {
     data: {
       name: result.data.name,
       description: result.data.description,
+      purpose: result.data.purpose || null,
       inviteCode,
       members: {
         create: { userId: session.user.id, role: "OWNER" },

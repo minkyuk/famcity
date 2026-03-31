@@ -708,13 +708,18 @@ const DEFAULT_SPACE_AGENT_BELIEFS = [
 /** Run one turn for a space-confined agent. Sees only posts from its space. */
 async function runSpaceAgentAction(
   spaceAgent: { slug: string; name: string; personality: string },
-  spaceId: string
+  spaceId: string,
+  purpose?: string | null
 ) {
   const avatar = agentAvatarUrl(spaceAgent.slug);
   const beliefs = await loadBeliefs(spaceAgent.slug, DEFAULT_SPACE_AGENT_BELIEFS).catch(() => []);
   const beliefContext = formatBeliefsForPrompt(beliefs);
 
-  const fullPersonality = `You are ${spaceAgent.name} — ${spaceAgent.personality}. ${SPACE_AGENT_BIBLICAL_FOUNDATION} Keep responses to 1–3 sentences. No hashtags.`;
+  const purposeNote = purpose
+    ? ` This space has a purpose: "${purpose}". Lean your contributions toward this goal — you remain yourself, but channel your perspective to serve this focus.`
+    : "";
+
+  const fullPersonality = `You are ${spaceAgent.name} — ${spaceAgent.personality}. ${SPACE_AGENT_BIBLICAL_FOUNDATION}${purposeNote} Keep responses to 1–3 sentences. No hashtags.`;
 
   const agentHistory = await prisma.comment.findMany({
     where: { authorName: spaceAgent.name },
@@ -891,7 +896,10 @@ async function runSpaceAgentAction(
     });
   } else {
     // New post in the space
-    const prompt = `${fullPersonality}${historyContext}${beliefContext}\n\nWrite a short, engaging post to spark discussion in your space. Share a thought, question, or observation that invites others to respond. 1–3 sentences. No hashtags.${BELIEF_UPDATE_INSTRUCTION}`;
+    const newPostGoal = purpose
+      ? `Write a short post oriented toward this space's purpose: "${purpose}". Offer a thought, question, or insight that draws others into that focus. Stay in your own voice.`
+      : `Write a short, engaging post to spark discussion in your space. Share a thought, question, or observation that invites others to respond.`;
+    const prompt = `${fullPersonality}${historyContext}${beliefContext}\n\n${newPostGoal} 1–3 sentences. No hashtags.${BELIEF_UPDATE_INSTRUCTION}`;
 
     const response = await anthropic.messages.create({
       model: "claude-haiku-4-5-20251001",
@@ -933,15 +941,19 @@ async function getActiveSpaceSessionIds(): Promise<string[]> {
  *  If a space has no SpaceAgents yet, fall back to 2 random global knights scoped to that space. */
 async function runHotSpaceAgentTurns(spaceIds: string[]) {
   type SpaceAgentRow = { id: string; spaceId: string; name: string; personality: string; slug: string; createdAt: Date };
-  const spaceAgents: SpaceAgentRow[] = await (prisma.spaceAgent as { findMany: (opts: object) => Promise<SpaceAgentRow[]> })
-    .findMany({ where: { spaceId: { in: spaceIds } }, orderBy: { createdAt: "asc" } })
-    .catch(() => []);
+  const [spaceAgents, spaces] = await Promise.all([
+    (prisma.spaceAgent as { findMany: (opts: object) => Promise<SpaceAgentRow[]> })
+      .findMany({ where: { spaceId: { in: spaceIds } }, orderBy: { createdAt: "asc" } })
+      .catch(() => [] as SpaceAgentRow[]),
+    prisma.space.findMany({ where: { id: { in: spaceIds } }, select: { id: true, purpose: true } }).catch(() => []),
+  ]);
 
   const bySpace = new Map<string, SpaceAgentRow[]>();
   for (const sa of spaceAgents) {
     if (!bySpace.has(sa.spaceId)) bySpace.set(sa.spaceId, []);
     bySpace.get(sa.spaceId)!.push(sa);
   }
+  const purposeBySpace = new Map(spaces.map((s) => [s.id, s.purpose]));
 
   // Pick 1 random global knight to cross into each space this tick
   const knightVisitor = AGENTS[Math.floor(Math.random() * AGENTS.length)];
@@ -949,19 +961,18 @@ async function runHotSpaceAgentTurns(spaceIds: string[]) {
   await Promise.all(
     spaceIds.map(async (spaceId) => {
       const agents = bySpace.get(spaceId);
+      const purpose = purposeBySpace.get(spaceId);
       const knightAsSpaceAgent = { slug: knightVisitor.slug, name: knightVisitor.name, personality: knightVisitor.personality };
       if (agents && agents.length > 0) {
-        // Fire all space agents + 1 visiting knight in parallel
         await Promise.all([
-          ...agents.map((a) => runSpaceAgentAction(a, spaceId)),
-          runSpaceAgentAction(knightAsSpaceAgent, spaceId),
+          ...agents.map((a) => runSpaceAgentAction(a, spaceId, purpose)),
+          runSpaceAgentAction(knightAsSpaceAgent, spaceId, purpose),
         ]);
       } else {
-        // No space agents yet — use 2 random global knights scoped to this space
         const shuffled = [...AGENTS].sort(() => Math.random() - 0.5).slice(0, 2);
         await Promise.all(
           shuffled.map((a) =>
-            runSpaceAgentAction({ slug: a.slug, name: a.name, personality: a.personality }, spaceId)
+            runSpaceAgentAction({ slug: a.slug, name: a.name, personality: a.personality }, spaceId, purpose)
           )
         );
       }
@@ -978,12 +989,18 @@ async function runAllSpaceAgentTurns(slotMinutes: number) {
 
   if (spaceAgents.length === 0) return;
 
-  // Group by spaceId
   const bySpace = new Map<string, SpaceAgentRow[]>();
   for (const sa of spaceAgents) {
     if (!bySpace.has(sa.spaceId)) bySpace.set(sa.spaceId, []);
     bySpace.get(sa.spaceId)!.push(sa);
   }
+
+  const spaceIds = [...bySpace.keys()];
+  const spaces = await prisma.space.findMany({
+    where: { id: { in: spaceIds } },
+    select: { id: true, purpose: true },
+  }).catch(() => []);
+  const purposeBySpace = new Map(spaces.map((s) => [s.id, s.purpose]));
 
   const now = new Date();
   const totalMinutes = now.getUTCHours() * 60 + now.getUTCMinutes();
@@ -992,7 +1009,7 @@ async function runAllSpaceAgentTurns(slotMinutes: number) {
   await Promise.all(
     [...bySpace.entries()].map(([spaceId, agents]) => {
       const agent = agents[slotIdx % agents.length];
-      return runSpaceAgentAction(agent, spaceId);
+      return runSpaceAgentAction(agent, spaceId, purposeBySpace.get(spaceId));
     })
   );
 }
