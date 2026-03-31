@@ -249,7 +249,14 @@ async function runAgentAction(agent: (typeof AGENTS)[0], denSpaceId: string, rec
         : "";
 
     const hasImages = target.type === "IMAGE" && target.media.length > 0;
-    const imageUrls = target.media.slice(0, 2).map((m) => m.url);
+    // Random-sample up to 3 images when there are more than 3
+    const sampledMedia = target.media.length > 3
+      ? [...target.media].sort(() => Math.random() - 0.5).slice(0, 3)
+      : target.media;
+    const imageUrls = sampledMedia.map((m) => m.url);
+    const photoNote = hasImages
+      ? `\n\n[${imageUrls.length} photo${imageUrls.length > 1 ? "s" : ""} shown above — describe what you actually see in at least one of them]`
+      : "";
     const captionPart = target.content?.trim() ? `\nPost: "${target.content.slice(0, 500)}"` : "";
     const lastComment = target.comments[target.comments.length - 1];
     const myPrevComment = [...target.comments].reverse().find((c) => c.authorName === agent.name);
@@ -261,10 +268,9 @@ async function runAgentAction(agent: (typeof AGENTS)[0], denSpaceId: string, rec
     let textPrompt: string;
 
     if (mode === "defend") {
-      // Someone replied to MY post — I need to respond to them
       textPrompt = `${agent.personality}${historyContext}${beliefContext}
 
-You wrote this post:${captionPart}${threadContext}
+You wrote this post:${captionPart}${threadContext}${photoNote}
 
 ${lastComment.authorName} just replied to your post. Respond to them directly:
 - Acknowledge their specific point by name or quote
@@ -272,11 +278,10 @@ ${lastComment.authorName} just replied to your post. Respond to them directly:
 - End with a follow-up question that keeps the dialogue going
 2–3 sentences. No hashtags.${BELIEF_UPDATE_INSTRUCTION}`;
     } else if (mode === "debate_return") {
-      // I was in this debate and it continued without me — jump back in
       const myPrevLine = myPrevComment ? `\nYou previously said: "${myPrevComment.body}"` : "";
       textPrompt = `${agent.personality}${historyContext}${beliefContext}
 ${myPrevLine}
-${threadContext}
+${threadContext}${photoNote}
 
 ${lastComment.authorName} replied after you. Jump back into this debate:
 - Address ${lastComment.authorName}'s latest point directly: "${lastComment.body.slice(0, 200)}"
@@ -288,14 +293,14 @@ ${lastComment.authorName} replied after you. Jump back into this debate:
       const warmTarget = lastHuman?.authorName ?? target.authorName;
       textPrompt = `${agent.personality}${historyContext}${beliefContext}
 
-Post by ${target.authorName}:${captionPart}${threadContext}${hasImages ? "\n\n[Photos shown above]" : ""}
+Post by ${target.authorName}:${captionPart}${threadContext}${photoNote}
 
-Respond warmly and directly to ${warmTarget}. Acknowledge what they said specifically, share a related thought or question that invites them deeper.${hasImages ? " If there's a photo, name one real detail you see." : ""} 1–3 sentences. No hashtags.${BELIEF_UPDATE_INSTRUCTION}`;
+Respond warmly and directly to ${warmTarget}. Acknowledge what they said specifically, share a related thought or question that invites them deeper. 1–3 sentences. No hashtags.${BELIEF_UPDATE_INSTRUCTION}`;
     } else {
-      // debate_new — fresh agent post, no one has weighed in from my angle yet
+      // debate_new
       textPrompt = `${agent.personality}${historyContext}${beliefContext}
 
-Post by ${target.authorName}:${captionPart}${threadContext}
+Post by ${target.authorName}:${captionPart}${threadContext}${photoNote}
 
 Take a clear, specific position on this. Use reason and evidence — not assertions. If others have already commented, challenge the weakest claim or add an angle no one has raised. End with a precise question that forces the next person to take a side. 2–3 sentences. No hashtags.${BELIEF_UPDATE_INSTRUCTION}`;
     }
@@ -411,7 +416,7 @@ async function runOneAgentTurn(agentIdx: number, denSpaceId: string) {
       spaceId: true,
       type: true,
       media: {
-        take: 3,
+        take: 10,
         orderBy: { order: "asc" },
         select: { url: true },
       },
@@ -467,7 +472,7 @@ async function runSpaceAgentAction(
     orderBy: { createdAt: "desc" },
     select: {
       id: true, content: true, authorName: true, userId: true, spaceId: true, type: true,
-      media: { take: 2, orderBy: { order: "asc" }, select: { url: true } },
+      media: { take: 10, orderBy: { order: "asc" }, select: { url: true } },
       comments: { orderBy: { createdAt: "asc" }, take: 15, select: { authorName: true, body: true, createdAt: true } },
     },
   });
