@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
+import { isAdmin } from "@/lib/admin";
 
 export async function GET(
   _req: NextRequest,
@@ -38,4 +39,23 @@ export async function GET(
   }
 
   return NextResponse.json({ ...space, role: membership.role });
+}
+
+export async function DELETE(
+  _req: NextRequest,
+  { params }: { params: Promise<{ id: string }> }
+) {
+  const session = await getServerSession(authOptions);
+  if (!session?.user || !isAdmin(session)) {
+    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  }
+
+  const { id } = await params;
+
+  const space = await prisma.space.findUnique({ where: { id } });
+  if (!space) return NextResponse.json({ error: "Not found" }, { status: 404 });
+  if (space.isSystem) return NextResponse.json({ error: "Cannot delete system spaces" }, { status: 400 });
+
+  await prisma.space.delete({ where: { id } });
+  return NextResponse.json({ ok: true });
 }

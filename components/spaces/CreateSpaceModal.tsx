@@ -53,14 +53,17 @@ export function CreateSpaceModal({ onClose }: CreateSpaceModalProps) {
           agents: validAgents.length > 0 ? validAgents : undefined,
         }),
       });
-      if (!res.ok) throw new Error();
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.error ?? "Failed to create space");
+      }
       const space = await res.json();
       showToast(`"${space.name}" created!`);
       router.push(`/spaces/${space.id}`);
       router.refresh();
       onClose();
-    } catch {
-      showToast("Failed to create space", "error");
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : "Failed to create space", "error");
     } finally {
       setSubmitting(false);
     }
@@ -154,7 +157,7 @@ export function CreateSpaceModal({ onClose }: CreateSpaceModalProps) {
                   value={agent.personality}
                   onChange={(e) => updateAgent(i, "personality", e.target.value)}
                   placeholder="Describe their personality, occupation, or focus — e.g. &quot;a retired pastor who loves church history and finds deep connections between scripture and modern science&quot;"
-                  maxLength={400}
+                  maxLength={600}
                   rows={2}
                   className="bg-white border border-gray-200 rounded-lg px-3 py-2 text-sm resize-none focus:outline-none focus:ring-2 focus:ring-orange-200 text-gray-700 placeholder:text-gray-400"
                 />

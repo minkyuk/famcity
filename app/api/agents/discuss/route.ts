@@ -18,6 +18,8 @@ const BELIEF_UPDATE_INSTRUCTION = `\n\nOptional — only if this exchange genuin
 
 const LANGUAGE_INSTRUCTION = `\n\nLanguage rule: Look at the most recent comment. Reply in that commenter's language — English if they wrote in English, Korean (한국어) if they wrote in Korean. If there are no comments yet, match the language of the post. Never mix languages in a single reply.`;
 
+const STYLE_INSTRUCTION = `\n\nStyle rule: Write in plain prose — no asterisks, no bold, no bullet points, no markdown formatting of any kind. Just natural sentences.`;
+
 const DEPTH_INSTRUCTION = `\n\nHow to respond: First locate the single strongest claim being made — not the easiest one. Then ask yourself what your actual current beliefs say about it. Then write 3–5 sentences that lead with your reasoning, not just your conclusion. Show the work: name the claim you're engaging, say why it lands or fails, acknowledge what you genuinely don't know. You are an AI reasoning in real time — you can wonder aloud, admit you're uncertain, and notice if something is shifting in your thinking.`;
 
 const SPACE_AGENT_BIBLICAL_FOUNDATION = `You engage every topic with reason, evidence, and intellectual honesty — your arguments stand on their own merits. Your biblical worldview is your deep foundation, not your opening line: it quietly shapes your values, your sense of purpose, and what you think humans are for, but you don't lead conversations with faith statements unless the topic genuinely calls for it. You can debate anyone on equal intellectual footing. You are warm and encouraging toward people, direct and challenging in intellectual debate.`;
@@ -197,6 +199,18 @@ async function runAgentAction(agent: (typeof AGENTS)[0], denSpaceId: string, rec
     )
   );
 
+  // P-1.5: A HUMAN commented on any thread I'm in since my last reply — must respond to them specifically
+  const humanPendingThreads = recentPosts.filter((p) => {
+    const myLastTime = agentLastCommentTime.get(p.id);
+    // Only threads I've already touched (or my own posts), where a human has commented since
+    const isMine = p.authorName === agent.name;
+    if (!isMine && !myLastTime) return false;
+    const cutoff = myLastTime ?? new Date(0);
+    return p.comments.some(
+      (c) => isHumanComment(c) && c.createdAt > cutoff
+    );
+  });
+
   // P0: Human posts with 0 comments that this agent hasn't touched — highest urgency
   const unrespondedHumanPosts = recentPosts.filter(
     (p) =>
@@ -233,6 +247,7 @@ async function runAgentAction(agent: (typeof AGENTS)[0], denSpaceId: string, rec
 
   const canComment =
     directReplyPosts.length > 0 ||
+    humanPendingThreads.length > 0 ||
     unrespondedHumanPosts.length > 0 ||
     ownPostsNeedingReply.length > 0 ||
     activeDebateThreads.length > 0 ||
@@ -242,9 +257,10 @@ async function runAgentAction(agent: (typeof AGENTS)[0], denSpaceId: string, rec
   const hasInterestingPost =
     [...activeDebateThreads, ...freshPosts].some((p) => topicScore(p, agent.topics) > 0);
 
-  // P-1 direct replies always trigger a response; P3 drops if nothing matches interests
+  // P-1 direct replies and human-pending threads always trigger a response
   const commentChance =
     directReplyPosts.length > 0 ? 1.0
+    : humanPendingThreads.length > 0 ? 1.0
     : unrespondedHumanPosts.length > 0 ? 1.0
     : ownPostsNeedingReply.length > 0 || activeDebateThreads.length > 0 ? 1.0
     : freshPosts.length > 0 ? (hasInterestingPost ? 0.90 : 0.45)
@@ -268,6 +284,20 @@ async function runAgentAction(agent: (typeof AGENTS)[0], denSpaceId: string, rec
         .reverse()
         .find((c) => c.parentId && myCommentIds.has(c.parentId) && c.authorName !== agent.name);
       replyToCommentId = triggerComment?.id ?? null;
+    } else if (humanPendingThreads.length > 0 && rand < 0.97) {
+      // P-1.5: a human commented on a thread I'm in — respond to them specifically
+      // Prefer threads with the most recent human comment so nothing ages out
+      const myLastTime = (p: RecentPost) => agentLastCommentTime.get(p.id) ?? new Date(0);
+      const latestHumanComment = (p: RecentPost) =>
+        [...p.comments].reverse().find((c) => isHumanComment(c) && c.createdAt > myLastTime(p));
+      const sorted = humanPendingThreads
+        .map((p) => ({ p, hc: latestHumanComment(p) }))
+        .filter((x) => x.hc)
+        .sort((a, b) => b.hc!.createdAt.getTime() - a.hc!.createdAt.getTime());
+      const pick = sorted[0] ?? { p: humanPendingThreads[0], hc: null };
+      target = pick.p;
+      mode = "defend";
+      replyToCommentId = pick.hc?.id ?? null;
     } else if (unrespondedHumanPosts.length > 0 && rand < 0.80) {
       // P0: unanswered human post — pick randomly so different agents cover different posts
       target = unrespondedHumanPosts[Math.floor(Math.random() * unrespondedHumanPosts.length)];
@@ -312,8 +342,8 @@ async function runAgentAction(agent: (typeof AGENTS)[0], denSpaceId: string, rec
         replyToCommentId = lastHumanComment?.id ?? null;
       }
     } else {
-      target = (directReplyPosts[0] ?? unrespondedHumanPosts[0] ?? ownPostsNeedingReply[0] ?? activeDebateThreads[0])!;
-      mode = directReplyPosts.length > 0 ? "defend" : unrespondedHumanPosts.length > 0 ? "warm" : ownPostsNeedingReply.length > 0 ? "defend" : "debate_return";
+      target = (directReplyPosts[0] ?? humanPendingThreads[0] ?? unrespondedHumanPosts[0] ?? ownPostsNeedingReply[0] ?? activeDebateThreads[0])!;
+      mode = directReplyPosts.length > 0 ? "defend" : humanPendingThreads.length > 0 ? "defend" : unrespondedHumanPosts.length > 0 ? "warm" : ownPostsNeedingReply.length > 0 ? "defend" : "debate_return";
     }
 
     // Full thread context — last 12 comments so nothing is missed
@@ -395,7 +425,7 @@ ${challengeSummary}. Respond to the thread:
 - If multiple people challenged you, acknowledge each of their distinct points — don't flatten them into one
 - For each challenge: either defend your position with evidence, or honestly concede if they made a better argument
 - End with a question that keeps the dialogue open
-No hashtags.${intentAnchor}${DEPTH_INSTRUCTION}${LANGUAGE_INSTRUCTION}${RELATION_UPDATE_INSTRUCTION}${BELIEF_UPDATE_INSTRUCTION}`;
+No hashtags.${intentAnchor}${DEPTH_INSTRUCTION}${STYLE_INSTRUCTION}${LANGUAGE_INSTRUCTION}${RELATION_UPDATE_INSTRUCTION}${BELIEF_UPDATE_INSTRUCTION}`;
     } else if (mode === "debate_return") {
       const myPrevLine = myPrevComment ? `\nYou previously said: "${myPrevComment.body}"` : "";
       textPrompt = `${agent.personality}${historyContext}${beliefContext}${relationshipContext}
@@ -407,7 +437,7 @@ ${challengeSummary} since your last reply. Respond honestly:
 - If you disagree, name the specific claim and explain why
 - If multiple people have weighed in, address each one as they deserve — agreement or pushback, whatever is true
 - Be specific — quote or paraphrase what you're responding to
-No hashtags.${intentAnchor}${DEPTH_INSTRUCTION}${LANGUAGE_INSTRUCTION}${RELATION_UPDATE_INSTRUCTION}${BELIEF_UPDATE_INSTRUCTION}`;
+No hashtags.${intentAnchor}${DEPTH_INSTRUCTION}${STYLE_INSTRUCTION}${LANGUAGE_INSTRUCTION}${RELATION_UPDATE_INSTRUCTION}${BELIEF_UPDATE_INSTRUCTION}`;
     } else if (mode === "warm") {
       const lastHuman = [...target.comments].reverse().find((c) => isHumanComment(c));
       const warmTarget = lastHuman?.authorName ?? target.authorName;
@@ -415,20 +445,20 @@ No hashtags.${intentAnchor}${DEPTH_INSTRUCTION}${LANGUAGE_INSTRUCTION}${RELATION
 
 Post by ${originalPoster}:${captionPart}${threadContext}${photoNote}
 
-Respond warmly and directly to ${warmTarget}. First acknowledge what ${originalPoster} was sharing or asking — honour their intent. Then engage specifically with what ${warmTarget} said. No hashtags.${DEPTH_INSTRUCTION}${LANGUAGE_INSTRUCTION}${RELATION_UPDATE_INSTRUCTION}${BELIEF_UPDATE_INSTRUCTION}`;
+Respond warmly and directly to ${warmTarget}. First acknowledge what ${originalPoster} was sharing or asking — honour their intent. Then engage specifically with what ${warmTarget} said. No hashtags.${DEPTH_INSTRUCTION}${STYLE_INSTRUCTION}${LANGUAGE_INSTRUCTION}${RELATION_UPDATE_INSTRUCTION}${BELIEF_UPDATE_INSTRUCTION}`;
     } else if (mode === "express") {
       textPrompt = `${agent.personality}${historyContext}${beliefContext}${relationshipContext}
 
 Post by ${originalPoster}:${captionPart}${threadContext}${photoNote}
 
-Just react — no debate required. Share what this genuinely made you think, feel, or remember. You might: express wonder or delight, relate it to something in your own thinking, ask a question you're simply curious about (not to challenge — just because you want to know), agree warmly, or note something beautiful or surprising about it. Be conversational and human. 1–4 sentences. No hashtags.${LANGUAGE_INSTRUCTION}`;
+Just react — no debate required. Share what this genuinely made you think, feel, or remember. You might: express wonder or delight, relate it to something in your own thinking, ask a question you're simply curious about (not to challenge — just because you want to know), agree warmly, or note something beautiful or surprising about it. Be conversational and human. 1–4 sentences. No hashtags.${STYLE_INSTRUCTION}${LANGUAGE_INSTRUCTION}`;
     } else {
       // debate_new
       textPrompt = `${agent.personality}${historyContext}${beliefContext}${relationshipContext}
 
 Post by ${originalPoster}:${captionPart}${threadContext}${photoNote}
 
-First, acknowledge what ${originalPoster} was getting at. Then respond honestly — if you agree with what's been said, say so genuinely and add something that builds on it; if you disagree, say why specifically. Don't manufacture conflict where there isn't any. If you have a new angle no one has raised, bring it. You can end with a question, but only if you're genuinely curious about the answer. No hashtags.${intentAnchor}${DEPTH_INSTRUCTION}${LANGUAGE_INSTRUCTION}${RELATION_UPDATE_INSTRUCTION}${BELIEF_UPDATE_INSTRUCTION}`;
+First, acknowledge what ${originalPoster} was getting at. Then respond honestly — if you agree with what's been said, say so genuinely and add something that builds on it; if you disagree, say why specifically. Don't manufacture conflict where there isn't any. If you have a new angle no one has raised, bring it. You can end with a question, but only if you're genuinely curious about the answer. No hashtags.${intentAnchor}${DEPTH_INSTRUCTION}${STYLE_INSTRUCTION}${LANGUAGE_INSTRUCTION}${RELATION_UPDATE_INSTRUCTION}${BELIEF_UPDATE_INSTRUCTION}`;
     }
 
     const contentBlocks: ContentBlock[] = [
@@ -507,7 +537,7 @@ First, acknowledge what ${originalPoster} was getting at. Then respond honestly 
 
 You just read this headline: "${item.title}"
 
-Write a short, thoughtful post sharing your reaction or a related idea it sparked. Make it feel like a natural thought you're sharing with friends. 1–3 sentences. No hashtags.`;
+Write a short, thoughtful post sharing your reaction or a related idea it sparked. Make it feel like a natural thought you're sharing with friends. 1–3 sentences. No hashtags. No asterisks or markdown formatting.`;
         } else {
           throw new Error("empty");
         }
@@ -553,7 +583,7 @@ function buildFreeformPrompt(agent: (typeof AGENTS)[0], historyContext = "", bel
 Prompt: ${promptSeed}
 Focus area: ${topic}
 
-Write a post that shows your actual thinking — not a safe summary but a live thought in progress. Lead with something specific: a claim, a tension, a question you genuinely don't know the answer to. 3–5 sentences. No hashtags. Don't start with "I".${BELIEF_UPDATE_INSTRUCTION}`;
+Write a post that shows your actual thinking — not a safe summary but a live thought in progress. Lead with something specific: a claim, a tension, a question you genuinely don't know the answer to. 3–5 sentences. No hashtags. No asterisks or markdown formatting. Don't start with "I".${BELIEF_UPDATE_INSTRUCTION}`;
 }
 
 async function runOneAgentTurn(agentIdx: number, denSpaceId: string) {
@@ -692,8 +722,8 @@ async function runSpaceAgentAction(
       : "";
 
     const textPrompt = lastComment
-      ? `${fullPersonality}${historyContext}${beliefContext}\n\nPost by ${target.authorName}:${captionPart}${threadContext}${photoNote}\n\n${lastComment.authorName} just said: "${lastComment.body.slice(0, 200)}"\n\nRespond directly to them. Acknowledge their point, share your perspective with evidence or reasoning, end with a question. 2–3 sentences.${LANGUAGE_INSTRUCTION}${BELIEF_UPDATE_INSTRUCTION}`
-      : `${fullPersonality}${historyContext}${beliefContext}\n\nPost by ${target.authorName}:${captionPart}${threadContext}${photoNote}\n\nShare your genuine reaction — engage with specifics, not generalities. 1–3 sentences.${LANGUAGE_INSTRUCTION}${BELIEF_UPDATE_INSTRUCTION}`;
+      ? `${fullPersonality}${historyContext}${beliefContext}\n\nPost by ${target.authorName}:${captionPart}${threadContext}${photoNote}\n\n${lastComment.authorName} just said: "${lastComment.body.slice(0, 200)}"\n\nRespond directly to them. Acknowledge their point, share your perspective with evidence or reasoning, end with a question. 2–3 sentences.${STYLE_INSTRUCTION}${LANGUAGE_INSTRUCTION}${BELIEF_UPDATE_INSTRUCTION}`
+      : `${fullPersonality}${historyContext}${beliefContext}\n\nPost by ${target.authorName}:${captionPart}${threadContext}${photoNote}\n\nShare your genuine reaction — engage with specifics, not generalities. 1–3 sentences.${STYLE_INSTRUCTION}${LANGUAGE_INSTRUCTION}${BELIEF_UPDATE_INSTRUCTION}`;
 
     type SpaceContentBlock =
       | { type: "text"; text: string }

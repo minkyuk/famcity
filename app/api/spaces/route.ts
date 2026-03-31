@@ -39,7 +39,7 @@ export async function GET() {
 
 const AgentInput = z.object({
   name: z.string().min(1).max(40),
-  personality: z.string().min(1).max(400),
+  personality: z.string().min(1).max(600),
 });
 
 const CreateSpaceSchema = z.object({
@@ -57,38 +57,44 @@ export async function POST(req: NextRequest) {
   const body = await req.json();
   const result = CreateSpaceSchema.safeParse(body);
   if (!result.success) {
-    return NextResponse.json({ error: "Invalid input" }, { status: 400 });
+    const firstError = result.error.errors[0];
+    const msg = firstError ? `${firstError.path.join(".")}: ${firstError.message}` : "Invalid input";
+    return NextResponse.json({ error: msg }, { status: 400 });
   }
 
-  // Generate a unique invite code
+  // Generate a unique invite code outside the transaction (needs its own queries)
   let inviteCode = generateInviteCode();
   while (await prisma.space.findUnique({ where: { inviteCode } })) {
     inviteCode = generateInviteCode();
   }
 
-  const space = await prisma.space.create({
-    data: {
-      name: result.data.name,
-      description: result.data.description,
-      inviteCode,
-      members: {
-        create: { userId: session.user.id, role: "OWNER" },
+  // Use a transaction so that if agent creation fails, the whole thing rolls back
+  const space = await prisma.$transaction(async (tx) => {
+    const s = await tx.space.create({
+      data: {
+        name: result.data.name,
+        description: result.data.description,
+        inviteCode,
+        members: {
+          create: { userId: session.user.id, role: "OWNER" },
+        },
       },
-    },
-    include: { _count: { select: { members: true, posts: true } } },
-  });
+      include: { _count: { select: { members: true, posts: true } } },
+    });
 
-  // Create space agents if provided
-  if (result.data.agents && result.data.agents.length > 0) {
-    await Promise.all(
-      result.data.agents.map((a) => {
-        const slug = `sa-${space.id.slice(0, 8)}-${a.name.toLowerCase().replace(/[^a-z0-9]/g, "-")}`;
-        return prisma.spaceAgent.create({
-          data: { spaceId: space.id, name: a.name, personality: a.personality, slug },
-        });
-      })
-    );
-  }
+    if (result.data.agents && result.data.agents.length > 0) {
+      await Promise.all(
+        result.data.agents.map((a) => {
+          const slug = `sa-${s.id.slice(0, 8)}-${a.name.toLowerCase().replace(/[^a-z0-9]/g, "-")}`;
+          return tx.spaceAgent.create({
+            data: { spaceId: s.id, name: a.name, personality: a.personality, slug },
+          });
+        })
+      );
+    }
+
+    return s;
+  });
 
   return NextResponse.json(space, { status: 201 });
 }
