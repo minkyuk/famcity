@@ -49,6 +49,11 @@ export default function ProfilePage() {
   const fileRef = useRef<HTMLInputElement>(null);
 
   const isOwn = session?.user?.id === id;
+  const isAdmin = !!(session?.user as { isAdmin?: boolean } | undefined)?.isAdmin;
+
+  const [credits, setCredits] = useState<number | null>(null);
+  const [grantAmount, setGrantAmount] = useState("100");
+  const [granting, setGranting] = useState(false);
 
   useEffect(() => {
     fetch(`/api/users/${id}`)
@@ -62,6 +67,36 @@ export default function ProfilePage() {
         setLoading(false);
       });
   }, [id]);
+
+  useEffect(() => {
+    if (!session?.user) return;
+    if (!isOwn && !isAdmin) return;
+    fetch(`/api/credits?userId=${id}`)
+      .then((r) => r.json())
+      .then((d) => { if (typeof d.credits === "number") setCredits(d.credits); })
+      .catch(() => {});
+  }, [id, session, isOwn, isAdmin]);
+
+  const handleGrant = async () => {
+    const amount = parseInt(grantAmount, 10);
+    if (!amount || amount < 1) return;
+    setGranting(true);
+    try {
+      const res = await fetch("/api/credits", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ userId: id, amount }),
+      });
+      if (!res.ok) throw new Error();
+      const data = await res.json();
+      setCredits(data.credits);
+      showToast(`Granted ${amount} credits`);
+    } catch {
+      showToast("Failed to grant credits", "error");
+    } finally {
+      setGranting(false);
+    }
+  };
 
   const handleAvatarChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -196,6 +231,9 @@ export default function ProfilePage() {
           <div className="text-center w-full">
             <h1 className="text-xl font-bold text-gray-900">{user.name}</h1>
             {isOwn && <p className="text-xs text-gray-400 mt-0.5">{user.email}</p>}
+            {credits !== null && (isOwn || isAdmin) && (
+              <p className="text-xs text-orange-500 font-medium mt-1">⚡ {credits} credits</p>
+            )}
             {user.bio ? (
               <p className="text-sm text-gray-600 leading-relaxed mt-2">{user.bio}</p>
             ) : (
@@ -216,6 +254,24 @@ export default function ProfilePage() {
               >
                 💬 Message
               </button>
+            )}
+            {isAdmin && (
+              <div className="mt-4 flex items-center justify-center gap-2">
+                <input
+                  type="number"
+                  min={1}
+                  value={grantAmount}
+                  onChange={(e) => setGrantAmount(e.target.value)}
+                  className="w-20 border border-gray-200 rounded-lg px-2 py-1 text-sm text-center focus:outline-none focus:ring-2 focus:ring-orange-300"
+                />
+                <button
+                  onClick={handleGrant}
+                  disabled={granting}
+                  className="text-xs font-semibold text-white bg-orange-500 hover:bg-orange-600 px-3 py-1.5 rounded-lg transition-colors disabled:opacity-50"
+                >
+                  {granting ? "…" : "Grant credits"}
+                </button>
+              </div>
             )}
           </div>
         )}

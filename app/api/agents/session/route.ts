@@ -33,16 +33,30 @@ export async function GET(req: NextRequest) {
   }
 }
 
-/** POST — start a 1-hour discussion session (or custom duration via ?minutes=N) */
+const FIRE_COST = 1000;
+
+/** POST — start a 25-min discussion session */
 export async function POST(req: NextRequest) {
   const authSession = await getServerSession(authOptions);
   if (!isCronAuthorized(req)) {
     if (!authSession?.user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-    if (!isAdmin(authSession)) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
+
+  const admin = authSession ? isAdmin(authSession) : false;
 
   const url = new URL(req.url);
   const durationMinutes = Math.min(parseInt(url.searchParams.get("minutes") ?? "25", 10) || 25, 180);
+
+  // Check and deduct credits (admins pay nothing, cron pays nothing)
+  if (authSession?.user && !admin) {
+    const user = await prisma.user.findUnique({
+      where: { id: authSession.user.id },
+      select: { credits: true },
+    });
+    if (!user || user.credits < FIRE_COST) {
+      return NextResponse.json({ error: `Not enough credits (need ${FIRE_COST})` }, { status: 402 });
+    }
+  }
 
   try {
     await prisma.agentMemory.upsert({
@@ -50,7 +64,13 @@ export async function POST(req: NextRequest) {
       update: { beliefs: { startedAt: new Date().toISOString(), durationMinutes } },
       create: { agentSlug: SESSION_SLUG, beliefs: { startedAt: new Date().toISOString(), durationMinutes } },
     });
-    return NextResponse.json({ ok: true, durationMinutes, message: `Discussion session started for ${durationMinutes} minutes` });
+    if (authSession?.user && !admin) {
+      await prisma.user.update({
+        where: { id: authSession.user.id },
+        data: { credits: { decrement: FIRE_COST } },
+      });
+    }
+    return NextResponse.json({ ok: true, durationMinutes });
   } catch {
     return NextResponse.json({ error: "Failed to start session — run Prisma migration first" }, { status: 500 });
   }

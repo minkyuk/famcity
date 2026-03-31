@@ -43,6 +43,18 @@ export async function POST(_req: NextRequest, { params }: { params: Promise<{ id
   if (!authSession?.user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
   const admin = isAdmin(authSession);
+  const BOLT_COST = 10;
+
+  // Check and deduct credits (admins pay nothing)
+  if (!admin) {
+    const user = await prisma.user.findUnique({
+      where: { id: authSession.user.id },
+      select: { credits: true },
+    });
+    if (!user || user.credits < BOLT_COST) {
+      return NextResponse.json({ error: `Not enough credits (need ${BOLT_COST})` }, { status: 402 });
+    }
+  }
 
   // Reject if within cooldown (admins bypass)
   if (!admin) {
@@ -67,6 +79,13 @@ export async function POST(_req: NextRequest, { params }: { params: Promise<{ id
     update: { beliefs: { startedAt: new Date().toISOString(), durationMinutes: DURATION_MINUTES } },
     create: { agentSlug: slug(spaceId), beliefs: { startedAt: new Date().toISOString(), durationMinutes: DURATION_MINUTES } },
   });
+
+  if (!admin) {
+    await prisma.user.update({
+      where: { id: authSession.user.id },
+      data: { credits: { decrement: BOLT_COST } },
+    });
+  }
 
   return NextResponse.json({ ok: true });
 }

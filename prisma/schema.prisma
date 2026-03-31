@@ -53,6 +53,7 @@ model User {
   receivedDMs      DirectMessage[]  @relation("DMReceived")
   createdEvents Event[]
   eventRsvps    EventRSVP[]
+  credits       Int            @default(100)
 }
 
 model VerificationToken {

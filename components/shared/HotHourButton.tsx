@@ -33,7 +33,7 @@ export function HotHourButton({ isAdmin }: { isAdmin?: boolean }) {
       const res = await fetch("/api/agents/session", { method: "POST" });
       if (!res.ok) {
         const body = await res.json().catch(() => ({}));
-        setError(body.error ?? `Failed (${res.status}) — run: npx prisma migrate deploy`);
+        setError(body.error ?? `Failed (${res.status})`);
         return;
       }
       await fetchStatus();
