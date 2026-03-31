@@ -7,6 +7,7 @@ import { ToastProvider } from "@/components/shared/Toast";
 import { NotificationBell } from "@/components/shared/NotificationBell";
 import { PushNotifications } from "@/components/shared/PushNotifications";
 import { UserMenu } from "@/components/shared/UserMenu";
+import { HotHourButton } from "@/components/shared/HotHourButton";
 import { SpaceSwitcher } from "@/components/shared/SpaceSwitcher";
 import { PostButton } from "@/components/shared/PostButton";
 import { ChatWidget } from "@/components/chat/ChatWidget";
@@ -49,9 +50,15 @@ export default async function RootLayout({
                     📅 Events
                   </Link>
                 )}
+                {session && (
+                  <Link href="/messages" className="text-sm font-medium text-gray-600 hover:text-accent transition-colors hidden sm:block">
+                    ✉️ Messages
+                  </Link>
+                )}
                 <div className="flex items-center gap-2 ml-auto">
                   {session && (
                     <>
+                      <HotHourButton />
                       <PushNotifications />
                       <NotificationBell />
                       <PostButton />

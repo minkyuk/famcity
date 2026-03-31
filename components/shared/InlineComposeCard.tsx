@@ -35,7 +35,7 @@ export function InlineComposeCard({ defaultSpaceId }: InlineComposeCardProps) {
             onClick={() => setExpanded(true)}
             className="flex-1 text-left bg-gray-50 hover:bg-gray-100 border border-gray-200 rounded-full px-4 py-2.5 text-sm text-gray-400 transition-colors"
           >
-            Share something with your family…
+            Share something with the chillers…
           </button>
           <div className="flex items-center gap-1">
             <button onClick={() => setExpanded(true)} className="p-2 text-gray-400 hover:text-blue-500 transition-colors" title="Photo">🖼</button>

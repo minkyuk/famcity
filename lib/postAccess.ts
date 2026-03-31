@@ -11,7 +11,11 @@ export async function getAccessiblePost(postId: string, userId: string) {
   // Global posts are visible to all authenticated users
   if (!post.spaceId) return post;
 
-  // Space posts require membership
+  // System spaces are visible to all authenticated users — no membership required
+  const space = await prisma.space.findUnique({ where: { id: post.spaceId } });
+  if (space?.isSystem) return post;
+
+  // Regular space posts require membership
   const membership = await prisma.spaceMember.findUnique({
     where: { userId_spaceId: { userId, spaceId: post.spaceId } },
   });

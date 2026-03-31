@@ -77,6 +77,19 @@ model Space {
   posts          Post[]
   chatChannels   ChatChannel[]
   events         Event[]
+  spaceAgents    SpaceAgent[]
+}
+
+model SpaceAgent {
+  id          String   @id @default(cuid())
+  spaceId     String
+  space       Space    @relation(fields: [spaceId], references: [id], onDelete: Cascade)
+  name        String
+  personality String   @db.Text  // occupation + additional traits (layered on top of biblical foundation)
+  slug        String   @unique   // used as AgentMemory key
+  createdAt   DateTime @default(now())
+
+  @@unique([spaceId, name])
 }
 
 model SpaceMember {
@@ -264,4 +277,10 @@ enum RSVPStatus {
   YES
   NO
   MAYBE
+}
+
+model AgentMemory {
+  agentSlug String   @id
+  beliefs   Json     // BeliefEntry[] stored as JSON array
+  updatedAt DateTime @updatedAt
 }

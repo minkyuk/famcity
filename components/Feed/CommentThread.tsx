@@ -5,6 +5,54 @@ import Image from "next/image";
 import { formatDistanceToNow } from "date-fns";
 import { useToast } from "@/components/shared/Toast";
 import type { Comment } from "@prisma/client";
+import { getAgentRank } from "@/lib/agents";
+
+const isKorean = (t: string) => (t.match(/[\uAC00-\uD7A3]/g) ?? []).length / Math.max(t.replace(/\s/g, "").length, 1) > 0.3;
+
+function TranslateButton({ text }: { text: string }) {
+  const [translation, setTranslation] = useState<string | null>(null);
+  const [translating, setTranslating] = useState(false);
+  const [show, setShow] = useState(false);
+
+  if (text.length <= 15) return null;
+
+  const handleTranslate = async () => {
+    if (translation) { setShow((s) => !s); return; }
+    setTranslating(true);
+    try {
+      const res = await fetch("/api/translate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text }),
+      });
+      if (!res.ok) throw new Error();
+      const data = await res.json();
+      setTranslation(data.translated);
+      setShow(true);
+    } catch {
+      // silently fail
+    } finally {
+      setTranslating(false);
+    }
+  };
+
+  return (
+    <div>
+      <button
+        onClick={handleTranslate}
+        disabled={translating}
+        className="text-[10px] text-blue-400 hover:text-blue-600 transition-colors disabled:opacity-50 underline underline-offset-2"
+      >
+        {translating ? "…" : isKorean(text) ? "🌐 Translate" : "🌐 번역"}
+      </button>
+      {show && translation && (
+        <p className="text-xs text-gray-500 italic mt-1 leading-relaxed border-l-2 border-gray-100 pl-2">
+          {translation}
+        </p>
+      )}
+    </div>
+  );
+}
 
 interface CommentThreadProps {
   postId: string;
@@ -107,6 +155,12 @@ export function CommentThread({ postId, initialComments, currentUserId, currentU
                   <div className="flex items-center justify-between gap-2">
                     <div className="flex items-center gap-1.5 min-w-0">
                       <span className="text-xs font-semibold text-gray-700 truncate">{c.authorName}</span>
+                      {(() => {
+                        const rank = getAgentRank(c.authorName, c.authorImage, c.userId);
+                        if (rank === "knight") return <span title="Knight — roams all spaces" className="text-[10px] text-amber-500 shrink-0">♞</span>;
+                        if (rank === "squire") return <span title="Space Agent — confined to this space" className="text-[10px] text-sky-400 shrink-0">🏰</span>;
+                        return null;
+                      })()}
                       <span className="text-xs text-gray-400 shrink-0">
                         · {formatDistanceToNow(new Date(c.createdAt), { addSuffix: true })}
                       </span>
@@ -140,7 +194,10 @@ export function CommentThread({ postId, initialComments, currentUserId, currentU
                       </div>
                     </div>
                   ) : (
-                    <p className="text-sm text-gray-800 mt-0.5 break-words">{c.body}</p>
+                    <>
+                      <p className="text-sm text-gray-800 mt-0.5 break-words">{c.body}</p>
+                      <TranslateButton text={c.body} />
+                    </>
                   )}
                 </div>
               </div>

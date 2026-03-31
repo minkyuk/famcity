@@ -11,6 +11,7 @@ import { ReactionBar } from "./ReactionBar";
 import { CommentThread } from "./CommentThread";
 import { HashtagPills } from "./HashtagPills";
 import { UserPopup } from "@/components/shared/UserPopup";
+import { getAgentRank } from "@/lib/agents";
 import type { Post, Reaction, Comment, PostMedia, PostHashtag, Hashtag } from "@prisma/client";
 
 type PostWithRelations = Post & {
@@ -20,6 +21,7 @@ type PostWithRelations = Post & {
   hashtags: (PostHashtag & { hashtag: Hashtag })[];
   space: { name: string } | null;
   _count: { reactions: number; comments: number };
+  mutualSpace?: string | null;
 };
 
 const TYPE_BADGE: Record<string, { label: string; color: string }> = {
@@ -74,6 +76,10 @@ export function PostCard({ post, currentUserId, currentUserName, isAdmin, onDele
   const [localPost, setLocalPost] = useState(post);
   const [showPopup, setShowPopup] = useState(false);
   const avatarRef = useRef<HTMLButtonElement>(null);
+  const [copied, setCopied] = useState(false);
+  const [translation, setTranslation] = useState<string | null>(null);
+  const [translating, setTranslating] = useState(false);
+  const [showTranslation, setShowTranslation] = useState(false);
 
   // Fetch spaces lazily when edit mode opens
   useEffect(() => {
@@ -122,11 +128,41 @@ export function PostCard({ post, currentUserId, currentUserName, isAdmin, onDele
     setSaving(false);
   };
 
+  const handleShare = () => {
+    const url = `${window.location.origin}${window.location.pathname}#post-${post.id}`;
+    navigator.clipboard.writeText(url).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    });
+  };
+
+  const handleTranslate = async () => {
+    if (translation) { setShowTranslation((s) => !s); return; }
+    setTranslating(true);
+    try {
+      const res = await fetch("/api/translate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text: localPost.content }),
+      });
+      if (!res.ok) throw new Error();
+      const data = await res.json();
+      setTranslation(data.translated);
+      setShowTranslation(true);
+    } catch {
+      // silently fail
+    } finally {
+      setTranslating(false);
+    }
+  };
+
+  const isKorean = (t: string) => (t.match(/[\uAC00-\uD7A3]/g) ?? []).length / t.replace(/\s/g, "").length > 0.3;
+
   const spaceName = localPost.space?.name ?? (localPost.spaceId ? null : "Global");
 
   return (
     <>
-    <article className="bg-white rounded-2xl shadow-sm border border-gray-100 p-4 flex flex-col gap-3">
+    <article id={`post-${post.id}`} className="bg-white rounded-2xl shadow-sm border border-gray-100 p-4 flex flex-col gap-3">
       <div className="flex items-center justify-between">
         <button
           ref={avatarRef}
@@ -135,7 +171,15 @@ export function PostCard({ post, currentUserId, currentUserName, isAdmin, onDele
         >
           <Avatar name={localPost.authorName} image={localPost.authorImage} />
           <div>
-            <p className="text-sm font-semibold text-gray-800">{localPost.authorName}</p>
+            <div className="flex items-center gap-1">
+              <p className="text-sm font-semibold text-gray-800">{localPost.authorName}</p>
+              {(() => {
+                const rank = getAgentRank(localPost.authorName, localPost.authorImage, localPost.userId);
+                if (rank === "knight") return <span title="Knight — roams all spaces" className="text-xs text-amber-500">♞</span>;
+                if (rank === "squire") return <span title="Space Agent — confined to this space" className="text-xs text-sky-400">🏰</span>;
+                return null;
+              })()}
+            </div>
             <div className="flex items-center gap-1.5">
               <p className="text-xs text-gray-400">
                 {formatDistanceToNow(new Date(localPost.createdAt), { addSuffix: true })}
@@ -158,6 +202,13 @@ export function PostCard({ post, currentUserId, currentUserName, isAdmin, onDele
           </div>
         </button>
         <div className="flex items-center gap-2">
+          <button
+            onClick={handleShare}
+            className="text-xs text-gray-300 hover:text-gray-500 transition-colors"
+            title="Copy link"
+          >
+            {copied ? "✓" : "🔗"}
+          </button>
           <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${badge.color}`}>
             {badge.label}
           </span>
@@ -228,6 +279,23 @@ export function PostCard({ post, currentUserId, currentUserName, isAdmin, onDele
         )
       )}
 
+      {localPost.content && localPost.content.length > 20 && (
+        <div>
+          <button
+            onClick={handleTranslate}
+            disabled={translating}
+            className="text-[11px] text-blue-400 hover:text-blue-600 transition-colors disabled:opacity-50 underline underline-offset-2"
+          >
+            {translating ? "번역 중…" : isKorean(localPost.content) ? "🌐 Translate to English" : "🌐 한국어로 번역"}
+          </button>
+          {showTranslation && translation && (
+            <p className="text-sm text-gray-500 italic mt-1 leading-relaxed border-l-2 border-gray-100 pl-2">
+              {translation}
+            </p>
+          )}
+        </div>
+      )}
+
       {localPost.hashtags.length > 0 && (
         <Suspense>
           <HashtagPills hashtags={localPost.hashtags} />
@@ -263,6 +331,10 @@ export function PostCard({ post, currentUserId, currentUserName, isAdmin, onDele
             📄 Download PDF
           </a>
         </div>
+      )}
+
+      {post.mutualSpace && post.userId !== currentUserId && (
+        <p className="text-[10px] text-gray-300 text-right">via 👥 {post.mutualSpace}</p>
       )}
 
       <ReactionBar postId={post.id} reactions={post.reactions} currentUserName={currentUserName} />

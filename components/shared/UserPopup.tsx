@@ -100,7 +100,7 @@ export function UserPopup({
 
   const handleMessage = () => {
     onClose();
-    router.push(`/profile/${userId}`);
+    router.push(`/messages/${userId}`);
   };
 
   if (!mounted) return null;
