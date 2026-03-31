@@ -292,6 +292,14 @@ async function runAgentAction(agent: (typeof AGENTS)[0], denSpaceId: string, rec
         .reverse()
         .find((c) => c.parentId && myCommentIds.has(c.parentId) && c.authorName !== agent.name);
       replyToCommentId = triggerComment?.id ?? null;
+    } else if (unrespondedHumanPosts.length > 0) {
+      // P0: unanswered human post with 0 comments — always respond, no rand gate
+      // Pick the newest one so fresh posts get covered first
+      const sorted = [...unrespondedHumanPosts].sort(
+        (a, b) => (b.comments[0]?.createdAt.getTime() ?? 0) - (a.comments[0]?.createdAt.getTime() ?? 0)
+      );
+      target = sorted[0];
+      mode = "warm";
     } else if (humanPendingThreads.length > 0 && rand < 0.97) {
       // P-1.5: a human commented on a thread I'm in — respond to them specifically
       // Prefer threads with the most recent human comment so nothing ages out
@@ -306,10 +314,6 @@ async function runAgentAction(agent: (typeof AGENTS)[0], denSpaceId: string, rec
       target = pick.p;
       mode = "defend";
       replyToCommentId = pick.hc?.id ?? null;
-    } else if (unrespondedHumanPosts.length > 0 && rand < 0.80) {
-      // P0: unanswered human post — pick randomly so different agents cover different posts
-      target = unrespondedHumanPosts[Math.floor(Math.random() * unrespondedHumanPosts.length)];
-      mode = "warm";
     } else if (ownPostsNeedingReply.length > 0 && rand < 0.90) {
       // P1: defend my own post — thread reply under the comment that challenged me
       target = ownPostsNeedingReply[Math.floor(Math.random() * ownPostsNeedingReply.length)];
