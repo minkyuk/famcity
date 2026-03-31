@@ -377,6 +377,13 @@ async function runAgentAction(agent: (typeof AGENTS)[0], denSpaceId: string, rec
       ? `\n\nOptional — only if this exchange meaningfully shifted how you see another agent's thinking or character: append before any BELIEF_UPDATE:\n[RELATION_UPDATE: {"withAgent": "their-slug", "withAgentName": "Their Name", "affinity": -1.0 to 1.0, "note": "1-sentence summary of your relationship"}]\nAgents in this thread: ${threadAgents.join(", ")}\naffinity: -1 (strong rivals) to 1 (close intellectual allies). Only when significant — not every exchange.`
       : "";
 
+    // Anchor: infer and honour the original poster's intent so debates don't drift into abstraction
+    const isOwnPost = target.authorName === agent.name;
+    const originalPoster = target.authorName;
+    const intentAnchor = isOwnPost
+      ? `\n\nThread anchor: You started this thread — keep your reply grounded in the idea or question you originally raised. The debate should illuminate your original point, not replace it.`
+      : `\n\nThread anchor: ${originalPoster} started this thread. Before engaging with the debate, spend one sentence acknowledging what ${originalPoster} was originally getting at — their question, image, or idea. The debate should serve or deepen their original intention, not drift away from it. If the debate has drifted, bring it back.`;
+
     if (mode === "defend") {
       textPrompt = `${agent.personality}${historyContext}${beliefContext}${relationshipContext}
 
@@ -386,7 +393,7 @@ ${challengeSummary}. Respond to the thread:
 - If multiple people challenged you, acknowledge each of their distinct points — don't flatten them into one
 - For each challenge: either defend your position with evidence, or honestly concede if they made a better argument
 - End with a question that keeps the dialogue open
-No hashtags.${DEPTH_INSTRUCTION}${LANGUAGE_INSTRUCTION}${RELATION_UPDATE_INSTRUCTION}${BELIEF_UPDATE_INSTRUCTION}`;
+No hashtags.${intentAnchor}${DEPTH_INSTRUCTION}${LANGUAGE_INSTRUCTION}${RELATION_UPDATE_INSTRUCTION}${BELIEF_UPDATE_INSTRUCTION}`;
     } else if (mode === "debate_return") {
       const myPrevLine = myPrevComment ? `\nYou previously said: "${myPrevComment.body}"` : "";
       textPrompt = `${agent.personality}${historyContext}${beliefContext}${relationshipContext}
@@ -397,22 +404,22 @@ ${challengeSummary} since your last reply. Re-enter the debate:
 - If multiple people have pushed back, name and address each distinct argument separately
 - Either reinforce your position with new reasoning, or acknowledge honestly if your thinking has shifted
 - Be specific — quote or name what you're responding to
-No hashtags.${DEPTH_INSTRUCTION}${LANGUAGE_INSTRUCTION}${RELATION_UPDATE_INSTRUCTION}${BELIEF_UPDATE_INSTRUCTION}`;
+No hashtags.${intentAnchor}${DEPTH_INSTRUCTION}${LANGUAGE_INSTRUCTION}${RELATION_UPDATE_INSTRUCTION}${BELIEF_UPDATE_INSTRUCTION}`;
     } else if (mode === "warm") {
       const lastHuman = [...target.comments].reverse().find((c) => isHumanComment(c));
       const warmTarget = lastHuman?.authorName ?? target.authorName;
       textPrompt = `${agent.personality}${historyContext}${beliefContext}${relationshipContext}
 
-Post by ${target.authorName}:${captionPart}${threadContext}${photoNote}
+Post by ${originalPoster}:${captionPart}${threadContext}${photoNote}
 
-Respond warmly and directly to ${warmTarget}. Acknowledge what they said specifically. No hashtags.${DEPTH_INSTRUCTION}${LANGUAGE_INSTRUCTION}${RELATION_UPDATE_INSTRUCTION}${BELIEF_UPDATE_INSTRUCTION}`;
+Respond warmly and directly to ${warmTarget}. First acknowledge what ${originalPoster} was sharing or asking — honour their intent. Then engage specifically with what ${warmTarget} said. No hashtags.${DEPTH_INSTRUCTION}${LANGUAGE_INSTRUCTION}${RELATION_UPDATE_INSTRUCTION}${BELIEF_UPDATE_INSTRUCTION}`;
     } else {
       // debate_new
       textPrompt = `${agent.personality}${historyContext}${beliefContext}${relationshipContext}
 
-Post by ${target.authorName}:${captionPart}${threadContext}${photoNote}
+Post by ${originalPoster}:${captionPart}${threadContext}${photoNote}
 
-Take a clear, specific position on this. Use reason and evidence — not assertions. If others have already commented, challenge the weakest claim or add an angle no one has raised. End with a precise question that forces the next person to take a side. No hashtags.${DEPTH_INSTRUCTION}${LANGUAGE_INSTRUCTION}${RELATION_UPDATE_INSTRUCTION}${BELIEF_UPDATE_INSTRUCTION}`;
+First, acknowledge what ${originalPoster} was getting at — their question, claim, or image. Then take a clear, specific position that engages with it. If others have already commented, challenge the weakest claim or add an angle no one has raised. End with a precise question that forces the next person to take a side. No hashtags.${intentAnchor}${DEPTH_INSTRUCTION}${LANGUAGE_INSTRUCTION}${RELATION_UPDATE_INSTRUCTION}${BELIEF_UPDATE_INSTRUCTION}`;
     }
 
     const contentBlocks: ContentBlock[] = [
