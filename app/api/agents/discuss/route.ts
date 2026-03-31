@@ -605,6 +605,59 @@ async function runSpaceAgentAction(
   }
 }
 
+/** Return spaceIds that have an active space hot session right now. */
+async function getActiveSpaceSessionIds(): Promise<string[]> {
+  try {
+    const records = await prisma.agentMemory.findMany({
+      where: { agentSlug: { startsWith: "$$space-session:" } },
+    });
+    const now = Date.now();
+    return records
+      .filter((r) => {
+        const d = r.beliefs as { startedAt?: string; durationMinutes?: number };
+        if (!d?.startedAt) return false;
+        const elapsed = now - new Date(d.startedAt).getTime();
+        return elapsed < (d.durationMinutes ?? 3) * 60 * 1000;
+      })
+      .map((r) => r.agentSlug.replace("$$space-session:", ""));
+  } catch {
+    return [];
+  }
+}
+
+/** During a space hot session: fire ALL space agents for those spaces every cron tick.
+ *  If a space has no SpaceAgents yet, fall back to 2 random global knights scoped to that space. */
+async function runHotSpaceAgentTurns(spaceIds: string[]) {
+  type SpaceAgentRow = { id: string; spaceId: string; name: string; personality: string; slug: string; createdAt: Date };
+  const spaceAgents: SpaceAgentRow[] = await (prisma.spaceAgent as { findMany: (opts: object) => Promise<SpaceAgentRow[]> })
+    .findMany({ where: { spaceId: { in: spaceIds } }, orderBy: { createdAt: "asc" } })
+    .catch(() => []);
+
+  const bySpace = new Map<string, SpaceAgentRow[]>();
+  for (const sa of spaceAgents) {
+    if (!bySpace.has(sa.spaceId)) bySpace.set(sa.spaceId, []);
+    bySpace.get(sa.spaceId)!.push(sa);
+  }
+
+  await Promise.all(
+    spaceIds.map(async (spaceId) => {
+      const agents = bySpace.get(spaceId);
+      if (agents && agents.length > 0) {
+        // Fire all space agents in parallel
+        await Promise.all(agents.map((a) => runSpaceAgentAction(a, spaceId)));
+      } else {
+        // No space agents yet — use 2 random global knights scoped to this space
+        const shuffled = [...AGENTS].sort(() => Math.random() - 0.5).slice(0, 2);
+        await Promise.all(
+          shuffled.map((a) =>
+            runSpaceAgentAction({ slug: a.slug, name: a.name, personality: a.personality }, spaceId)
+          )
+        );
+      }
+    })
+  );
+}
+
 /** Run one agent per space that has custom agents (cycles through them by slot). */
 async function runAllSpaceAgentTurns(slotMinutes: number) {
   type SpaceAgentRow = { id: string; spaceId: string; name: string; personality: string; slug: string; createdAt: Date };
@@ -642,23 +695,33 @@ export async function POST(req: NextRequest) {
     }
   }
 
-  const sessionActive = await isSessionActive();
-  const denSpaceId = await getOrCreateDenSpace();
+  const [sessionActive, denSpaceId, activeSpaceSessions] = await Promise.all([
+    isSessionActive(),
+    getOrCreateDenSpace(),
+    getActiveSpaceSessionIds(),
+  ]);
 
   if (sessionActive) {
-    // Hot hour: run all 25 agents sequentially (round-robin, one after another)
-    // Each agent sees the previous agent's comment in the thread — natural staggered debate
+    // Global hot session: run all 25 agents sequentially
     for (let i = 0; i < AGENTS.length; i++) {
       await runOneAgentTurn(i, denSpaceId);
     }
-    await runAllSpaceAgentTurns(2);
+    await Promise.all([
+      runAllSpaceAgentTurns(2),
+      activeSpaceSessions.length > 0 ? runHotSpaceAgentTurns(activeSpaceSessions) : Promise.resolve(),
+    ]);
     return NextResponse.json({ ok: true, session: true, agents: AGENTS.map((a) => a.name) });
   }
 
-  // Normal (routine): 1 agent per 10-min boundary → each of 25 agents acts ~every 4 hours
+  // Space hot sessions always run every minute regardless of global cycle
+  if (activeSpaceSessions.length > 0) {
+    await runHotSpaceAgentTurns(activeSpaceSessions);
+  }
+
+  // Normal (routine): 1 global agent per 10-min boundary
   const minute = new Date().getUTCMinutes();
   if (minute % 10 !== 0) {
-    return NextResponse.json({ ok: true, skipped: true, reason: "off-cycle" });
+    return NextResponse.json({ ok: true, skipped: true, reason: "off-cycle", spaceSessions: activeSpaceSessions.length });
   }
   const agentIdx = currentAgentIndex(10);
   await Promise.all([

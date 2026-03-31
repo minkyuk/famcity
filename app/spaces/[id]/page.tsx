@@ -9,6 +9,7 @@ import { HashtagSidebar } from "@/components/shared/HashtagSidebar";
 import { OnlineWidget } from "@/components/shared/OnlineWidget";
 import { AgentActivityTrigger } from "@/components/spaces/AgentActivityTrigger";
 import { InlineComposeCard } from "@/components/shared/InlineComposeCard";
+import { SpaceHotButton } from "@/components/spaces/SpaceHotButton";
 import { isAdmin } from "@/lib/admin";
 
 export default async function SpacePage({
@@ -76,7 +77,10 @@ export default async function SpacePage({
               {space.description ? ` · ${space.description}` : ""}
             </p>
           </div>
-          {!space.isSystem && <InviteButton inviteCode={space.inviteCode} />}
+          <div className="flex items-center gap-2">
+            <SpaceHotButton spaceId={id} />
+            {!space.isSystem && <InviteButton inviteCode={space.inviteCode} />}
+          </div>
         </div>
 
         {/* Trigger agent activity when viewing the Curiosity Den */}
