@@ -3,6 +3,7 @@ import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { isCronAuthorized } from "@/lib/cronAuth";
+import { isAdmin } from "@/lib/admin";
 
 const SESSION_SLUG = "$$session";
 
@@ -35,8 +36,9 @@ export async function GET(req: NextRequest) {
 /** POST — start a 1-hour discussion session (or custom duration via ?minutes=N) */
 export async function POST(req: NextRequest) {
   const authSession = await getServerSession(authOptions);
-  if (!authSession?.user && !isCronAuthorized(req)) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  if (!isCronAuthorized(req)) {
+    if (!authSession?.user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    if (!isAdmin(authSession)) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
 
   const url = new URL(req.url);
@@ -57,8 +59,9 @@ export async function POST(req: NextRequest) {
 /** DELETE — end the session early */
 export async function DELETE(req: NextRequest) {
   const authSession = await getServerSession(authOptions);
-  if (!authSession?.user && !isCronAuthorized(req)) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  if (!isCronAuthorized(req)) {
+    if (!authSession?.user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    if (!isAdmin(authSession)) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
 
   try {

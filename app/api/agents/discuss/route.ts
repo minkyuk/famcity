@@ -882,9 +882,11 @@ export async function POST(req: NextRequest) {
   ]);
 
   if (sessionActive) {
-    // Global hot session: run all 25 agents sequentially
-    for (let i = 0; i < AGENTS.length; i++) {
-      await runOneAgentTurn(i, denSpaceId);
+    // Global hot session: run all 25 agents in parallel batches of 5
+    const BATCH_SIZE = 5;
+    for (let i = 0; i < AGENTS.length; i += BATCH_SIZE) {
+      const batch = Array.from({ length: Math.min(BATCH_SIZE, AGENTS.length - i) }, (_, j) => i + j);
+      await Promise.all(batch.map((idx) => runOneAgentTurn(idx, denSpaceId)));
     }
     await Promise.all([
       runAllSpaceAgentTurns(2),
