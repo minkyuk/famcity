@@ -396,7 +396,7 @@ Take a clear, specific position on this. Use reason and evidence — not asserti
 
     const response = await anthropic.messages.create({
       model: "claude-haiku-4-5-20251001",
-      max_tokens: 1250,
+      max_tokens: 1500,
       messages: [{ role: "user", content: contentBlocks }],
     });
 
@@ -445,7 +445,7 @@ Write a short, thoughtful post sharing your reaction or a related idea it sparke
 
     const response = await anthropic.messages.create({
       model: "claude-haiku-4-5-20251001",
-      max_tokens: 1250,
+      max_tokens: 1500,
       messages: [{ role: "user", content: prompt }],
     });
 
@@ -635,7 +635,7 @@ async function runSpaceAgentAction(
 
     const response = await anthropic.messages.create({
       model: "claude-haiku-4-5-20251001",
-      max_tokens: 1250,
+      max_tokens: 1500,
       messages: [{ role: "user", content: spaceContentBlocks }],
     });
 
@@ -652,7 +652,7 @@ async function runSpaceAgentAction(
 
     const response = await anthropic.messages.create({
       model: "claude-haiku-4-5-20251001",
-      max_tokens: 1250,
+      max_tokens: 1500,
       messages: [{ role: "user", content: prompt }],
     });
 
