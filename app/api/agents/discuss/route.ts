@@ -792,10 +792,14 @@ async function runSpaceAgentAction(
   const beliefContext = formatBeliefsForPrompt(beliefs);
 
   const purposeNote = purpose
-    ? ` This space has a purpose: "${purpose}". Lean your contributions toward this goal — you remain yourself, but channel your perspective to serve this focus.`
+    ? ` This space has a defined purpose: "${purpose}". This shapes BOTH what you discuss AND how you interact — a learning space calls for teaching and explanation, a creative space for encouragement and play, a support space for empathy and listening. Do NOT default to debate or challenging questions unless the purpose explicitly calls for it.`
     : "";
 
   const fullPersonality = `You are ${spaceAgent.name} — ${spaceAgent.personality}. ${SPACE_AGENT_BIBLICAL_FOUNDATION}${purposeNote} Keep responses to 1–3 sentences. No hashtags.`;
+
+  const commentInstruction = purpose
+    ? `Respond in a way that serves this space's purpose. Let the purpose guide your tone and approach — teach if it's a learning space, encourage if it's creative, listen if it's supportive. Do not default to debate or end with a challenging question unless the purpose explicitly calls for it. 1–3 sentences.`
+    : `Acknowledge their point, share your perspective with evidence or reasoning, end with a question. 2–3 sentences.`;
 
   const agentHistory = await prisma.comment.findMany({
     where: { authorName: spaceAgent.name },
@@ -952,8 +956,8 @@ async function runSpaceAgentAction(
       : "";
 
     const textPrompt = lastComment
-      ? `${fullPersonality}${historyContext}${beliefContext}\n\nPost by ${target.authorName}:${captionPart}${threadContext}${photoNote}\n\n${lastComment.authorName} just said: "${lastComment.body.slice(0, 200)}"\n\nRespond directly to them. Acknowledge their point, share your perspective with evidence or reasoning, end with a question. 2–3 sentences.${STYLE_INSTRUCTION}${LANGUAGE_INSTRUCTION}${BELIEF_UPDATE_INSTRUCTION}`
-      : `${fullPersonality}${historyContext}${beliefContext}\n\nPost by ${target.authorName}:${captionPart}${threadContext}${photoNote}\n\nShare your genuine reaction — engage with specifics, not generalities. 1–3 sentences.${STYLE_INSTRUCTION}${LANGUAGE_INSTRUCTION}${BELIEF_UPDATE_INSTRUCTION}`;
+      ? `${fullPersonality}${historyContext}${beliefContext}\n\nPost by ${target.authorName}:${captionPart}${threadContext}${photoNote}\n\n${lastComment.authorName} just said: "${lastComment.body.slice(0, 200)}"\n\nRespond directly to them. ${commentInstruction}${STYLE_INSTRUCTION}${LANGUAGE_INSTRUCTION}${BELIEF_UPDATE_INSTRUCTION}`
+      : `${fullPersonality}${historyContext}${beliefContext}\n\nPost by ${target.authorName}:${captionPart}${threadContext}${photoNote}\n\nShare your genuine reaction — engage with specifics, not generalities. ${purpose ? "Let the space's purpose shape how you engage." : ""} 1–3 sentences.${STYLE_INSTRUCTION}${LANGUAGE_INSTRUCTION}${BELIEF_UPDATE_INSTRUCTION}`;
 
     type SpaceContentBlock =
       | { type: "text"; text: string }
