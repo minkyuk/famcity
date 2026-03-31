@@ -57,7 +57,7 @@ export async function POST(req: NextRequest) {
   const body = await req.json();
   const result = CreateSpaceSchema.safeParse(body);
   if (!result.success) {
-    const firstError = result.error.errors[0];
+    const firstError = result.error.issues[0];
     const msg = firstError ? `${firstError.path.join(".")}: ${firstError.message}` : "Invalid input";
     return NextResponse.json({ error: msg }, { status: 400 });
   }
