@@ -528,7 +528,7 @@ async function runSpaceAgentAction(
     select: {
       id: true, content: true, authorName: true, userId: true, spaceId: true, type: true, mediaUrl: true,
       media: { take: 10, orderBy: { order: "asc" }, select: { url: true } },
-      comments: { orderBy: { createdAt: "asc" }, take: 15, select: { authorName: true, body: true, createdAt: true } },
+      comments: { orderBy: { createdAt: "asc" }, take: 15, select: { id: true, parentId: true, authorName: true, body: true, createdAt: true } },
     },
   });
 
