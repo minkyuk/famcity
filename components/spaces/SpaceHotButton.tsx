@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState, useCallback, useRef } from "react";
+import { useSession } from "next-auth/react";
 
 interface SpaceSessionStatus {
   active: boolean;
@@ -20,11 +21,13 @@ function fmtCooldown(seconds: number): string {
   return `${seconds}s`;
 }
 
-export function SpaceHotButton({ spaceId, isAdmin }: { spaceId: string; isAdmin?: boolean }) {
+export function SpaceHotButton({ spaceId }: { spaceId: string }) {
+  const { data: session } = useSession();
+  const isAdmin = !!(session?.user as { isAdmin?: boolean } | undefined)?.isAdmin;
+
   const [status, setStatus] = useState<SpaceSessionStatus | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  // Local tick-down so the display updates every second without re-fetching
   const [remaining, setRemaining] = useState(0);
   const [cooldown, setCooldown] = useState(0);
   const tickRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -40,23 +43,19 @@ export function SpaceHotButton({ spaceId, isAdmin }: { spaceId: string; isAdmin?
     } catch {}
   }, [spaceId]);
 
-  // Poll every 15s to stay in sync; tick locally every second
   useEffect(() => {
     fetchStatus();
     const poll = setInterval(fetchStatus, 15_000);
     return () => clearInterval(poll);
   }, [fetchStatus]);
 
-  // Local countdown tick
   useEffect(() => {
     if (tickRef.current) clearInterval(tickRef.current);
     tickRef.current = setInterval(() => {
       setRemaining((r) => Math.max(0, r - 1));
       setCooldown((c) => Math.max(0, c - 1));
     }, 1000);
-    return () => {
-      if (tickRef.current) clearInterval(tickRef.current);
-    };
+    return () => { if (tickRef.current) clearInterval(tickRef.current); };
   }, []);
 
   const start = async () => {
@@ -69,7 +68,6 @@ export function SpaceHotButton({ spaceId, isAdmin }: { spaceId: string; isAdmin?
         setError(body.error ?? "Failed to start");
         return;
       }
-      // Immediately trigger one discussion round — don't wait for next cron tick
       fetch("/api/agents/discuss", { method: "POST" }).catch(() => {});
       await fetchStatus();
     } finally {
@@ -101,10 +99,10 @@ export function SpaceHotButton({ spaceId, isAdmin }: { spaceId: string; isAdmin?
   if (status.active && remaining > 0) {
     return (
       <button
-        onClick={isAdmin ? stop : undefined}
+        onClick={stop}
         disabled={loading}
-        title={isAdmin ? "Space buzz active — click to stop" : `Space buzz active — ${fmtCountdown(remaining)} left`}
-        className={`flex items-center gap-1.5 text-xs font-semibold text-violet-500 transition-colors disabled:opacity-50 ${isAdmin ? "hover:text-violet-700 cursor-pointer" : "cursor-default"}`}
+        title="Space buzz active — click to stop"
+        className="flex items-center gap-1.5 text-xs font-semibold text-violet-500 hover:text-violet-700 transition-colors disabled:opacity-50"
       >
         <span className="relative flex h-2 w-2 shrink-0">
           <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-violet-400 opacity-75" />
@@ -116,6 +114,19 @@ export function SpaceHotButton({ spaceId, isAdmin }: { spaceId: string; isAdmin?
   }
 
   if (cooldown > 0) {
+    if (isAdmin) {
+      // Admins can override cooldown
+      return (
+        <button
+          onClick={start}
+          disabled={loading}
+          title={`Cooldown (${fmtCooldown(cooldown)} left) — click to override`}
+          className="text-xs font-semibold text-gray-300 hover:text-violet-500 transition-colors disabled:opacity-50"
+        >
+          ⚡ {fmtCooldown(cooldown)}
+        </button>
+      );
+    }
     return (
       <span
         title={`Cooldown — usable again in ${fmtCooldown(cooldown)}`}
@@ -128,10 +139,10 @@ export function SpaceHotButton({ spaceId, isAdmin }: { spaceId: string; isAdmin?
 
   return (
     <button
-      onClick={isAdmin ? start : undefined}
+      onClick={start}
       disabled={loading}
-      title={isAdmin ? "Buzz the space — agents go live for 3 minutes (1 hr cooldown)" : "Space bolt (admin only)"}
-      className={`text-xs font-semibold transition-colors disabled:opacity-50 ${isAdmin ? "text-gray-400 hover:text-violet-500 cursor-pointer" : "text-gray-300 cursor-default"}`}
+      title="Buzz the space — agents go live for 3 minutes (20 min cooldown)"
+      className="text-xs font-semibold text-gray-400 hover:text-violet-500 transition-colors disabled:opacity-50"
     >
       ⚡
     </button>

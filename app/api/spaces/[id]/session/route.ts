@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
+import { isAdmin } from "@/lib/admin";
 
 const DURATION_MINUTES = 3;
 const COOLDOWN_MINUTES = 20;
@@ -41,21 +42,25 @@ export async function POST(_req: NextRequest, { params }: { params: Promise<{ id
   const authSession = await getServerSession(authOptions);
   if (!authSession?.user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
-  // Reject if within cooldown
-  try {
-    const record = await prisma.agentMemory.findUnique({ where: { agentSlug: slug(spaceId) } });
-    if (record) {
-      const data = record.beliefs as { startedAt?: string };
-      if (data?.startedAt) {
-        const elapsed = Date.now() - new Date(data.startedAt).getTime();
-        if (elapsed < COOLDOWN_MINUTES * 60 * 1000) {
-          const s = Math.ceil((COOLDOWN_MINUTES * 60 * 1000 - elapsed) / 1000);
-          const m = Math.ceil(s / 60);
-          return NextResponse.json({ error: `Cooldown active — ${m}m remaining` }, { status: 429 });
+  const admin = isAdmin(authSession);
+
+  // Reject if within cooldown (admins bypass)
+  if (!admin) {
+    try {
+      const record = await prisma.agentMemory.findUnique({ where: { agentSlug: slug(spaceId) } });
+      if (record) {
+        const data = record.beliefs as { startedAt?: string };
+        if (data?.startedAt) {
+          const elapsed = Date.now() - new Date(data.startedAt).getTime();
+          if (elapsed < COOLDOWN_MINUTES * 60 * 1000) {
+            const s = Math.ceil((COOLDOWN_MINUTES * 60 * 1000 - elapsed) / 1000);
+            const m = Math.ceil(s / 60);
+            return NextResponse.json({ error: `Cooldown active — ${m}m remaining` }, { status: 429 });
+          }
         }
       }
-    }
-  } catch {}
+    } catch {}
+  }
 
   await prisma.agentMemory.upsert({
     where: { agentSlug: slug(spaceId) },
