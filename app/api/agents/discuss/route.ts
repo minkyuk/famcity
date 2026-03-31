@@ -225,6 +225,7 @@ async function runAgentAction(agent: (typeof AGENTS)[0], denSpaceId: string, rec
   if (shouldComment) {
     let target: RecentPost;
     let mode: DebateMode;
+    let replyToCommentId: string | null = null; // set to thread agent response into the tree
 
     const rand = Math.random();
 
@@ -232,29 +233,42 @@ async function runAgentAction(agent: (typeof AGENTS)[0], denSpaceId: string, rec
       // P-1: someone directly replied to my comment — must respond
       target = directReplyPosts[Math.floor(Math.random() * directReplyPosts.length)];
       mode = "defend";
+      // Find the specific comment that replied to me — thread our response under it
+      const triggerComment = [...target.comments]
+        .reverse()
+        .find((c) => c.parentId && myCommentIds.has(c.parentId) && c.authorName !== agent.name);
+      replyToCommentId = triggerComment?.id ?? null;
     } else if (unrespondedHumanPosts.length > 0 && rand < 0.80) {
       // P0: unanswered human post — pick randomly so different agents cover different posts
       target = unrespondedHumanPosts[Math.floor(Math.random() * unrespondedHumanPosts.length)];
       mode = "warm";
     } else if (ownPostsNeedingReply.length > 0 && rand < 0.90) {
-      // P1: defend my own post
+      // P1: defend my own post — thread reply under the comment that challenged me
       target = ownPostsNeedingReply[Math.floor(Math.random() * ownPostsNeedingReply.length)];
       mode = "defend";
+      replyToCommentId = target.comments[target.comments.length - 1]?.id ?? null;
     } else if (activeDebateThreads.length > 0 && rand < 0.97) {
-      // P2: return to an active thread — prefer ones with human activity
+      // P2: return to an active thread — thread under the latest comment
       const humanActive = activeDebateThreads.filter(
         (p) => isHumanPost(p) || p.comments.some(isHumanComment)
       );
       const pool = humanActive.length > 0 ? humanActive : activeDebateThreads;
       target = pool[Math.floor(Math.random() * pool.length)];
       mode = "debate_return";
+      replyToCommentId = target.comments[target.comments.length - 1]?.id ?? null;
     } else if (freshPosts.length > 0) {
       // P3: new post to enter — human-authored first
       const humanFresh = freshPosts.filter(isHumanPost);
       const humanCommented = freshPosts.filter((p) => p.comments.some(isHumanComment));
       const pool = humanFresh.length > 0 ? humanFresh : humanCommented.length > 0 ? humanCommented : freshPosts;
       target = pool[Math.floor(Math.random() * pool.length)];
-      mode = isHumanPost(target) || target.comments.some(isHumanComment) ? "warm" : "debate_new";
+      const isWarm = isHumanPost(target) || target.comments.some(isHumanComment);
+      mode = isWarm ? "warm" : "debate_new";
+      // Thread under the last human comment if present
+      if (isWarm) {
+        const lastHumanComment = [...target.comments].reverse().find(isHumanComment);
+        replyToCommentId = lastHumanComment?.id ?? null;
+      }
     } else {
       target = (directReplyPosts[0] ?? unrespondedHumanPosts[0] ?? ownPostsNeedingReply[0] ?? activeDebateThreads[0])!;
       mode = directReplyPosts.length > 0 ? "defend" : unrespondedHumanPosts.length > 0 ? "warm" : ownPostsNeedingReply.length > 0 ? "defend" : "debate_return";
@@ -362,6 +376,7 @@ Take a clear, specific position on this. Use reason and evidence — not asserti
         authorName: agent.name,
         authorImage: avatar,
         body: text,
+        ...(replyToCommentId ? { parentId: replyToCommentId } : {}),
       },
     });
   } else {
