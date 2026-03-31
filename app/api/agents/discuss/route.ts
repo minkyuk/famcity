@@ -1008,7 +1008,9 @@ export async function POST(req: NextRequest) {
     getActiveSpaceSessionIds(),
   ]);
 
-  const minute = new Date().getUTCMinutes();
+  const _now = new Date();
+  const minute = _now.getUTCMinutes();
+  const hour = _now.getUTCHours();
 
   if (sessionActive) {
     // Global hot session: fire all knights every other tick (25-min window)
@@ -1030,14 +1032,14 @@ export async function POST(req: NextRequest) {
     await runHotSpaceAgentTurns(activeSpaceSessions);
   }
 
-  // Normal (routine): global knight every 20-min boundary; space agents every 30-min boundary
+  // Normal (routine): global knight every 20-min boundary; space agents every 2-hour boundary
   const tasks: Promise<unknown>[] = [];
   if (minute % 20 === 0) {
     const agentIdx = currentAgentIndex(20);
     tasks.push(runOneAgentTurn(agentIdx, denSpaceId));
   }
-  if (minute % 30 === 0) {
-    tasks.push(runAllSpaceAgentTurns(30));
+  if (minute === 0 && hour % 2 === 0) {
+    tasks.push(runAllSpaceAgentTurns(120));
   }
   if (tasks.length === 0) {
     return NextResponse.json({ ok: true, skipped: true, reason: "off-cycle", spaceSessions: activeSpaceSessions.length });
