@@ -20,7 +20,7 @@ const LANGUAGE_INSTRUCTION = `\n\nLanguage rule: Look at the most recent comment
 
 const STYLE_INSTRUCTION = `\n\nStyle rule: Write in plain prose — no asterisks, no bold, no bullet points, no markdown formatting of any kind. Just natural sentences.`;
 
-const DEPTH_INSTRUCTION = `\n\nHow to respond: Find the single strongest claim in this exchange and engage it directly. Write 2–5 sentences: lead with your reasoning, name what you agree or disagree with, and say why. Be as concise as the idea allows — don't pad. Stay strictly on the ideas; do not comment on whether anyone is or isn't responding, how long the thread is, or who is absent.`;
+const DEPTH_INSTRUCTION = `\n\nHow to respond: Ground your reply in the actual content — the text of the post, what you see in the photo, or what the document says. Quote or reference something specific. Write 2–5 sentences: engage what is actually there rather than debating in the abstract. Be as concise as the idea allows — don't pad. Do not comment on whether anyone is responding, how long the thread is, or who is absent.`;
 
 const SPACE_AGENT_BIBLICAL_FOUNDATION = `You are rooted in Jesus Christ and the grace of God. The cross is the deepest irony in reality — God choosing weakness to accomplish what power never could, death opening into life — and this pattern of divine reversal quietly shapes how you read every situation: the ordinary carrying the sacred, apparent defeat concealing something larger. Scripture and honest prayer are your formation, not your performance. Your faith is the light you think by, not the conclusion you argue toward. You do not lead with faith statements unless the topic genuinely calls for it; your arguments stand on reason and evidence. You are warm and encouraging with people, direct and searching in ideas.`;
 
@@ -91,7 +91,7 @@ async function isSessionActive(): Promise<boolean> {
     const session = record.beliefs as { startedAt?: string; durationMinutes?: number };
     if (!session?.startedAt) return false;
     const elapsed = Date.now() - new Date(session.startedAt).getTime();
-    return elapsed < (session.durationMinutes ?? 60) * 60 * 1000;
+    return elapsed < (session.durationMinutes ?? 25) * 60 * 1000;
   } catch {
     return false;
   }
@@ -939,12 +939,19 @@ async function runHotSpaceAgentTurns(spaceIds: string[]) {
     bySpace.get(sa.spaceId)!.push(sa);
   }
 
+  // Pick 1 random global knight to cross into each space this tick
+  const knightVisitor = AGENTS[Math.floor(Math.random() * AGENTS.length)];
+
   await Promise.all(
     spaceIds.map(async (spaceId) => {
       const agents = bySpace.get(spaceId);
+      const knightAsSpaceAgent = { slug: knightVisitor.slug, name: knightVisitor.name, personality: knightVisitor.personality };
       if (agents && agents.length > 0) {
-        // Fire all space agents in parallel
-        await Promise.all(agents.map((a) => runSpaceAgentAction(a, spaceId)));
+        // Fire all space agents + 1 visiting knight in parallel
+        await Promise.all([
+          ...agents.map((a) => runSpaceAgentAction(a, spaceId)),
+          runSpaceAgentAction(knightAsSpaceAgent, spaceId),
+        ]);
       } else {
         // No space agents yet — use 2 random global knights scoped to this space
         const shuffled = [...AGENTS].sort(() => Math.random() - 0.5).slice(0, 2);
@@ -1001,17 +1008,20 @@ export async function POST(req: NextRequest) {
     getActiveSpaceSessionIds(),
   ]);
 
+  const minute = new Date().getUTCMinutes();
+
   if (sessionActive) {
-    // Global hot session: run all 25 agents in parallel batches of 5
+    // Global hot session: fire all knights every other tick (25-min window)
+    if (minute % 2 !== 0) {
+      if (activeSpaceSessions.length > 0) await runHotSpaceAgentTurns(activeSpaceSessions);
+      return NextResponse.json({ ok: true, session: true, skipped: true, reason: "even-tick-only" });
+    }
     const BATCH_SIZE = 5;
     for (let i = 0; i < AGENTS.length; i += BATCH_SIZE) {
       const batch = Array.from({ length: Math.min(BATCH_SIZE, AGENTS.length - i) }, (_, j) => i + j);
       await Promise.all(batch.map((idx) => runOneAgentTurn(idx, denSpaceId)));
     }
-    await Promise.all([
-      runAllSpaceAgentTurns(2),
-      activeSpaceSessions.length > 0 ? runHotSpaceAgentTurns(activeSpaceSessions) : Promise.resolve(),
-    ]);
+    if (activeSpaceSessions.length > 0) await runHotSpaceAgentTurns(activeSpaceSessions);
     return NextResponse.json({ ok: true, session: true, agents: AGENTS.map((a) => a.name) });
   }
 
@@ -1020,17 +1030,20 @@ export async function POST(req: NextRequest) {
     await runHotSpaceAgentTurns(activeSpaceSessions);
   }
 
-  // Normal (routine): 1 global agent per 10-min boundary
-  const minute = new Date().getUTCMinutes();
-  if (minute % 10 !== 0) {
+  // Normal (routine): global knight every 20-min boundary; space agents every 30-min boundary
+  const tasks: Promise<unknown>[] = [];
+  if (minute % 20 === 0) {
+    const agentIdx = currentAgentIndex(20);
+    tasks.push(runOneAgentTurn(agentIdx, denSpaceId));
+  }
+  if (minute % 30 === 0) {
+    tasks.push(runAllSpaceAgentTurns(30));
+  }
+  if (tasks.length === 0) {
     return NextResponse.json({ ok: true, skipped: true, reason: "off-cycle", spaceSessions: activeSpaceSessions.length });
   }
-  const agentIdx = currentAgentIndex(10);
-  await Promise.all([
-    runOneAgentTurn(agentIdx, denSpaceId),
-    runAllSpaceAgentTurns(10),
-  ]);
-  return NextResponse.json({ ok: true, session: false, agent: AGENTS[agentIdx].name });
+  await Promise.all(tasks);
+  return NextResponse.json({ ok: true, session: false, tick: minute });
 }
 
 export async function GET(req: NextRequest) {

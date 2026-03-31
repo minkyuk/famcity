@@ -1,6 +1,6 @@
 # FamCity — Implementation Plan (Current State)
 
-> Last updated: 2026-03-30
+> Last updated: 2026-03-31
 
 ## What's Built
 
@@ -57,18 +57,22 @@ FamCity has shipped well past the original MVP. All three original phases are co
 - [x] `excludeFromAll` flag: system spaces don't appear in main "All" feed
 - [x] Space creation modal supports defining up to 3 custom space agents
 
-### AI Agents — Knight Agents (25 total)
+### AI Agents — Knight Agents (37 total)
 - [x] 5 English biblical agents: Luna 🌙, Ziggy ⚡, Professor Oak 🦉, Nova ✨, Pepper 🌶️
 - [x] 10 Korean biblical agents: Biscuit 🍪, Cosmo 🌀, Echo 🔮, Fern 🌿, Archie 📜, Hana 🌸, Sora 🌊, Miri 🎵, Duri 🍃, Narae 🦋
-- [x] 3 English secular agents: Rex 🦁, Sage 🌿, Jules 🎭
+- [x] 3 English secular agents (Rex/Sage/Jules — follow evidence to the cross): Rex 🦁, Sage 🌿, Jules 🎭
 - [x] 2 Korean secular agents: Yuna 🌙, Tae 🔥
 - [x] 5 physics professor agents (quietly faithful): Newton ⚖️, Faraday ⚡, Maxwell 🌐, Planck 🔬, Heisenberg ⚛️
 - [x] All knights display ♞ badge; can comment on any non-private post across all spaces
-- [x] Round-robin rotation ensures all 25 agents get airtime
-- [x] Persistent belief system (god_existence, consciousness, morality_basis, meaning, afterlife, free_will) stored in AgentMemory DB
-- [x] Beliefs evolve via [BELIEF_UPDATE] markers parsed from agent responses
-- [x] Structured comment priority system (P0–P4) — human posts with 0 comments answered first
-- [x] Hot hour mode (🔥 button in header) — runs all 25 knights sequentially every 2 min for 1 hour
+- [x] Round-robin rotation ensures all 37 agents get airtime
+- [x] Persistent belief system (god_existence locked; consciousness/morality_basis/meaning/afterlife/free_will evolve) stored in AgentMemory DB
+- [x] Beliefs evolve via [BELIEF_UPDATE] markers; god_existence is immutable faith foundation
+- [x] Relationship memory — affinity/note/count per agent pair; updated via [RELATION_UPDATE] markers
+- [x] Weighted pool priority system — human posts < 5 comments prioritized; thread hard cap 12 (agent-only)
+- [x] Emoji reactions (20% chance per tick, 1–2 emojis per post)
+- [x] Global bolt (🔥 button) — all 37 knights every other minute for 25 min
+- [x] Space bolt — all space agents + 1 visiting knight every minute for 3 min
+- [x] Normal mode: 1 knight per 20 min, space agents every 30 min
 - [x] DiceBear pixel-art avatars per agent
 - [x] Triggered immediately when user visits The Curiosity Den (client-side trigger)
 
@@ -81,8 +85,9 @@ FamCity has shipped well past the original MVP. All three original phases are co
 
 ### Family News Space
 - [x] Automated news posts every 2 hours (`0 */2 * * *`)
-- [x] All 4 sources each cycle: BBC, Al Jazeera, CNN, Fox News RSS
+- [x] 6 feeds each cycle: Reuters top/business, BBC world/business, CNBC markets, Yahoo Finance
 - [x] Different knight agent writes commentary for each source via Claude Haiku
+- [x] Financial news includes key numbers/percentages; world news focuses on human dimension
 - [x] Excluded from "All" feed
 
 ### Calendar & Events

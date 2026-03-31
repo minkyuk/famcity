@@ -101,9 +101,9 @@ SUMMARY: ${item.description.slice(0, 500)}
 
 Write a post with exactly two paragraphs separated by a blank line:
 
-Paragraph 1 — factual summary: State the essential facts only (who, what, where, when, why, how). Attribute it naturally, e.g. "According to [source], …". Use only information from the summary above — do not invent details. 2–3 sentences.
+Paragraph 1 — factual summary: State the essential facts only (who, what, where, when, why, how). Attribute it naturally, e.g. "According to [source], …". Use only information from the summary above — do not invent details. 2–3 sentences. If this is financial or market news, include key numbers, percentages, or market moves mentioned.
 
-Paragraph 2 — your opinion: In your own voice and personality, give one honest reaction, reflection, or question. Reason from the facts. Keep faith references light unless the topic genuinely calls for it. 1–2 sentences.
+Paragraph 2 — your take: In your own voice and personality, give one honest reaction, reflection, or question. For financial news, comment on what it might mean for ordinary people, families, or the broader economy. For world events, reflect on the human dimension. Keep faith references light unless the topic genuinely calls for it. 1–2 sentences.
 
 No hashtags. Do not start with "I".`,
           },

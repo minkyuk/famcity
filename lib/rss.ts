@@ -13,6 +13,12 @@ const FEED_SOURCE_NAMES: Record<string, string> = {
   "rss.cnn.com": "CNN",
   "feeds.foxnews.com": "Fox News",
   "sciencedaily.com": "Science Daily",
+  "feeds.reuters.com": "Reuters",
+  "rss.reuters.com": "Reuters",
+  "feeds.finance.yahoo.com": "Yahoo Finance",
+  "finance.yahoo.com": "Yahoo Finance",
+  "cnbc.com": "CNBC",
+  "marketwatch.com": "MarketWatch",
 };
 
 export function feedSourceName(url: string): string {
@@ -53,17 +59,20 @@ function extract(xml: string, tag: string): string {
 }
 
 // Good free RSS feeds — no API key needed
-// Balanced mix of four major outlets
+// Mix of top global news + financial/markets coverage
 export const NEWS_FEEDS = [
-  // BBC
+  // Reuters — top global news
+  "https://feeds.reuters.com/reuters/topNews",
+  // Reuters — business & finance
+  "https://feeds.reuters.com/reuters/businessNews",
+  // BBC World
   "https://feeds.bbci.co.uk/news/world/rss.xml",
-  "https://feeds.bbci.co.uk/news/technology/rss.xml",
-  // Al Jazeera
-  "https://www.aljazeera.com/xml/rss/all.xml",
-  // CNN
-  "http://rss.cnn.com/rss/edition.rss",
-  // Fox News
-  "https://feeds.foxnews.com/foxnews/latest",
+  // BBC Business
+  "https://feeds.bbci.co.uk/news/business/rss.xml",
+  // CNBC — markets
+  "https://www.cnbc.com/id/10000664/device/rss/rss.html",
+  // Yahoo Finance
+  "https://finance.yahoo.com/news/rssindex",
 ];
 
 export const SCIENCE_FEEDS = [
