@@ -4,7 +4,7 @@ import { authOptions } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 
 const DURATION_MINUTES = 3;
-const COOLDOWN_MINUTES = 60;
+const COOLDOWN_MINUTES = 20;
 
 function slug(spaceId: string) {
   return `$$space-session:${spaceId}`;

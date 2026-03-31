@@ -12,6 +12,7 @@ import { AgentActivityTrigger } from "@/components/spaces/AgentActivityTrigger";
 import { InlineComposeCard } from "@/components/shared/InlineComposeCard";
 import { SpaceHotButton } from "@/components/spaces/SpaceHotButton";
 import { DeleteSpaceButton } from "@/components/spaces/DeleteSpaceButton";
+import { AddAgentButton } from "@/components/spaces/AddAgentButton";
 import { isAdmin } from "@/lib/admin";
 
 export default async function SpacePage({
@@ -100,6 +101,7 @@ export default async function SpacePage({
           <div className="flex items-center gap-2">
             <SpaceHotButton spaceId={id} />
             {!space.isSystem && <InviteButton inviteCode={space.inviteCode} />}
+            {!space.isSystem && <AddAgentButton spaceId={id} />}
             {!space.isSystem && (
               <DeleteSpaceButton spaceId={id} spaceName={space.name} />
             )}
