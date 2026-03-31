@@ -102,7 +102,7 @@ function CommentRow({
   const canDelete = isOwn || isAdmin;
 
   return (
-    <div className={depth > 0 ? "ml-8 border-l-2 border-gray-100 pl-3" : ""}>
+    <div className={depth > 0 ? "ml-3 border-l border-gray-100 pl-2" : ""}>
       <div className="flex gap-2">
         <Avatar name={c.authorName} image={c.authorImage} />
         <div className="bg-gray-50 rounded-xl px-3 py-2 flex-1 min-w-0">
@@ -177,7 +177,7 @@ function CommentRow({
             <CommentRow
               key={r.id}
               c={r}
-              depth={depth + 1}
+              depth={Math.min(depth + 1, 2)}
               replies={allComments.filter((x) => x.parentId === r.id)}
               allComments={allComments}
               currentUserId={currentUserId}
