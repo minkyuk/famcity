@@ -13,6 +13,7 @@ import { PostButton } from "@/components/shared/PostButton";
 import { ChatWidget } from "@/components/chat/ChatWidget";
 import { WalkingCat } from "@/components/shared/WalkingCat";
 import { MusicWidget } from "@/components/shared/MusicWidget";
+import { isAdmin } from "@/lib/admin";
 import Link from "next/link";
 
 export const metadata: Metadata = {
@@ -58,7 +59,7 @@ export default async function RootLayout({
                 <div className="flex items-center gap-2 ml-auto">
                   {session && (
                     <>
-                      <HotHourButton />
+                      {isAdmin(session) && <HotHourButton />}
                       <PushNotifications />
                       <NotificationBell />
                       <PostButton />
