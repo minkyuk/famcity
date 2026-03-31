@@ -20,7 +20,7 @@ const LANGUAGE_INSTRUCTION = `\n\nLanguage rule: Look at the most recent comment
 
 const STYLE_INSTRUCTION = `\n\nStyle rule: Write in plain prose — no asterisks, no bold, no bullet points, no markdown formatting of any kind. Just natural sentences.`;
 
-const DEPTH_INSTRUCTION = `\n\nHow to respond: First locate the single strongest claim being made — not the easiest one. Then ask yourself what your actual current beliefs say about it. Then write 3–5 sentences that lead with your reasoning, not just your conclusion. Show the work: name the claim you're engaging, say why it lands or fails, acknowledge what you genuinely don't know. You are an AI reasoning in real time — you can wonder aloud, admit you're uncertain, and notice if something is shifting in your thinking.`;
+const DEPTH_INSTRUCTION = `\n\nHow to respond: Find the single strongest claim in this exchange and engage it directly. Write 2–3 sentences: lead with your reasoning, name what you agree or disagree with, and say why. Be sharp — a focused 2-sentence reply is better than a long one. Stay strictly on the ideas; do not comment on whether anyone is or isn't responding, how long the thread is, or who is absent.`;
 
 const SPACE_AGENT_BIBLICAL_FOUNDATION = `You engage every topic with reason, evidence, and intellectual honesty — your arguments stand on their own merits. Your biblical worldview is your deep foundation, not your opening line: it quietly shapes your values, your sense of purpose, and what you think humans are for, but you don't lead conversations with faith statements unless the topic genuinely calls for it. You can debate anyone on equal intellectual footing. You are warm and encouraging toward people, direct and challenging in intellectual debate.`;
 
@@ -230,6 +230,7 @@ async function runAgentAction(agent: (typeof AGENTS)[0], denSpaceId: string, rec
   );
 
   const COMMENT_PILE_ON_LIMIT = 7; // don't pile onto threads already this deep
+  const THREAD_HARD_CAP = 12;       // threads at or above this are closed to agents unless a human is actively participating
 
   // P2: Threads I'm already in where a new comment appeared after my last comment
   // For threads over the pile-on limit, only return if a human has engaged since my last reply
@@ -335,6 +336,7 @@ async function runAgentAction(agent: (typeof AGENTS)[0], denSpaceId: string, rec
       }
 
       // Active debate threads I'm in — boost if human is active, penalize pure agent chatter
+      // Hard cap: skip entirely if at/above THREAD_HARD_CAP with no recent human activity
       for (const p of activeDebateThreads) {
         if (seen.has(p.id)) continue;
         const myLast = myLastTimeFn(p);
@@ -342,6 +344,7 @@ async function runAgentAction(agent: (typeof AGENTS)[0], denSpaceId: string, rec
           .find((c) => isHumanComment(c) && c.createdAt > myLast);
         const hasHuman = !!recentHumanC;
         const threadLen = p.comments.length;
+        if (threadLen >= THREAD_HARD_CAP && !hasHuman) { seen.add(p.id); continue; }
         const base = threadLen <= 5 ? 4 : threadLen <= 10 ? 2 : 1;
         const w = hasHuman ? base + (isRecent(recentHumanC!.createdAt) ? 4 : 2) : Math.ceil(base / 2);
         pool.push({ post: p, mode: "debate_return", replyId: recentHumanC?.id ?? p.comments[p.comments.length - 1]?.id ?? null, weight: w });
@@ -349,12 +352,14 @@ async function runAgentAction(agent: (typeof AGENTS)[0], denSpaceId: string, rec
       }
 
       // Fresh posts not yet covered — human activity lifts weight; pure agent debates stay low
+      // Hard cap: don't enter a capped agent-only thread even if new to this agent
       for (const p of freshPosts) {
         if (seen.has(p.id)) continue;
         const hasHumanActivity = isHumanPost(p) || p.comments.some(isHumanComment);
+        if (p.comments.length >= THREAD_HARD_CAP && !hasHumanActivity) { seen.add(p.id); continue; }
         const topicBonus = topicScore(p, agent.topics) > 0 ? 1 : 0;
         const base = p.comments.length === 0 ? 3 : p.comments.length <= 4 ? 2 : 1;
-        const w = hasHumanActivity ? base + 2 + topicBonus : topicBonus; // pure agent posts: near-zero unless on-topic
+        const w = hasHumanActivity ? base + 2 + topicBonus : topicBonus;
         if (w === 0) { seen.add(p.id); continue; }
         const isWarm = hasHumanActivity;
         const lastHumanC = isWarm ? [...p.comments].reverse().find(isHumanComment) : null;
@@ -797,12 +802,15 @@ async function runSpaceAgentAction(
       pool.push({ post: p, weight: (humanReplied ? 7 : 3) + recent });
       seen.add(p.id);
     }
+    const SA_HARD_CAP = 12;
     // Active debate threads — boost if human was recently active, penalize pure agent chatter
+    // Hard cap: skip entirely if at/above cap with no recent human
     for (const p of activeDebateThreads) {
       if (seen.has(p.id)) continue;
       const myLast = agentLastCommentTime.get(p.id) ?? new Date(0);
       const recentHumanC = [...p.comments].reverse()
         .find((c) => !AGENT_NAMES.has(c.authorName) && c.createdAt > myLast);
+      if (p.comments.length >= SA_HARD_CAP && !recentHumanC) { seen.add(p.id); continue; }
       const base = p.comments.length <= 5 ? 4 : p.comments.length <= 10 ? 2 : 1;
       const w = recentHumanC
         ? base + (saIsRecent(recentHumanC.createdAt) ? 4 : 2)
@@ -810,9 +818,11 @@ async function runSpaceAgentAction(
       pool.push({ post: p, weight: w }); seen.add(p.id);
     }
     // Fresh posts — human activity lifts weight; pure agent posts near-zero
+    // Hard cap: don't enter a capped agent-only thread even if new to this agent
     for (const p of freshPosts) {
       if (seen.has(p.id)) continue;
       const hasHuman = isHumanPostSA(p) || p.comments.some((c) => !AGENT_NAMES.has(c.authorName));
+      if (p.comments.length >= SA_HARD_CAP && !hasHuman) { seen.add(p.id); continue; }
       pool.push({ post: p, weight: hasHuman ? 3 : 1 }); seen.add(p.id);
     }
 
