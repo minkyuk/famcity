@@ -68,33 +68,32 @@ export async function POST(req: NextRequest) {
     inviteCode = generateInviteCode();
   }
 
-  // Use a transaction so that if agent creation fails, the whole thing rolls back
-  const space = await prisma.$transaction(async (tx) => {
-    const s = await tx.space.create({
-      data: {
-        name: result.data.name,
-        description: result.data.description,
-        inviteCode,
-        members: {
-          create: { userId: session.user.id, role: "OWNER" },
-        },
+  const space = await prisma.space.create({
+    data: {
+      name: result.data.name,
+      description: result.data.description,
+      inviteCode,
+      members: {
+        create: { userId: session.user.id, role: "OWNER" },
       },
-      include: { _count: { select: { members: true, posts: true } } },
-    });
-
-    if (result.data.agents && result.data.agents.length > 0) {
-      await Promise.all(
-        result.data.agents.map((a) => {
-          const slug = `sa-${s.id.slice(0, 8)}-${a.name.toLowerCase().replace(/[^a-z0-9]/g, "-")}`;
-          return tx.spaceAgent.create({
-            data: { spaceId: s.id, name: a.name, personality: a.personality, slug },
-          });
-        })
-      );
-    }
-
-    return s;
+    },
+    include: { _count: { select: { members: true, posts: true } } },
   });
+
+  if (result.data.agents && result.data.agents.length > 0) {
+    try {
+      for (const a of result.data.agents) {
+        const slug = `sa-${space.id.slice(0, 8)}-${a.name.toLowerCase().replace(/[^a-z0-9]/g, "-")}-${Date.now().toString(36)}`;
+        await prisma.spaceAgent.create({
+          data: { spaceId: space.id, name: a.name, personality: a.personality, slug },
+        });
+      }
+    } catch (err) {
+      // Roll back the space so the user doesn't end up with a partial/empty space
+      await prisma.space.delete({ where: { id: space.id } }).catch(() => {});
+      throw err;
+    }
+  }
 
   return NextResponse.json(space, { status: 201 });
 }
