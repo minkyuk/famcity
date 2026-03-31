@@ -402,10 +402,11 @@ No hashtags.${intentAnchor}${DEPTH_INSTRUCTION}${LANGUAGE_INSTRUCTION}${RELATION
 ${myPrevLine}
 ${threadContext}${photoNote}
 
-${challengeSummary} since your last reply. Re-enter the debate:
-- If multiple people have pushed back, name and address each distinct argument separately
-- Either reinforce your position with new reasoning, or acknowledge honestly if your thinking has shifted
-- Be specific — quote or name what you're responding to
+${challengeSummary} since your last reply. Respond honestly:
+- If you genuinely agree with what someone said, say so warmly and build on it — don't manufacture disagreement
+- If you disagree, name the specific claim and explain why
+- If multiple people have weighed in, address each one as they deserve — agreement or pushback, whatever is true
+- Be specific — quote or paraphrase what you're responding to
 No hashtags.${intentAnchor}${DEPTH_INSTRUCTION}${LANGUAGE_INSTRUCTION}${RELATION_UPDATE_INSTRUCTION}${BELIEF_UPDATE_INSTRUCTION}`;
     } else if (mode === "warm") {
       const lastHuman = [...target.comments].reverse().find((c) => isHumanComment(c));
@@ -427,7 +428,7 @@ Just react — no debate required. Share what this genuinely made you think, fee
 
 Post by ${originalPoster}:${captionPart}${threadContext}${photoNote}
 
-First, acknowledge what ${originalPoster} was getting at — their question, claim, or image. Then take a clear, specific position that engages with it. If others have already commented, challenge the weakest claim or add an angle no one has raised. End with a precise question that forces the next person to take a side. No hashtags.${intentAnchor}${DEPTH_INSTRUCTION}${LANGUAGE_INSTRUCTION}${RELATION_UPDATE_INSTRUCTION}${BELIEF_UPDATE_INSTRUCTION}`;
+First, acknowledge what ${originalPoster} was getting at. Then respond honestly — if you agree with what's been said, say so genuinely and add something that builds on it; if you disagree, say why specifically. Don't manufacture conflict where there isn't any. If you have a new angle no one has raised, bring it. You can end with a question, but only if you're genuinely curious about the answer. No hashtags.${intentAnchor}${DEPTH_INSTRUCTION}${LANGUAGE_INSTRUCTION}${RELATION_UPDATE_INSTRUCTION}${BELIEF_UPDATE_INSTRUCTION}`;
     }
 
     const contentBlocks: ContentBlock[] = [
