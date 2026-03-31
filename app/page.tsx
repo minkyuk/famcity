@@ -16,20 +16,30 @@ export default async function HomePage() {
   const session = await getServerSession(authOptions);
   if (!session?.user) redirect("/login");
 
-  const [memberships, excludedSpaces] = await Promise.all([
+  const [memberships, systemOpenSpaces, excludedSpaces] = await Promise.all([
     prisma.spaceMember.findMany({ where: { userId: session.user.id }, select: { spaceId: true } }),
+    // System spaces always visible in All feed (not excluded)
+    prisma.space.findMany({ where: { isSystem: true, excludeFromAll: false }, select: { id: true } }),
     prisma.space.findMany({ where: { excludeFromAll: true }, select: { id: true } }),
   ]);
   const excludedIds = new Set(excludedSpaces.map((s) => s.id));
-  const spaceIds = memberships.map((m) => m.spaceId).filter((id) => !excludedIds.has(id));
+  const systemOpenIdSet = new Set(systemOpenSpaces.map((s) => s.id));
+  const memberSpaceIds = memberships.map((m) => m.spaceId).filter((id) => !excludedIds.has(id));
+
+  // All spaces for the feed = member spaces + always-visible system spaces
+  const spaceIds = [...new Set([...memberSpaceIds, ...systemOpenSpaces.map((s) => s.id)])];
+
+  // Co-member computation uses ONLY private (non-system) spaces so that
+  // system spaces shared by everyone don't inflate co-member lists
+  const privateSpaceIds = memberSpaceIds.filter((id) => !systemOpenIdSet.has(id));
 
   // Build userId -> first shared space name for "via 👥" label
   const firstSharedSpaceByUser = new Map<string, string>();
   let coMemberIds: string[] = [];
-  if (spaceIds.length > 0) {
+  if (privateSpaceIds.length > 0) {
     const [coMemberships, spaceNames] = await Promise.all([
-      prisma.spaceMember.findMany({ where: { spaceId: { in: spaceIds } }, select: { userId: true, spaceId: true } }),
-      prisma.space.findMany({ where: { id: { in: spaceIds } }, select: { id: true, name: true } }),
+      prisma.spaceMember.findMany({ where: { spaceId: { in: privateSpaceIds } }, select: { userId: true, spaceId: true } }),
+      prisma.space.findMany({ where: { id: { in: privateSpaceIds } }, select: { id: true, name: true } }),
     ]);
     const spaceNameById = new Map(spaceNames.map((s) => [s.id, s.name]));
     for (const m of coMemberships) {
