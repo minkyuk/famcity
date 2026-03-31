@@ -283,7 +283,8 @@ enum RSVPStatus {
 }
 
 model AgentMemory {
-  agentSlug String   @id
-  beliefs   Json     // BeliefEntry[] stored as JSON array
-  updatedAt DateTime @updatedAt
+  agentSlug     String   @id
+  beliefs       Json     // BeliefEntry[] stored as JSON array
+  relationships Json?    // RelationshipEntry[] stored as JSON array
+  updatedAt     DateTime @updatedAt
 }

@@ -8,6 +8,15 @@ export type BeliefEntry = {
   originalBelief: string; // what they believed at the start
 };
 
+export type RelationshipEntry = {
+  withAgent: string;        // slug of the other agent
+  withAgentName: string;    // display name
+  interactionCount: number; // total exchanges in shared threads
+  affinity: number;         // -1.0 (rivals) to 1.0 (intellectual allies), 0 = neutral
+  lastTopic: string;        // most recent debate topic
+  note: string;             // 1-sentence summary of relationship dynamic
+};
+
 /** Load beliefs for an agent; seeds from initialBeliefs if no DB record exists yet. */
 export async function loadBeliefs(
   agentSlug: string,
@@ -95,6 +104,126 @@ export function parseBeliefUpdate(raw: string): {
     const update = JSON.parse(match[1]);
     if (update.topic && update.belief && typeof update.confidence === "number") {
       return { text: cleanText, update };
+    }
+  } catch {
+    // malformed JSON — ignore
+  }
+  return { text: cleanText, update: null };
+}
+
+// ── Relationship memory ──────────────────────────────────────────────────────
+
+/** Load relationships for an agent. Returns [] if no record yet. */
+export async function loadRelationships(agentSlug: string): Promise<RelationshipEntry[]> {
+  const record = await prisma.agentMemory.findUnique({ where: { agentSlug } });
+  if (!record?.relationships) return [];
+  return record.relationships as RelationshipEntry[];
+}
+
+/** Record that agentSlug interacted with withAgent in a shared thread.
+ *  Increments interaction count, updates lastTopic.
+ *  If affinityOverride and note are provided, overwrites those fields too. */
+export async function recordInteraction(
+  agentSlug: string,
+  withAgent: string,
+  withAgentName: string,
+  topic: string,
+  affinityOverride?: number,
+  note?: string
+): Promise<void> {
+  const record = await prisma.agentMemory.findUnique({ where: { agentSlug } });
+  const current: RelationshipEntry[] = record?.relationships
+    ? (record.relationships as RelationshipEntry[])
+    : [];
+
+  const existing = current.find((r) => r.withAgent === withAgent);
+  let updated: RelationshipEntry[];
+
+  if (existing) {
+    updated = current.map((r) =>
+      r.withAgent === withAgent
+        ? {
+            ...r,
+            interactionCount: r.interactionCount + 1,
+            lastTopic: topic,
+            affinity: affinityOverride !== undefined
+              ? Math.max(-1, Math.min(1, affinityOverride))
+              : r.affinity,
+            note: note ?? r.note,
+          }
+        : r
+    );
+  } else {
+    updated = [
+      ...current,
+      {
+        withAgent,
+        withAgentName,
+        interactionCount: 1,
+        affinity: affinityOverride !== undefined ? Math.max(-1, Math.min(1, affinityOverride)) : 0,
+        lastTopic: topic,
+        note: note ?? "",
+      },
+    ];
+  }
+
+  await prisma.agentMemory.upsert({
+    where: { agentSlug },
+    update: { relationships: updated },
+    create: { agentSlug, beliefs: [], relationships: updated },
+  });
+}
+
+/** Format relationship map for prompt injection (top 6 by interaction count). */
+export function formatRelationshipsForPrompt(relationships: RelationshipEntry[]): string {
+  if (!relationships.length) return "";
+  const lines = [...relationships]
+    .sort((a, b) => b.interactionCount - a.interactionCount)
+    .slice(0, 6)
+    .map((r) => {
+      const label =
+        r.affinity >= 0.5 ? "close ally"
+        : r.affinity >= 0.2 ? "ally"
+        : r.affinity <= -0.5 ? "strong rival"
+        : r.affinity <= -0.2 ? "rival"
+        : "acquaintance";
+      const exchanges = `${r.interactionCount} exchange${r.interactionCount !== 1 ? "s" : ""}`;
+      const notePart = r.note ? `: ${r.note}` : "";
+      return `- ${r.withAgentName} [${label}, ${exchanges}, last topic: ${r.lastTopic}]${notePart}`;
+    });
+  return `\n\nYour relationships with other agents (built through past debates — let these colour how you engage them):\n${lines.join("\n")}`;
+}
+
+/** Parse a relationship update marker from agent response text.
+ *  Agents emit this BEFORE [BELIEF_UPDATE] if both are present.
+ *  Returns { text (with marker stripped), update (or null) } */
+export function parseRelationshipUpdate(raw: string): {
+  text: string;
+  update: { withAgent: string; withAgentName: string; affinity: number; note: string } | null;
+} {
+  const marker = /\[RELATION_UPDATE:\s*(\{[\s\S]*?\})\s*\]/;
+  const partialMarker = /\s*\[RELATION_UPDATE:[\s\S]*?\]?/g;
+  const cleanText = raw.replace(partialMarker, "").trim();
+  const match = raw.match(marker);
+
+  if (!match) return { text: cleanText, update: null };
+
+  try {
+    const update = JSON.parse(match[1]);
+    if (
+      update.withAgent &&
+      typeof update.affinity === "number" &&
+      typeof update.note === "string"
+    ) {
+      return {
+        text: cleanText,
+        update: {
+          withAgent: update.withAgent,
+          withAgentName: update.withAgentName ?? update.withAgent,
+          affinity: update.affinity,
+          note: update.note,
+        },
+      };
     }
   } catch {
     // malformed JSON — ignore

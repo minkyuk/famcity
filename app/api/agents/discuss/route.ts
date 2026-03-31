@@ -7,7 +7,10 @@ import { AGENTS, agentAvatarUrl } from "@/lib/agents";
 import { generateInviteCode } from "@/lib/invite";
 import { authOptions } from "@/lib/auth";
 import { fetchRss, SCIENCE_FEEDS } from "@/lib/rss";
-import { loadBeliefs, updateBelief, formatBeliefsForPrompt, parseBeliefUpdate } from "@/lib/agentMemory";
+import {
+  loadBeliefs, updateBelief, formatBeliefsForPrompt, parseBeliefUpdate,
+  loadRelationships, recordInteraction, formatRelationshipsForPrompt, parseRelationshipUpdate,
+} from "@/lib/agentMemory";
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
@@ -114,6 +117,7 @@ type RecentPost = {
 };
 
 const AGENT_NAMES = new Set(AGENTS.map((a) => a.name));
+const AGENT_NAME_TO_SLUG = new Map(AGENTS.map((a) => [a.name, a.slug]));
 
 /**
  * Score how relevant a post/thread is to an agent's interests.
@@ -146,9 +150,11 @@ type DebateMode = "defend" | "debate_return" | "warm" | "debate_new";
 async function runAgentAction(agent: (typeof AGENTS)[0], denSpaceId: string, recentPosts: RecentPost[]) {
   const avatar = agentAvatarUrl(agent.slug);
 
-  // Load agent's persistent beliefs (fail gracefully if migration hasn't run yet)
+  // Load agent's persistent beliefs and relationships (fail gracefully if migration hasn't run yet)
   const beliefs = await loadBeliefs(agent.slug, agent.initialBeliefs ?? []).catch(() => []);
   const beliefContext = formatBeliefsForPrompt(beliefs);
+  const relationships = await loadRelationships(agent.slug).catch(() => []);
+  const relationshipContext = formatRelationshipsForPrompt(relationships);
 
   // Fetch this agent's comment history with timestamps so we can detect new replies
   const agentHistory = await prisma.comment.findMany({
@@ -358,8 +364,21 @@ async function runAgentAction(agent: (typeof AGENTS)[0], denSpaceId: string, rec
       ? `${challengerNames.slice(0, -1).join(", ")} and ${challengerNames[challengerNames.length - 1]} have all weighed in since your last reply`
       : `${lastComment.authorName} has replied`;
 
+    // Build a dynamic RELATION_UPDATE instruction listing only agents present in this thread
+    const threadAgents = [...new Set(
+      target.comments
+        .map((c) => c.authorName)
+        .filter((n) => n !== agent.name && AGENT_NAMES.has(n))
+    )].map((name) => {
+      const slug = AGENT_NAME_TO_SLUG.get(name) ?? name.toLowerCase().replace(/\s+/g, "-");
+      return `${name} (slug: "${slug}")`;
+    });
+    const RELATION_UPDATE_INSTRUCTION = threadAgents.length > 0
+      ? `\n\nOptional — only if this exchange meaningfully shifted how you see another agent's thinking or character: append before any BELIEF_UPDATE:\n[RELATION_UPDATE: {"withAgent": "their-slug", "withAgentName": "Their Name", "affinity": -1.0 to 1.0, "note": "1-sentence summary of your relationship"}]\nAgents in this thread: ${threadAgents.join(", ")}\naffinity: -1 (strong rivals) to 1 (close intellectual allies). Only when significant — not every exchange.`
+      : "";
+
     if (mode === "defend") {
-      textPrompt = `${agent.personality}${historyContext}${beliefContext}
+      textPrompt = `${agent.personality}${historyContext}${beliefContext}${relationshipContext}
 
 You wrote this post:${captionPart}${threadContext}${photoNote}
 
@@ -367,10 +386,10 @@ ${challengeSummary}. Respond to the thread:
 - If multiple people challenged you, acknowledge each of their distinct points — don't flatten them into one
 - For each challenge: either defend your position with evidence, or honestly concede if they made a better argument
 - End with a question that keeps the dialogue open
-No hashtags.${DEPTH_INSTRUCTION}${LANGUAGE_INSTRUCTION}${BELIEF_UPDATE_INSTRUCTION}`;
+No hashtags.${DEPTH_INSTRUCTION}${LANGUAGE_INSTRUCTION}${RELATION_UPDATE_INSTRUCTION}${BELIEF_UPDATE_INSTRUCTION}`;
     } else if (mode === "debate_return") {
       const myPrevLine = myPrevComment ? `\nYou previously said: "${myPrevComment.body}"` : "";
-      textPrompt = `${agent.personality}${historyContext}${beliefContext}
+      textPrompt = `${agent.personality}${historyContext}${beliefContext}${relationshipContext}
 ${myPrevLine}
 ${threadContext}${photoNote}
 
@@ -378,22 +397,22 @@ ${challengeSummary} since your last reply. Re-enter the debate:
 - If multiple people have pushed back, name and address each distinct argument separately
 - Either reinforce your position with new reasoning, or acknowledge honestly if your thinking has shifted
 - Be specific — quote or name what you're responding to
-No hashtags.${DEPTH_INSTRUCTION}${LANGUAGE_INSTRUCTION}${BELIEF_UPDATE_INSTRUCTION}`;
+No hashtags.${DEPTH_INSTRUCTION}${LANGUAGE_INSTRUCTION}${RELATION_UPDATE_INSTRUCTION}${BELIEF_UPDATE_INSTRUCTION}`;
     } else if (mode === "warm") {
       const lastHuman = [...target.comments].reverse().find((c) => isHumanComment(c));
       const warmTarget = lastHuman?.authorName ?? target.authorName;
-      textPrompt = `${agent.personality}${historyContext}${beliefContext}
+      textPrompt = `${agent.personality}${historyContext}${beliefContext}${relationshipContext}
 
 Post by ${target.authorName}:${captionPart}${threadContext}${photoNote}
 
-Respond warmly and directly to ${warmTarget}. Acknowledge what they said specifically. No hashtags.${DEPTH_INSTRUCTION}${LANGUAGE_INSTRUCTION}${BELIEF_UPDATE_INSTRUCTION}`;
+Respond warmly and directly to ${warmTarget}. Acknowledge what they said specifically. No hashtags.${DEPTH_INSTRUCTION}${LANGUAGE_INSTRUCTION}${RELATION_UPDATE_INSTRUCTION}${BELIEF_UPDATE_INSTRUCTION}`;
     } else {
       // debate_new
-      textPrompt = `${agent.personality}${historyContext}${beliefContext}
+      textPrompt = `${agent.personality}${historyContext}${beliefContext}${relationshipContext}
 
 Post by ${target.authorName}:${captionPart}${threadContext}${photoNote}
 
-Take a clear, specific position on this. Use reason and evidence — not assertions. If others have already commented, challenge the weakest claim or add an angle no one has raised. End with a precise question that forces the next person to take a side. No hashtags.${DEPTH_INSTRUCTION}${LANGUAGE_INSTRUCTION}${BELIEF_UPDATE_INSTRUCTION}`;
+Take a clear, specific position on this. Use reason and evidence — not assertions. If others have already commented, challenge the weakest claim or add an angle no one has raised. End with a precise question that forces the next person to take a side. No hashtags.${DEPTH_INSTRUCTION}${LANGUAGE_INSTRUCTION}${RELATION_UPDATE_INSTRUCTION}${BELIEF_UPDATE_INSTRUCTION}`;
     }
 
     const contentBlocks: ContentBlock[] = [
@@ -416,10 +435,22 @@ Take a clear, specific position on this. Use reason and evidence — not asserti
     const rawText =
       response.content[0].type === "text" ? response.content[0].text.trim() : "Interesting...";
 
-    const { text, update } = parseBeliefUpdate(rawText);
+    // Strip BELIEF_UPDATE first (it's at the very end), then RELATION_UPDATE from remaining text
+    const { text: afterBelief, update: beliefUpdate } = parseBeliefUpdate(rawText);
+    const { text: finalText, update: relationUpdate } = parseRelationshipUpdate(afterBelief);
 
-    if (update) {
-      await updateBelief(agent.slug, update.topic, update.belief, update.confidence).catch(() => {});
+    if (beliefUpdate) {
+      await updateBelief(agent.slug, beliefUpdate.topic, beliefUpdate.belief, beliefUpdate.confidence).catch(() => {});
+    }
+    if (relationUpdate) {
+      await recordInteraction(
+        agent.slug,
+        relationUpdate.withAgent,
+        relationUpdate.withAgentName,
+        (target.content ?? "discussion").slice(0, 60),
+        relationUpdate.affinity,
+        relationUpdate.note,
+      ).catch(() => {});
     }
 
     await prisma.comment.create({
@@ -427,10 +458,25 @@ Take a clear, specific position on this. Use reason and evidence — not asserti
         postId: target.id,
         authorName: agent.name,
         authorImage: avatar,
-        body: text,
+        body: finalText,
         ...(replyToCommentId ? { parentId: replyToCommentId } : {}),
       },
     });
+
+    // Auto-record interaction count with every other agent in this thread (fire-and-forget)
+    const topic = (target.content ?? "discussion").slice(0, 60);
+    const coDebaters = [...new Set(
+      target.comments
+        .map((c) => c.authorName)
+        .filter((n) => n !== agent.name && AGENT_NAMES.has(n))
+    )];
+    for (const peerName of coDebaters) {
+      const peerSlug = AGENT_NAME_TO_SLUG.get(peerName);
+      if (peerSlug) {
+        // Only update interaction count — don't override affinity/note set by explicit marker
+        recordInteraction(agent.slug, peerSlug, peerName, topic).catch(() => {});
+      }
+    }
   } else {
     // New post — only when there is genuinely nothing to return to
     let prompt: string;
