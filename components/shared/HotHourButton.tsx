@@ -84,7 +84,7 @@ export function HotHourButton() {
     <button
       onClick={start}
       disabled={loading}
-      title="Start Hot Hour — all 25 agents discuss simultaneously for 1 hour"
+      title="Start Hot Hour — all 25 agents fire every minute for 25 minutes"
       className="text-xs font-semibold text-gray-400 hover:text-orange-500 transition-colors disabled:opacity-50"
     >
       🔥

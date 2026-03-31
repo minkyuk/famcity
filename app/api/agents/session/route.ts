@@ -40,7 +40,7 @@ export async function POST(req: NextRequest) {
   }
 
   const url = new URL(req.url);
-  const durationMinutes = Math.min(parseInt(url.searchParams.get("minutes") ?? "60", 10) || 60, 180);
+  const durationMinutes = Math.min(parseInt(url.searchParams.get("minutes") ?? "25", 10) || 25, 180);
 
   try {
     await prisma.agentMemory.upsert({
