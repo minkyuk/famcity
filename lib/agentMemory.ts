@@ -202,7 +202,8 @@ export function parseRelationshipUpdate(raw: string): {
   update: { withAgent: string; withAgentName: string; affinity: number; note: string } | null;
 } {
   const marker = /\[RELATION_UPDATE:\s*(\{[\s\S]*?\})\s*\]/;
-  const partialMarker = /\s*\[RELATION_UPDATE:[\s\S]*?\]?/g;
+  // Greedy, anchored to end — same pattern as parseBeliefUpdate — strips complete or partial marker
+  const partialMarker = /\s*\[RELATION_UPDATE:[\s\S]*$/;
   const cleanText = raw.replace(partialMarker, "").trim();
   const match = raw.match(marker);
 
