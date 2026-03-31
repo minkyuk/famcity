@@ -4,7 +4,7 @@ import { authOptions } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 
 const DURATION_MINUTES = 3;
-const COOLDOWN_MINUTES = 5;
+const COOLDOWN_MINUTES = 60;
 
 function slug(spaceId: string) {
   return `$$space-session:${spaceId}`;
@@ -48,10 +48,10 @@ export async function POST(_req: NextRequest, { params }: { params: Promise<{ id
       const data = record.beliefs as { startedAt?: string };
       if (data?.startedAt) {
         const elapsed = Date.now() - new Date(data.startedAt).getTime();
-        const cooldownMs = COOLDOWN_MINUTES * 60 * 1000;
-        if (elapsed < cooldownMs) {
-          const s = Math.ceil((cooldownMs - elapsed) / 1000);
-          return NextResponse.json({ error: `Cooldown active — ${s}s remaining` }, { status: 429 });
+        if (elapsed < COOLDOWN_MINUTES * 60 * 1000) {
+          const s = Math.ceil((COOLDOWN_MINUTES * 60 * 1000 - elapsed) / 1000);
+          const m = Math.ceil(s / 60);
+          return NextResponse.json({ error: `Cooldown active — ${m}m remaining` }, { status: 429 });
         }
       }
     }
@@ -71,7 +71,7 @@ export async function DELETE(_req: NextRequest, { params }: { params: Promise<{ 
   const authSession = await getServerSession(authOptions);
   if (!authSession?.user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
-  // Set durationMinutes: 0 so session is immediately inactive, but startedAt stays for cooldown
+  // Keep startedAt for cooldown tracking, set durationMinutes: 0 to end session immediately
   try {
     const record = await prisma.agentMemory.findUnique({ where: { agentSlug: slug(spaceId) } });
     if (record) {

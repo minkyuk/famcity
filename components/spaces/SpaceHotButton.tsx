@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
 
 interface SpaceSessionStatus {
   active: boolean;
@@ -8,7 +8,14 @@ interface SpaceSessionStatus {
   cooldownRemainingSeconds: number;
 }
 
-function fmt(seconds: number): string {
+function fmtCountdown(seconds: number): string {
+  const m = Math.floor(seconds / 60);
+  const s = seconds % 60;
+  return `${m}:${String(s).padStart(2, "0")}`;
+}
+
+function fmtCooldown(seconds: number): string {
+  if (seconds >= 3600) return `${Math.ceil(seconds / 3600)}h`;
   if (seconds >= 60) return `${Math.ceil(seconds / 60)}m`;
   return `${seconds}s`;
 }
@@ -17,19 +24,40 @@ export function SpaceHotButton({ spaceId }: { spaceId: string }) {
   const [status, setStatus] = useState<SpaceSessionStatus | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Local tick-down so the display updates every second without re-fetching
+  const [remaining, setRemaining] = useState(0);
+  const [cooldown, setCooldown] = useState(0);
+  const tickRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const fetchStatus = useCallback(async () => {
     try {
       const res = await fetch(`/api/spaces/${spaceId}/session`);
-      if (res.ok) setStatus(await res.json());
+      if (!res.ok) return;
+      const data: SpaceSessionStatus = await res.json();
+      setStatus(data);
+      setRemaining(data.remainingSeconds);
+      setCooldown(data.cooldownRemainingSeconds);
     } catch {}
   }, [spaceId]);
 
+  // Poll every 15s to stay in sync; tick locally every second
   useEffect(() => {
     fetchStatus();
-    const interval = setInterval(fetchStatus, 5_000);
-    return () => clearInterval(interval);
+    const poll = setInterval(fetchStatus, 15_000);
+    return () => clearInterval(poll);
   }, [fetchStatus]);
+
+  // Local countdown tick
+  useEffect(() => {
+    if (tickRef.current) clearInterval(tickRef.current);
+    tickRef.current = setInterval(() => {
+      setRemaining((r) => Math.max(0, r - 1));
+      setCooldown((c) => Math.max(0, c - 1));
+    }, 1000);
+    return () => {
+      if (tickRef.current) clearInterval(tickRef.current);
+    };
+  }, []);
 
   const start = async () => {
     setLoading(true);
@@ -62,40 +90,36 @@ export function SpaceHotButton({ spaceId }: { spaceId: string }) {
 
   if (error) {
     return (
-      <span
-        title={error}
-        className="text-xs text-amber-400 cursor-pointer"
-        onClick={() => setError(null)}
-      >
+      <span title={error} className="text-xs text-amber-400 cursor-pointer" onClick={() => setError(null)}>
         ⚡⚠
       </span>
     );
   }
 
-  if (status.active) {
+  if (status.active && remaining > 0) {
     return (
       <button
         onClick={stop}
         disabled={loading}
-        title={`Space buzz active — ${fmt(status.remainingSeconds)} left. Click to stop.`}
-        className="flex items-center gap-1 text-xs font-semibold text-violet-500 hover:text-violet-700 transition-colors disabled:opacity-50"
+        title="Space buzz active — click to stop"
+        className="flex items-center gap-1.5 text-xs font-semibold text-violet-500 hover:text-violet-700 transition-colors disabled:opacity-50"
       >
-        <span className="relative flex h-2 w-2">
+        <span className="relative flex h-2 w-2 shrink-0">
           <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-violet-400 opacity-75" />
           <span className="relative inline-flex rounded-full h-2 w-2 bg-violet-500" />
         </span>
-        {fmt(status.remainingSeconds)}
+        {fmtCountdown(remaining)}
       </button>
     );
   }
 
-  if (status.cooldownRemainingSeconds > 0) {
+  if (cooldown > 0) {
     return (
       <span
-        title={`Cooldown — usable again in ${fmt(status.cooldownRemainingSeconds)}`}
-        className="text-xs text-gray-300 cursor-default select-none"
+        title={`Cooldown — usable again in ${fmtCooldown(cooldown)}`}
+        className="text-xs text-gray-300 cursor-default select-none tabular-nums"
       >
-        ⚡ {fmt(status.cooldownRemainingSeconds)}
+        ⚡ {fmtCooldown(cooldown)}
       </span>
     );
   }
@@ -104,7 +128,7 @@ export function SpaceHotButton({ spaceId }: { spaceId: string }) {
     <button
       onClick={start}
       disabled={loading}
-      title="Buzz the space — agents in this space go live for 3 minutes (5 min cooldown)"
+      title="Buzz the space — agents go live for 3 minutes (1 hr cooldown)"
       className="text-xs font-semibold text-gray-400 hover:text-violet-500 transition-colors disabled:opacity-50"
     >
       ⚡
