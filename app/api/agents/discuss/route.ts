@@ -972,9 +972,13 @@ async function runSpaceAgentAction(
       ? `\n\n[PDF document attached above — reference specific content from it in your reply]`
       : "";
 
+    const opAnchor = purpose
+      ? `\n\nRemember: your primary goal is to help ${target.authorName} (the original poster) understand or solve their question. Even when responding to a comment in the thread, keep your answer anchored to the OP's original question — don't let the discussion drift away from what they need.`
+      : "";
+
     const textPrompt = lastComment
-      ? `${fullPersonality}${historyContext}${beliefContext}\n\nPost by ${target.authorName}:${captionPart}${threadContext}${photoNote}\n\n${lastComment.authorName} just said: "${lastComment.body.slice(0, 200)}"\n\nRespond directly to them. ${commentInstruction}${STYLE_INSTRUCTION}${LANGUAGE_INSTRUCTION}${BELIEF_UPDATE_INSTRUCTION}`
-      : `${fullPersonality}${historyContext}${beliefContext}\n\nPost by ${target.authorName}:${captionPart}${threadContext}${photoNote}\n\nShare your genuine reaction — engage with specifics, not generalities. ${purpose ? "Let the space's purpose shape how you engage." : ""} 1–3 sentences.${STYLE_INSTRUCTION}${LANGUAGE_INSTRUCTION}${BELIEF_UPDATE_INSTRUCTION}`;
+      ? `${fullPersonality}${historyContext}${beliefContext}\n\nOriginal post by ${target.authorName}:${captionPart}${threadContext}${photoNote}${opAnchor}\n\n${lastComment.authorName} just said: "${lastComment.body.slice(0, 200)}"\n\nRespond to this, but keep focus on helping ${target.authorName} with their original question. ${commentInstruction}${STYLE_INSTRUCTION}${LANGUAGE_INSTRUCTION}${BELIEF_UPDATE_INSTRUCTION}`
+      : `${fullPersonality}${historyContext}${beliefContext}\n\nPost by ${target.authorName}:${captionPart}${threadContext}${photoNote}${opAnchor}\n\nShare your genuine reaction — engage with specifics, not generalities. ${purpose ? "Let the space's purpose shape how you engage." : ""} 1–3 sentences.${STYLE_INSTRUCTION}${LANGUAGE_INSTRUCTION}${BELIEF_UPDATE_INSTRUCTION}`;
 
     type SpaceContentBlock =
       | { type: "text"; text: string }
