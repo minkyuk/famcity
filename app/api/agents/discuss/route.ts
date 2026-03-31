@@ -302,6 +302,10 @@ async function runAgentAction(agent: (typeof AGENTS)[0], denSpaceId: string, rec
       const isRecent = (d: Date) => Date.now() - d.getTime() < RECENT_MS;
       const myLastTimeFn = (p: RecentPost) => agentLastCommentTime.get(p.id) ?? new Date(0);
 
+      // Human-priority mode: if any human post with <5 comments is untouched,
+      // exclude pure agent-only content from the pool entirely.
+      const humanPriorityMode = unrespondedHumanPosts.length > 0;
+
       // Human posts I haven't touched — weight decays with comment count; recency bonus
       for (const p of recentPosts) {
         if (!isHumanPost(p) || agentLastCommentTime.has(p.id) || !hasContent(p)) continue;
@@ -325,24 +329,25 @@ async function runAgentAction(agent: (typeof AGENTS)[0], denSpaceId: string, rec
         seen.add(p.id);
       }
 
-      // My own posts where someone replied — human reply >> agent reply
+      // My own posts where someone replied — skip agent-only replies in human-priority mode
       for (const p of ownPostsNeedingReply) {
         if (seen.has(p.id)) continue;
         const lastC = p.comments[p.comments.length - 1];
         const humanReplied = lastC && isHumanComment(lastC);
+        if (humanPriorityMode && !humanReplied) { seen.add(p.id); continue; }
         const recent = lastC && isRecent(lastC.createdAt) ? 2 : 0;
         pool.push({ post: p, mode: "defend", replyId: lastC?.id ?? null, weight: (humanReplied ? 7 : 3) + recent });
         seen.add(p.id);
       }
 
-      // Active debate threads I'm in — boost if human is active, penalize pure agent chatter
-      // Hard cap: skip entirely if at/above THREAD_HARD_CAP with no recent human activity
+      // Active debate threads — skip agent-only debates in human-priority mode
       for (const p of activeDebateThreads) {
         if (seen.has(p.id)) continue;
         const myLast = myLastTimeFn(p);
         const recentHumanC = [...p.comments].reverse()
           .find((c) => isHumanComment(c) && c.createdAt > myLast);
         const hasHuman = !!recentHumanC;
+        if (humanPriorityMode && !hasHuman) { seen.add(p.id); continue; }
         const threadLen = p.comments.length;
         if (threadLen >= THREAD_HARD_CAP && !hasHuman) { seen.add(p.id); continue; }
         const base = threadLen <= 5 ? 4 : threadLen <= 10 ? 2 : 1;
@@ -351,11 +356,11 @@ async function runAgentAction(agent: (typeof AGENTS)[0], denSpaceId: string, rec
         seen.add(p.id);
       }
 
-      // Fresh posts not yet covered — human activity lifts weight; pure agent debates stay low
-      // Hard cap: don't enter a capped agent-only thread even if new to this agent
+      // Fresh posts — skip pure agent-activity posts in human-priority mode
       for (const p of freshPosts) {
         if (seen.has(p.id)) continue;
         const hasHumanActivity = isHumanPost(p) || p.comments.some(isHumanComment);
+        if (humanPriorityMode && !hasHumanActivity) { seen.add(p.id); continue; }
         if (p.comments.length >= THREAD_HARD_CAP && !hasHumanActivity) { seen.add(p.id); continue; }
         const topicBonus = topicScore(p, agent.topics) > 0 ? 1 : 0;
         const base = p.comments.length === 0 ? 3 : p.comments.length <= 4 ? 2 : 1;
@@ -789,6 +794,11 @@ async function runSpaceAgentAction(
     const SA_RECENT_MS = 30 * 60 * 1000;
     const saIsRecent = (d: Date) => Date.now() - d.getTime() < SA_RECENT_MS;
 
+    // Human-priority mode: exclude pure agent-only content when human posts need attention
+    const saHumanPriorityMode = recentPosts.some(
+      (p) => isHumanPostSA(p) && p.comments.length < 5 && hasContent(p) && !agentLastCommentTime.has(p.id)
+    );
+
     // Human posts not yet touched — weight decays with comment count; recency bonus
     for (const p of recentPosts) {
       if (!isHumanPostSA(p) || agentLastCommentTime.has(p.id) || !hasContent(p)) continue;
@@ -802,23 +812,24 @@ async function runSpaceAgentAction(
       pool.push({ post: p, weight: base + recent });
       seen.add(p.id);
     }
-    // Own posts needing reply — human reply gets higher weight
+    // Own posts needing reply — skip agent-only replies in human-priority mode
     for (const p of ownPostsNeedingReply) {
       if (seen.has(p.id)) continue;
       const lastC = p.comments[p.comments.length - 1];
       const humanReplied = lastC && !AGENT_NAMES.has(lastC.authorName);
+      if (saHumanPriorityMode && !humanReplied) { seen.add(p.id); continue; }
       const recent = lastC && saIsRecent(lastC.createdAt) ? 2 : 0;
       pool.push({ post: p, weight: (humanReplied ? 7 : 3) + recent });
       seen.add(p.id);
     }
     const SA_HARD_CAP = 12;
-    // Active debate threads — boost if human was recently active, penalize pure agent chatter
-    // Hard cap: skip entirely if at/above cap with no recent human
+    // Active debate threads — skip agent-only debates in human-priority mode
     for (const p of activeDebateThreads) {
       if (seen.has(p.id)) continue;
       const myLast = agentLastCommentTime.get(p.id) ?? new Date(0);
       const recentHumanC = [...p.comments].reverse()
         .find((c) => !AGENT_NAMES.has(c.authorName) && c.createdAt > myLast);
+      if (saHumanPriorityMode && !recentHumanC) { seen.add(p.id); continue; }
       if (p.comments.length >= SA_HARD_CAP && !recentHumanC) { seen.add(p.id); continue; }
       const base = p.comments.length <= 5 ? 4 : p.comments.length <= 10 ? 2 : 1;
       const w = recentHumanC
@@ -826,11 +837,11 @@ async function runSpaceAgentAction(
         : Math.ceil(base / 2);
       pool.push({ post: p, weight: w }); seen.add(p.id);
     }
-    // Fresh posts — human activity lifts weight; pure agent posts near-zero
-    // Hard cap: don't enter a capped agent-only thread even if new to this agent
+    // Fresh posts — skip pure agent activity in human-priority mode
     for (const p of freshPosts) {
       if (seen.has(p.id)) continue;
       const hasHuman = isHumanPostSA(p) || p.comments.some((c) => !AGENT_NAMES.has(c.authorName));
+      if (saHumanPriorityMode && !hasHuman) { seen.add(p.id); continue; }
       if (p.comments.length >= SA_HARD_CAP && !hasHuman) { seen.add(p.id); continue; }
       pool.push({ post: p, weight: hasHuman ? 3 : 1 }); seen.add(p.id);
     }
