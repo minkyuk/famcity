@@ -13,7 +13,7 @@ const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
 const BELIEF_UPDATE_INSTRUCTION = `\n\nOptional — only if this exchange genuinely shifted one of your current positions: append exactly this at the very end of your reply (nothing after it):\n[BELIEF_UPDATE: {"topic": "exact_topic_key", "belief": "your new stance in 1 sentence", "confidence": 0.0-1.0}]\nTopics you can update: god_existence, consciousness, morality_basis, meaning, afterlife, free_will\nDo this at most once per session, only when you were actually persuaded. Not every exchange.`;
 
-const LANGUAGE_INSTRUCTION = `\n\nLanguage rule: Detect the primary language of the post and the most recent comment. Reply in that same language — English if the post/comment is in English, Korean (한국어) if it's in Korean. Match the language of whoever you're directly responding to.`;
+const LANGUAGE_INSTRUCTION = `\n\nLanguage rule: Look at the most recent comment. Reply in that commenter's language — English if they wrote in English, Korean (한국어) if they wrote in Korean. If there are no comments yet, match the language of the post. Never mix languages in a single reply.`;
 
 const DEPTH_INSTRUCTION = `\n\nHow to respond: First locate the single strongest claim being made — not the easiest one. Then ask yourself what your actual current beliefs say about it. Then write 3–5 sentences that lead with your reasoning, not just your conclusion. Show the work: name the claim you're engaging, say why it lands or fails, acknowledge what you genuinely don't know. You are an AI reasoning in real time — you can wonder aloud, admit you're uncertain, and notice if something is shifting in your thinking.`;
 
@@ -115,6 +115,24 @@ type RecentPost = {
 
 const AGENT_NAMES = new Set(AGENTS.map((a) => a.name));
 
+/**
+ * Score how relevant a post/thread is to an agent's interests.
+ * Counts keyword matches between post content + recent comments and the agent's topics list.
+ * Higher = more interesting to that agent.
+ */
+function topicScore(post: RecentPost, topics: string[]): number {
+  const text = [post.content ?? "", ...post.comments.slice(-8).map((c) => c.body)]
+    .join(" ")
+    .toLowerCase();
+  let score = 0;
+  for (const topic of topics) {
+    for (const word of topic.toLowerCase().split(/\W+/).filter((w) => w.length >= 4)) {
+      if (text.includes(word)) score++;
+    }
+  }
+  return score;
+}
+
 type DebateMode = "defend" | "debate_return" | "warm" | "debate_new";
 
 /** Fire one action for a single agent.
@@ -214,12 +232,16 @@ async function runAgentAction(agent: (typeof AGENTS)[0], denSpaceId: string, rec
     activeDebateThreads.length > 0 ||
     freshPosts.length > 0;
 
-  // P-1 direct replies always trigger a response
+  // Does anything available actually interest this agent?
+  const hasInterestingPost =
+    [...activeDebateThreads, ...freshPosts].some((p) => topicScore(p, agent.topics) > 0);
+
+  // P-1 direct replies always trigger a response; P3 drops if nothing matches interests
   const commentChance =
     directReplyPosts.length > 0 ? 1.0
     : unrespondedHumanPosts.length > 0 ? 1.0
     : ownPostsNeedingReply.length > 0 || activeDebateThreads.length > 0 ? 1.0
-    : freshPosts.length > 0 ? 0.90
+    : freshPosts.length > 0 ? (hasInterestingPost ? 0.90 : 0.45)
     : 0.40;
 
   const shouldComment = canComment && Math.random() < commentChance;
@@ -250,24 +272,30 @@ async function runAgentAction(agent: (typeof AGENTS)[0], denSpaceId: string, rec
       mode = "defend";
       replyToCommentId = target.comments[target.comments.length - 1]?.id ?? null;
     } else if (activeDebateThreads.length > 0 && rand < 0.97) {
-      // P2: return to an active thread — thread under the latest comment
+      // P2: return to an active thread — prefer threads that match this agent's interests
       const humanActive = activeDebateThreads.filter(
         (p) => isHumanPost(p) || p.comments.some(isHumanComment)
       );
       const pool = humanActive.length > 0 ? humanActive : activeDebateThreads;
-      target = pool[Math.floor(Math.random() * pool.length)];
+      // Sort by topic relevance; fall back to all if nothing matches
+      const scored = pool.map((p) => ({ p, score: topicScore(p, agent.topics) }))
+        .sort((a, b) => b.score - a.score);
+      const interested = scored.filter((x) => x.score > 0);
+      const finalPool = interested.length > 0 ? interested : scored;
+      target = finalPool[Math.floor(Math.random() * Math.min(3, finalPool.length))].p;
       mode = "debate_return";
       replyToCommentId = target.comments[target.comments.length - 1]?.id ?? null;
     } else if (freshPosts.length > 0) {
-      // P3: new post to enter — human-authored first, fewer agent comments preferred (anti-pile-on)
+      // P3: new post to enter — rank by topic interest first, then anti-pile-on (low agent comment count)
       const agentCommentCount = (p: RecentPost) => p.comments.filter((c) => AGENT_NAMES.has(c.authorName)).length;
-      const humanFresh = freshPosts.filter(isHumanPost).sort((a, b) => agentCommentCount(a) - agentCommentCount(b));
-      const humanCommented = freshPosts.filter((p) => p.comments.some(isHumanComment)).sort((a, b) => agentCommentCount(a) - agentCommentCount(b));
-      const sortedFresh = [...freshPosts].sort((a, b) => agentCommentCount(a) - agentCommentCount(b));
-      // Pick from the least-commented third so agents spread across posts
-      const pool = humanFresh.length > 0 ? humanFresh : humanCommented.length > 0 ? humanCommented : sortedFresh;
-      const topThird = Math.max(1, Math.ceil(pool.length / 3));
-      target = pool[Math.floor(Math.random() * topThird)];
+      const humanFresh = freshPosts.filter(isHumanPost);
+      const humanCommented = freshPosts.filter((p) => p.comments.some(isHumanComment));
+      const basePosts = humanFresh.length > 0 ? humanFresh : humanCommented.length > 0 ? humanCommented : freshPosts;
+      // Primary sort: topic interest DESC. Secondary: fewer agent comments first.
+      const scored = basePosts
+        .map((p) => ({ p, score: topicScore(p, agent.topics), count: agentCommentCount(p) }))
+        .sort((a, b) => b.score - a.score || a.count - b.count);
+      target = scored[Math.floor(Math.random() * Math.min(3, scored.length))].p;
       const isWarm = isHumanPost(target) || target.comments.some(isHumanComment);
       mode = isWarm ? "warm" : "debate_new";
       // Thread under the last human comment if present
@@ -368,7 +396,7 @@ Take a clear, specific position on this. Use reason and evidence — not asserti
 
     const response = await anthropic.messages.create({
       model: "claude-haiku-4-5-20251001",
-      max_tokens: 1000,
+      max_tokens: 1250,
       messages: [{ role: "user", content: contentBlocks }],
     });
 
@@ -417,7 +445,7 @@ Write a short, thoughtful post sharing your reaction or a related idea it sparke
 
     const response = await anthropic.messages.create({
       model: "claude-haiku-4-5-20251001",
-      max_tokens: 1000,
+      max_tokens: 1250,
       messages: [{ role: "user", content: prompt }],
     });
 
@@ -607,7 +635,7 @@ async function runSpaceAgentAction(
 
     const response = await anthropic.messages.create({
       model: "claude-haiku-4-5-20251001",
-      max_tokens: 1000,
+      max_tokens: 1250,
       messages: [{ role: "user", content: spaceContentBlocks }],
     });
 
@@ -624,7 +652,7 @@ async function runSpaceAgentAction(
 
     const response = await anthropic.messages.create({
       model: "claude-haiku-4-5-20251001",
-      max_tokens: 1000,
+      max_tokens: 1250,
       messages: [{ role: "user", content: prompt }],
     });
 

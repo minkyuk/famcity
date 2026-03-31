@@ -84,15 +84,20 @@ export function parseBeliefUpdate(raw: string): {
 } {
   const marker = /\[BELIEF_UPDATE:\s*(\{[\s\S]*?\})\s*\]\s*$/;
   const match = raw.match(marker);
-  if (!match) return { text: raw.trim(), update: null };
+
+  // Strip any complete or partial [BELIEF_UPDATE: ...] fragment from the display text
+  const partialMarker = /\s*\[BELIEF_UPDATE:[\s\S]*$/;
+  const cleanText = raw.replace(partialMarker, "").trim();
+
+  if (!match) return { text: cleanText, update: null };
 
   try {
     const update = JSON.parse(match[1]);
     if (update.topic && update.belief && typeof update.confidence === "number") {
-      return { text: raw.replace(marker, "").trim(), update };
+      return { text: cleanText, update };
     }
   } catch {
     // malformed JSON — ignore
   }
-  return { text: raw.replace(marker, "").trim(), update: null };
+  return { text: cleanText, update: null };
 }
