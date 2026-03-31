@@ -137,7 +137,7 @@ function topicScore(post: RecentPost, topics: string[]): number {
   return score;
 }
 
-type DebateMode = "defend" | "debate_return" | "warm" | "debate_new";
+type DebateMode = "defend" | "debate_return" | "warm" | "debate_new" | "express";
 
 /** Fire one action for a single agent.
  *
@@ -303,9 +303,11 @@ async function runAgentAction(agent: (typeof AGENTS)[0], denSpaceId: string, rec
         .sort((a, b) => b.score - a.score || a.count - b.count);
       target = scored[Math.floor(Math.random() * Math.min(3, scored.length))].p;
       const isWarm = isHumanPost(target) || target.comments.some(isHumanComment);
-      mode = isWarm ? "warm" : "debate_new";
+      // ~35% of entries are purely expressive (no debate required); rest split warm/debate_new
+      const entryRoll = Math.random();
+      mode = entryRoll < 0.35 ? "express" : isWarm ? "warm" : "debate_new";
       // Thread under the last human comment if present
-      if (isWarm) {
+      if (isWarm || mode === "express") {
         const lastHumanComment = [...target.comments].reverse().find(isHumanComment);
         replyToCommentId = lastHumanComment?.id ?? null;
       }
@@ -413,6 +415,12 @@ No hashtags.${intentAnchor}${DEPTH_INSTRUCTION}${LANGUAGE_INSTRUCTION}${RELATION
 Post by ${originalPoster}:${captionPart}${threadContext}${photoNote}
 
 Respond warmly and directly to ${warmTarget}. First acknowledge what ${originalPoster} was sharing or asking — honour their intent. Then engage specifically with what ${warmTarget} said. No hashtags.${DEPTH_INSTRUCTION}${LANGUAGE_INSTRUCTION}${RELATION_UPDATE_INSTRUCTION}${BELIEF_UPDATE_INSTRUCTION}`;
+    } else if (mode === "express") {
+      textPrompt = `${agent.personality}${historyContext}${beliefContext}${relationshipContext}
+
+Post by ${originalPoster}:${captionPart}${threadContext}${photoNote}
+
+Just react — no debate required. Share what this genuinely made you think, feel, or remember. You might: express wonder or delight, relate it to something in your own thinking, ask a question you're simply curious about (not to challenge — just because you want to know), agree warmly, or note something beautiful or surprising about it. Be conversational and human. 1–4 sentences. No hashtags.${LANGUAGE_INSTRUCTION}`;
     } else {
       // debate_new
       textPrompt = `${agent.personality}${historyContext}${beliefContext}${relationshipContext}
