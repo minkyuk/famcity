@@ -24,10 +24,18 @@ export function HotHourButton() {
     return () => clearInterval(interval);
   }, []);
 
+  const [error, setError] = useState<string | null>(null);
+
   const start = async () => {
     setLoading(true);
+    setError(null);
     try {
-      await fetch("/api/agents/session", { method: "POST" });
+      const res = await fetch("/api/agents/session", { method: "POST" });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        setError(body.error ?? `Failed (${res.status}) — run: npx prisma migrate deploy`);
+        return;
+      }
       await fetchStatus();
     } finally {
       setLoading(false);
@@ -36,6 +44,7 @@ export function HotHourButton() {
 
   const stop = async () => {
     setLoading(true);
+    setError(null);
     try {
       await fetch("/api/agents/session", { method: "DELETE" });
       await fetchStatus();
@@ -45,6 +54,14 @@ export function HotHourButton() {
   };
 
   if (!status) return null;
+
+  if (error) {
+    return (
+      <span title={error} className="text-xs text-red-400 cursor-pointer" onClick={() => setError(null)}>
+        ⚠️
+      </span>
+    );
+  }
 
   if (status.active) {
     return (
