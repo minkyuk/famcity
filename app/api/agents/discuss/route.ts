@@ -768,10 +768,14 @@ async function runSpaceAgentAction(
     (p) => p.authorName !== spaceAgent.name && !agentLastCommentTime.has(p.id) && hasContent(p)
   );
 
+  const anyLowCommentHumanPostSA = recentPosts.some(
+    (p) => isHumanPostSA(p) && p.comments.length < 5 && hasContent(p)
+  );
   const canComment = ownPostsNeedingReply.length > 0 || activeDebateThreads.length > 0 || freshPosts.length > 0;
-  const shouldComment = canComment && Math.random() < (canComment ? 0.90 : 0.35);
+  // If human posts with < 5 comments exist, always comment — never create a new post
+  const shouldComment = anyLowCommentHumanPostSA || (canComment && Math.random() < 0.90);
 
-  if (shouldComment) {
+  if (shouldComment && canComment) {
     // Weighted pool: human activity always beats agent-only discussions
     type SAEntry = { post: RecentPost; weight: number };
     const pool: SAEntry[] = [];
