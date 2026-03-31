@@ -212,11 +212,11 @@ async function runAgentAction(agent: (typeof AGENTS)[0], denSpaceId: string, rec
     );
   });
 
-  // P0: Human posts with 0–2 comments that this agent hasn't touched — highest urgency
+  // Low-comment human posts this agent hasn't touched (< 5 comments) — high-priority candidates
   const unrespondedHumanPosts = recentPosts.filter(
     (p) =>
       isHumanPost(p) &&
-      p.comments.length <= 2 &&
+      p.comments.length < 5 &&
       !agentLastCommentTime.has(p.id) &&
       hasContent(p)
   );
@@ -282,89 +282,87 @@ async function runAgentAction(agent: (typeof AGENTS)[0], denSpaceId: string, rec
     let mode: DebateMode;
     let replyToCommentId: string | null = null; // set to thread agent response into the tree
 
-    const rand = Math.random();
-
-    if (directReplyPosts.length > 0 && rand < 0.95) {
-      // P-1: someone directly replied to my comment — must respond
+    if (directReplyPosts.length > 0 && Math.random() < 0.95) {
+      // P-1: someone directly replied to my comment — always handle first
       target = directReplyPosts[Math.floor(Math.random() * directReplyPosts.length)];
       mode = "defend";
-      // Find the specific comment that replied to me — thread our response under it
       const triggerComment = [...target.comments]
         .reverse()
         .find((c) => c.parentId && myCommentIds.has(c.parentId) && c.authorName !== agent.name);
       replyToCommentId = triggerComment?.id ?? null;
-    } else if (unrespondedHumanPosts.length > 0) {
-      // P0: human posts with 0–2 comments — always respond, no rand gate
-      // Sort: fewest comments first; ties broken by newest post
-      const sorted = [...unrespondedHumanPosts].sort(
-        (a, b) =>
-          a.comments.length - b.comments.length ||
-          b.createdAt.getTime() - a.createdAt.getTime()
-      );
-      target = sorted[0];
-      mode = "warm";
-    } else if (humanPendingThreads.length > 0 && rand < 0.97) {
-      // P-1.5: a human commented on a thread I'm in — respond to them specifically
-      // Prefer threads with the most recent human comment so nothing ages out
-      const myLastTime = (p: RecentPost) => agentLastCommentTime.get(p.id) ?? new Date(0);
-      const latestHumanComment = (p: RecentPost) =>
-        [...p.comments].reverse().find((c) => isHumanComment(c) && c.createdAt > myLastTime(p));
-      const sorted = humanPendingThreads
-        .map((p) => ({ p, hc: latestHumanComment(p) }))
-        .filter((x) => x.hc)
-        .sort((a, b) => b.hc!.createdAt.getTime() - a.hc!.createdAt.getTime());
-      const pick = sorted[0] ?? { p: humanPendingThreads[0], hc: null };
-      target = pick.p;
-      mode = "defend";
-      replyToCommentId = pick.hc?.id ?? null;
-    } else if (ownPostsNeedingReply.length > 0 && rand < 0.90) {
-      // P1: defend my own post — thread reply under the comment that challenged me
-      target = ownPostsNeedingReply[Math.floor(Math.random() * ownPostsNeedingReply.length)];
-      mode = "defend";
-      replyToCommentId = target.comments[target.comments.length - 1]?.id ?? null;
-    } else if (activeDebateThreads.length > 0 && rand < 0.97) {
-      // P2: return to an active thread — prefer threads that match this agent's interests
-      const humanActive = activeDebateThreads.filter(
-        (p) => isHumanPost(p) || p.comments.some(isHumanComment)
-      );
-      const pool = humanActive.length > 0 ? humanActive : activeDebateThreads;
-      // Sort by topic relevance; fall back to all if nothing matches
-      const scored = pool.map((p) => ({ p, score: topicScore(p, agent.topics) }))
-        .sort((a, b) => b.score - a.score);
-      const interested = scored.filter((x) => x.score > 0);
-      const finalPool = interested.length > 0 ? interested : scored;
-      target = finalPool[Math.floor(Math.random() * Math.min(3, finalPool.length))].p;
-      mode = "debate_return";
-      replyToCommentId = target.comments[target.comments.length - 1]?.id ?? null;
-    } else if (freshPosts.length > 0) {
-      // P3: new post to enter — score all posts equally (human or agent-authored)
-      // Score: topic interest * 2 + big bonus for 0-comment posts + human-post bonus
-      // This ensures Family News / Curiosity Den posts (agent-authored, often 0 comments) get fair attention
-      const agentCommentCount = (p: RecentPost) => p.comments.filter((c) => AGENT_NAMES.has(c.authorName)).length;
-      const scored = freshPosts
-        .map((p) => ({
-          p,
-          score:
-            topicScore(p, agent.topics) * 2
-            + (p.comments.length === 0 ? 4 : 0)           // strong boost for unread posts
-            + (isHumanPost(p) ? 1 : 0)                    // slight human-post preference
-            + (p.comments.some(isHumanComment) ? 1 : 0),  // slight boost if human engaged
-          count: agentCommentCount(p),
-        }))
-        .sort((a, b) => b.score - a.score || a.count - b.count);
-      target = scored[Math.floor(Math.random() * Math.min(3, scored.length))].p;
-      const isWarm = isHumanPost(target) || target.comments.some(isHumanComment);
-      // ~35% of entries are purely expressive (no debate required); rest split warm/debate_new
-      const entryRoll = Math.random();
-      mode = entryRoll < 0.35 ? "express" : isWarm ? "warm" : "debate_new";
-      // Thread under the last human comment if present
-      if (isWarm || mode === "express") {
-        const lastHumanComment = [...target.comments].reverse().find(isHumanComment);
-        replyToCommentId = lastHumanComment?.id ?? null;
-      }
     } else {
-      target = (directReplyPosts[0] ?? humanPendingThreads[0] ?? unrespondedHumanPosts[0] ?? ownPostsNeedingReply[0] ?? activeDebateThreads[0])!;
-      mode = directReplyPosts.length > 0 ? "defend" : humanPendingThreads.length > 0 ? "defend" : unrespondedHumanPosts.length > 0 ? "warm" : ownPostsNeedingReply.length > 0 ? "defend" : "debate_return";
+      // Weighted pool: all other work competes by weight so low-comment posts get priority
+      // without completely blocking ongoing debates.
+      type WEntry = { post: RecentPost; mode: DebateMode; replyId: string | null; weight: number };
+      const pool: WEntry[] = [];
+      const seen = new Set<string>();
+
+      const myLastTimeFn = (p: RecentPost) => agentLastCommentTime.get(p.id) ?? new Date(0);
+
+      // Human posts I haven't touched — weight decays as comment count rises toward 5
+      for (const p of recentPosts) {
+        if (!isHumanPost(p) || agentLastCommentTime.has(p.id) || !hasContent(p)) continue;
+        const w = p.comments.length === 0 ? 9
+                 : p.comments.length === 1 ? 7
+                 : p.comments.length === 2 ? 5
+                 : p.comments.length <= 4  ? 3
+                 : 0;
+        if (w === 0) continue;
+        pool.push({ post: p, mode: "warm", replyId: null, weight: w });
+        seen.add(p.id);
+      }
+
+      // Threads I'm already in where a human commented since my last reply
+      for (const p of humanPendingThreads) {
+        const hc = [...p.comments].reverse()
+          .find((c) => isHumanComment(c) && c.createdAt > myLastTimeFn(p));
+        pool.push({ post: p, mode: "defend", replyId: hc?.id ?? null, weight: 8 });
+        seen.add(p.id);
+      }
+
+      // My own posts where someone replied
+      for (const p of ownPostsNeedingReply) {
+        if (seen.has(p.id)) continue;
+        pool.push({ post: p, mode: "defend", replyId: p.comments[p.comments.length - 1]?.id ?? null, weight: 5 });
+        seen.add(p.id);
+      }
+
+      // Active debate threads I'm in — weight shrinks as thread grows
+      for (const p of activeDebateThreads) {
+        if (seen.has(p.id)) continue;
+        const w = p.comments.length <= 5 ? 4 : p.comments.length <= 10 ? 2 : 1;
+        pool.push({ post: p, mode: "debate_return", replyId: p.comments[p.comments.length - 1]?.id ?? null, weight: w });
+        seen.add(p.id);
+      }
+
+      // Fresh posts not yet covered
+      for (const p of freshPosts) {
+        if (seen.has(p.id)) continue;
+        const topicBonus = topicScore(p, agent.topics) > 0 ? 1 : 0;
+        const w = (p.comments.length === 0 ? 3 : p.comments.length <= 4 ? 2 : 1) + topicBonus;
+        const isWarm = isHumanPost(p) || p.comments.some(isHumanComment);
+        const lastHumanC = isWarm ? [...p.comments].reverse().find(isHumanComment) : null;
+        const entryMode: DebateMode = Math.random() < 0.35 ? "express" : isWarm ? "warm" : "debate_new";
+        pool.push({ post: p, mode: entryMode, replyId: lastHumanC?.id ?? null, weight: w });
+        seen.add(p.id);
+      }
+
+      if (pool.length === 0) {
+        target = (directReplyPosts[0] ?? humanPendingThreads[0] ?? unrespondedHumanPosts[0] ?? ownPostsNeedingReply[0] ?? activeDebateThreads[0])!;
+        mode = "warm";
+      } else {
+        // Weighted random pick
+        const totalW = pool.reduce((s, e) => s + e.weight, 0);
+        let r = Math.random() * totalW;
+        let chosen = pool[pool.length - 1];
+        for (const entry of pool) {
+          r -= entry.weight;
+          if (r <= 0) { chosen = entry; break; }
+        }
+        target = chosen.post;
+        mode = chosen.mode;
+        replyToCommentId = chosen.replyId;
+      }
     }
 
     // Full thread context — last 12 comments so nothing is missed
@@ -726,21 +724,6 @@ async function runSpaceAgentAction(
 
   const isHumanPostSA = (p: RecentPost) => p.userId !== null;
 
-  // P0: human posts with 0–2 comments this agent hasn't touched — highest urgency
-  const lowCommentHumanPosts = recentPosts
-    .filter(
-      (p) =>
-        isHumanPostSA(p) &&
-        p.comments.length <= 2 &&
-        !agentLastCommentTime.has(p.id) &&
-        hasContent(p)
-    )
-    .sort(
-      (a, b) =>
-        a.comments.length - b.comments.length ||
-        b.createdAt.getTime() - a.createdAt.getTime()
-    );
-
   const ownPostsNeedingReply = recentPosts.filter(
     (p) => p.authorName === spaceAgent.name && p.comments.length > 0 &&
       p.comments[p.comments.length - 1].authorName !== spaceAgent.name
@@ -758,20 +741,43 @@ async function runSpaceAgentAction(
     (p) => p.authorName !== spaceAgent.name && !agentLastCommentTime.has(p.id) && hasContent(p)
   );
 
-  const canComment = lowCommentHumanPosts.length > 0 || ownPostsNeedingReply.length > 0 || activeDebateThreads.length > 0 || freshPosts.length > 0;
-  const commentChance =
-    lowCommentHumanPosts.length > 0 ? 1.0
-    : ownPostsNeedingReply.length > 0 || activeDebateThreads.length > 0 ? 1.0
-    : freshPosts.length > 0 ? 0.85
-    : 0.35;
-  const shouldComment = canComment && Math.random() < commentChance;
+  const canComment = ownPostsNeedingReply.length > 0 || activeDebateThreads.length > 0 || freshPosts.length > 0;
+  const shouldComment = canComment && Math.random() < (canComment ? 0.90 : 0.35);
 
   if (shouldComment) {
-    const target =
-      lowCommentHumanPosts[0] ??
-      ownPostsNeedingReply[0] ??
-      activeDebateThreads[Math.floor(Math.random() * activeDebateThreads.length)] ??
-      freshPosts[Math.floor(Math.random() * freshPosts.length)];
+    // Weighted pool: low-comment human posts preferred but debates still compete
+    type SAEntry = { post: RecentPost; weight: number };
+    const pool: SAEntry[] = [];
+    const seen = new Set<string>();
+
+    for (const p of recentPosts) {
+      if (!isHumanPostSA(p) || agentLastCommentTime.has(p.id) || !hasContent(p)) continue;
+      const w = p.comments.length === 0 ? 9
+               : p.comments.length === 1 ? 7
+               : p.comments.length === 2 ? 5
+               : p.comments.length <= 4  ? 3
+               : 0;
+      if (w === 0) continue;
+      pool.push({ post: p, weight: w });
+      seen.add(p.id);
+    }
+    for (const p of ownPostsNeedingReply) {
+      if (!seen.has(p.id)) { pool.push({ post: p, weight: 5 }); seen.add(p.id); }
+    }
+    for (const p of activeDebateThreads) {
+      if (seen.has(p.id)) continue;
+      const w = p.comments.length <= 5 ? 4 : p.comments.length <= 10 ? 2 : 1;
+      pool.push({ post: p, weight: w }); seen.add(p.id);
+    }
+    for (const p of freshPosts) {
+      if (!seen.has(p.id)) { pool.push({ post: p, weight: 2 }); seen.add(p.id); }
+    }
+
+    const totalW = pool.reduce((s, e) => s + e.weight, 0);
+    let r = Math.random() * totalW;
+    let chosen = pool[pool.length - 1];
+    for (const entry of pool) { r -= entry.weight; if (r <= 0) { chosen = entry; break; } }
+    const target = chosen.post;
 
     const threadContext =
       target.comments.length > 0
