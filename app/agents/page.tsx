@@ -42,8 +42,17 @@ export default async function AgentsPage() {
   });
   const memBySlug = new Map(memories.map((m) => [m.agentSlug, m.beliefs as BeliefEntry[]]));
 
-  // Fetch all space agents with their spaces
+  // Fetch only spaces this user is a member of (admins see all)
+  const memberSpaceIds = admin
+    ? undefined
+    : (await prisma.spaceMember.findMany({
+        where: { userId: session.user.id },
+        select: { spaceId: true },
+      })).map((m) => m.spaceId);
+
+  // Fetch space agents scoped to the user's spaces
   const spaceAgentRows = await prisma.spaceAgent.findMany({
+    where: memberSpaceIds ? { spaceId: { in: memberSpaceIds } } : undefined,
     include: { space: { select: { id: true, name: true } } },
     orderBy: [{ createdAt: "asc" }],
   });

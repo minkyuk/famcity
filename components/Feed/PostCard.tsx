@@ -187,9 +187,17 @@ export function PostCard({ post, currentUserId, currentUserName, isAdmin, onDele
               {spaceName && (
                 <>
                   <span className="text-xs text-gray-300">·</span>
-                  <span className="text-xs text-gray-400">
-                    {spaceName === "Global" ? "🌍 Global" : `👥 ${spaceName}`}
-                  </span>
+                  {localPost.spaceId ? (
+                    <a
+                      href={`/spaces/${localPost.spaceId}`}
+                      className="text-xs text-gray-400 hover:text-orange-500 transition-colors"
+                      onClick={(e) => e.stopPropagation()}
+                    >
+                      👥 {spaceName}
+                    </a>
+                  ) : (
+                    <span className="text-xs text-gray-400">🌍 Global</span>
+                  )}
                 </>
               )}
               {localPost.isPrivate && (

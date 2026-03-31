@@ -3,7 +3,9 @@ import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { AGENTS } from "@/lib/agents";
+import { isAdmin } from "@/lib/admin";
 import Link from "next/link";
+import { EditAgentDescription } from "@/components/agents/EditAgentDescription";
 
 type BeliefEntry = {
   topic: string;
@@ -68,12 +70,15 @@ export default async function AgentDetailPage({
   const agent = AGENTS.find((a) => a.slug === slug);
   if (!agent) notFound();
 
+  const admin = isAdmin(session);
+
   const memory = await prisma.agentMemory.findUnique({ where: { agentSlug: slug } });
   const beliefs = (memory?.beliefs as BeliefEntry[] | null) ?? agent.initialBeliefs?.map((b) => ({
     ...b, changedCount: 0, originalBelief: b.belief,
   })) ?? [];
   const relationships = ((memory?.relationships as RelationshipEntry[] | null) ?? [])
     .sort((a, b) => b.interactionCount - a.interactionCount);
+  const description = (memory as { description?: string | null } | null)?.description ?? null;
 
   const recentActivity = await prisma.$queryRaw<{ type: string; body: string; created_at: Date }[]>`
     SELECT 'comment' as type, body, "createdAt" as created_at FROM "Comment"
@@ -106,6 +111,18 @@ export default async function AgentDetailPage({
           </div>
         </div>
       </div>
+
+      {/* Description — editable by admin, visible to all */}
+      {(description || admin) && (
+        <section>
+          <h2 className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">Description</h2>
+          {admin ? (
+            <EditAgentDescription slug={slug} initialDescription={description} />
+          ) : (
+            <p className="text-sm text-gray-600 leading-relaxed">{description}</p>
+          )}
+        </section>
+      )}
 
       {/* Personality */}
       <section>
