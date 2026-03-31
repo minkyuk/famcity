@@ -291,56 +291,72 @@ async function runAgentAction(agent: (typeof AGENTS)[0], denSpaceId: string, rec
         .find((c) => c.parentId && myCommentIds.has(c.parentId) && c.authorName !== agent.name);
       replyToCommentId = triggerComment?.id ?? null;
     } else {
-      // Weighted pool: all other work competes by weight so low-comment posts get priority
-      // without completely blocking ongoing debates.
+      // Weighted pool: human activity always beats agent-only discussions.
+      // Recent human posts/comments get an extra recency bonus.
       type WEntry = { post: RecentPost; mode: DebateMode; replyId: string | null; weight: number };
       const pool: WEntry[] = [];
       const seen = new Set<string>();
 
+      const RECENT_MS = 30 * 60 * 1000; // 30 minutes
+      const isRecent = (d: Date) => Date.now() - d.getTime() < RECENT_MS;
       const myLastTimeFn = (p: RecentPost) => agentLastCommentTime.get(p.id) ?? new Date(0);
 
-      // Human posts I haven't touched — weight decays as comment count rises toward 5
+      // Human posts I haven't touched — weight decays with comment count; recency bonus
       for (const p of recentPosts) {
         if (!isHumanPost(p) || agentLastCommentTime.has(p.id) || !hasContent(p)) continue;
-        const w = p.comments.length === 0 ? 9
-                 : p.comments.length === 1 ? 7
-                 : p.comments.length === 2 ? 5
-                 : p.comments.length <= 4  ? 3
-                 : 0;
-        if (w === 0) continue;
-        pool.push({ post: p, mode: "warm", replyId: null, weight: w });
+        const base = p.comments.length === 0 ? 9
+                   : p.comments.length === 1 ? 7
+                   : p.comments.length === 2 ? 5
+                   : p.comments.length <= 4  ? 3
+                   : 0;
+        if (base === 0) continue;
+        const recent = isRecent(p.createdAt) ? 3 : 0;
+        pool.push({ post: p, mode: "warm", replyId: null, weight: base + recent });
         seen.add(p.id);
       }
 
-      // Threads I'm already in where a human commented since my last reply
+      // Threads I'm already in where a human commented since my last reply — recency bonus
       for (const p of humanPendingThreads) {
         const hc = [...p.comments].reverse()
           .find((c) => isHumanComment(c) && c.createdAt > myLastTimeFn(p));
-        pool.push({ post: p, mode: "defend", replyId: hc?.id ?? null, weight: 8 });
+        const recent = hc && isRecent(hc.createdAt) ? 3 : 0;
+        pool.push({ post: p, mode: "defend", replyId: hc?.id ?? null, weight: 8 + recent });
         seen.add(p.id);
       }
 
-      // My own posts where someone replied
+      // My own posts where someone replied — human reply >> agent reply
       for (const p of ownPostsNeedingReply) {
         if (seen.has(p.id)) continue;
-        pool.push({ post: p, mode: "defend", replyId: p.comments[p.comments.length - 1]?.id ?? null, weight: 5 });
+        const lastC = p.comments[p.comments.length - 1];
+        const humanReplied = lastC && isHumanComment(lastC);
+        const recent = lastC && isRecent(lastC.createdAt) ? 2 : 0;
+        pool.push({ post: p, mode: "defend", replyId: lastC?.id ?? null, weight: (humanReplied ? 7 : 3) + recent });
         seen.add(p.id);
       }
 
-      // Active debate threads I'm in — weight shrinks as thread grows
+      // Active debate threads I'm in — boost if human is active, penalize pure agent chatter
       for (const p of activeDebateThreads) {
         if (seen.has(p.id)) continue;
-        const w = p.comments.length <= 5 ? 4 : p.comments.length <= 10 ? 2 : 1;
-        pool.push({ post: p, mode: "debate_return", replyId: p.comments[p.comments.length - 1]?.id ?? null, weight: w });
+        const myLast = myLastTimeFn(p);
+        const recentHumanC = [...p.comments].reverse()
+          .find((c) => isHumanComment(c) && c.createdAt > myLast);
+        const hasHuman = !!recentHumanC;
+        const threadLen = p.comments.length;
+        const base = threadLen <= 5 ? 4 : threadLen <= 10 ? 2 : 1;
+        const w = hasHuman ? base + (isRecent(recentHumanC!.createdAt) ? 4 : 2) : Math.ceil(base / 2);
+        pool.push({ post: p, mode: "debate_return", replyId: recentHumanC?.id ?? p.comments[p.comments.length - 1]?.id ?? null, weight: w });
         seen.add(p.id);
       }
 
-      // Fresh posts not yet covered
+      // Fresh posts not yet covered — human activity lifts weight; pure agent debates stay low
       for (const p of freshPosts) {
         if (seen.has(p.id)) continue;
+        const hasHumanActivity = isHumanPost(p) || p.comments.some(isHumanComment);
         const topicBonus = topicScore(p, agent.topics) > 0 ? 1 : 0;
-        const w = (p.comments.length === 0 ? 3 : p.comments.length <= 4 ? 2 : 1) + topicBonus;
-        const isWarm = isHumanPost(p) || p.comments.some(isHumanComment);
+        const base = p.comments.length === 0 ? 3 : p.comments.length <= 4 ? 2 : 1;
+        const w = hasHumanActivity ? base + 2 + topicBonus : topicBonus; // pure agent posts: near-zero unless on-topic
+        if (w === 0) { seen.add(p.id); continue; }
+        const isWarm = hasHumanActivity;
         const lastHumanC = isWarm ? [...p.comments].reverse().find(isHumanComment) : null;
         const entryMode: DebateMode = Math.random() < 0.35 ? "express" : isWarm ? "warm" : "debate_new";
         pool.push({ post: p, mode: entryMode, replyId: lastHumanC?.id ?? null, weight: w });
@@ -745,32 +761,53 @@ async function runSpaceAgentAction(
   const shouldComment = canComment && Math.random() < (canComment ? 0.90 : 0.35);
 
   if (shouldComment) {
-    // Weighted pool: low-comment human posts preferred but debates still compete
+    // Weighted pool: human activity always beats agent-only discussions
     type SAEntry = { post: RecentPost; weight: number };
     const pool: SAEntry[] = [];
     const seen = new Set<string>();
 
+    const SA_RECENT_MS = 30 * 60 * 1000;
+    const saIsRecent = (d: Date) => Date.now() - d.getTime() < SA_RECENT_MS;
+
+    // Human posts not yet touched — weight decays with comment count; recency bonus
     for (const p of recentPosts) {
       if (!isHumanPostSA(p) || agentLastCommentTime.has(p.id) || !hasContent(p)) continue;
-      const w = p.comments.length === 0 ? 9
-               : p.comments.length === 1 ? 7
-               : p.comments.length === 2 ? 5
-               : p.comments.length <= 4  ? 3
-               : 0;
-      if (w === 0) continue;
-      pool.push({ post: p, weight: w });
+      const base = p.comments.length === 0 ? 9
+                 : p.comments.length === 1 ? 7
+                 : p.comments.length === 2 ? 5
+                 : p.comments.length <= 4  ? 3
+                 : 0;
+      if (base === 0) continue;
+      const recent = saIsRecent(p.createdAt) ? 3 : 0;
+      pool.push({ post: p, weight: base + recent });
       seen.add(p.id);
     }
+    // Own posts needing reply — human reply gets higher weight
     for (const p of ownPostsNeedingReply) {
-      if (!seen.has(p.id)) { pool.push({ post: p, weight: 5 }); seen.add(p.id); }
+      if (seen.has(p.id)) continue;
+      const lastC = p.comments[p.comments.length - 1];
+      const humanReplied = lastC && !AGENT_NAMES.has(lastC.authorName);
+      const recent = lastC && saIsRecent(lastC.createdAt) ? 2 : 0;
+      pool.push({ post: p, weight: (humanReplied ? 7 : 3) + recent });
+      seen.add(p.id);
     }
+    // Active debate threads — boost if human was recently active, penalize pure agent chatter
     for (const p of activeDebateThreads) {
       if (seen.has(p.id)) continue;
-      const w = p.comments.length <= 5 ? 4 : p.comments.length <= 10 ? 2 : 1;
+      const myLast = agentLastCommentTime.get(p.id) ?? new Date(0);
+      const recentHumanC = [...p.comments].reverse()
+        .find((c) => !AGENT_NAMES.has(c.authorName) && c.createdAt > myLast);
+      const base = p.comments.length <= 5 ? 4 : p.comments.length <= 10 ? 2 : 1;
+      const w = recentHumanC
+        ? base + (saIsRecent(recentHumanC.createdAt) ? 4 : 2)
+        : Math.ceil(base / 2);
       pool.push({ post: p, weight: w }); seen.add(p.id);
     }
+    // Fresh posts — human activity lifts weight; pure agent posts near-zero
     for (const p of freshPosts) {
-      if (!seen.has(p.id)) { pool.push({ post: p, weight: 2 }); seen.add(p.id); }
+      if (seen.has(p.id)) continue;
+      const hasHuman = isHumanPostSA(p) || p.comments.some((c) => !AGENT_NAMES.has(c.authorName));
+      pool.push({ post: p, weight: hasHuman ? 3 : 1 }); seen.add(p.id);
     }
 
     const totalW = pool.reduce((s, e) => s + e.weight, 0);
