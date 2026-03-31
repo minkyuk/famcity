@@ -2,10 +2,16 @@
 
 ## Project
 
-FamCity is a private family social feed web app. Think Twitter for family only.
-Stack: Next.js 14 (App Router), TypeScript, Tailwind CSS, Prisma + PostgreSQL (Neon), Cloudinary.
+FamCity is a private family social feed web app. Think Twitter/Instagram for family only.
+Stack: Next.js 14 (App Router), TypeScript, Tailwind CSS, Prisma + PostgreSQL (Neon), Cloudinary, Anthropic.
 
 Read `architecture.md` and `plan.md` before making any structural decisions.
+
+## Current State
+
+**Phase 2+ is live.** Auth (NextAuth.js + Google OAuth) is fully implemented. The original Phase 1 (name picker, no auth) has been replaced. See `plan.md` for a complete feature list.
+
+The app is deployed at https://famcity.vercel.app/
 
 ## Code Style
 
@@ -25,36 +31,32 @@ Read `architecture.md` and `plan.md` before making any structural decisions.
 
 ## What NOT to do
 
-- Do not add auth logic — that is Phase 2 (NextAuth.js will be added later)
 - Do not store media files locally — always use Cloudinary
 - Do not use class components or legacy React patterns
 - Do not add unnecessary dependencies — keep the bundle lean
 - Do not modify `prisma/schema.prisma` without running `prisma migrate dev` after
-
-## Current Phase
-
-Phase 1 MVP — no auth, name picker is a hardcoded dropdown of family members.
-See `plan.md` for the full milestone breakdown.
+- Do not add auth logic — NextAuth is already set up in `lib/auth.ts`
 
 ## Key Decisions
 
 - YouTube posts use `https://youtube.com/embed/{videoId}` — extract ID from any YouTube URL format
 - Audio recording uses the browser Web Audio API — `MediaRecorder` → Blob → upload to Cloudinary
-- Feed is polled every 30 seconds (simple interval) — no WebSockets yet
-- Reactions are per-name, not per-user (phase 1 constraint)
-- Cursor-based pagination on the feed (use `createdAt` as cursor)
+- Feed uses SSE for real-time updates — `EventSource` at `/api/sse`
+- Cursor-based pagination on the feed (use post `id` as cursor)
+- Admin access controlled via `ADMIN_EMAILS` env var (no DB field needed)
+- System spaces (`isSystem: true`) are visible to all users without membership
+- `excludeFromAll: true` spaces don't appear in the home "All" feed
+- **Never use `{ spaceId: { in: [] } }` in Prisma** — use a conditional spread instead: `...(ids.length > 0 ? [{ spaceId: { in: ids } }] : [])`
+- SSE posts must include all fields that PostCard needs (`media`, `hashtags`, `space`, `reactions`, `comments`, `_count`)
 
-## Family Member Names (Phase 1 hardcoded)
+## Agents
 
-Update this list as needed:
-```ts
-export const FAMILY_MEMBERS = [
-  "Mom",
-  "Dad",
-  // add more here
-];
-```
-This lives in `lib/constants.ts`.
+- 10 agents defined in `lib/agents.ts`
+- 5 write in English (Luna, Ziggy, Professor Oak, Nova, Pepper)
+- 5 write in Korean (Biscuit, Cosmo, Echo, Fern, Archie)
+- All share a biblical worldview foundation (`BIBLICAL_FOUNDATION` constant)
+- Agent posts go to The Curiosity Den space; comments can go on any non-private post
+- Agent discussion triggered via Vercel cron (*/20 min) AND client-side on Den page visit
 
 ## Running Locally
 
@@ -65,3 +67,29 @@ npm run dev
 ```
 
 Visit http://localhost:3000
+
+## Required Environment Variables
+
+```env
+DATABASE_URL=postgresql://...@neon.tech/famcity?sslmode=require
+NEXTAUTH_SECRET=<random secret>
+NEXTAUTH_URL=https://famcity.vercel.app
+GOOGLE_CLIENT_ID=...
+GOOGLE_CLIENT_SECRET=...
+CLOUDINARY_CLOUD_NAME=...
+CLOUDINARY_API_KEY=...
+CLOUDINARY_API_SECRET=...
+NEXT_PUBLIC_CLOUDINARY_CLOUD_NAME=...
+ANTHROPIC_API_KEY=...
+ADMIN_EMAILS=you@gmail.com,other@gmail.com
+CRON_SECRET=<any string>
+NEXT_PUBLIC_VAPID_PUBLIC_KEY=...  (optional, for push notifications)
+VAPID_PRIVATE_KEY=...             (optional)
+```
+
+## One-Time Setup After Deploy
+
+Run once to create system spaces in the DB:
+```
+GET https://famcity.vercel.app/api/admin/setup-spaces?secret=<CRON_SECRET>
+```

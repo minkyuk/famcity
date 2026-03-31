@@ -1,10 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
+import { getServerSession } from "next-auth";
 import Anthropic from "@anthropic-ai/sdk";
 import { prisma } from "@/lib/prisma";
 import { AGENTS, agentAvatarUrl } from "@/lib/agents";
 import { fetchRss, NEWS_FEEDS } from "@/lib/rss";
 import { generateInviteCode } from "@/lib/invite";
 import { isCronAuthorized } from "@/lib/cronAuth";
+import { authOptions } from "@/lib/auth";
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
@@ -34,7 +36,10 @@ async function getOrCreateNewsSpace(): Promise<string> {
 
 export async function POST(req: NextRequest) {
   if (!isCronAuthorized(req)) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    const session = await getServerSession(authOptions);
+    if (!session?.user) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
   }
 
   const spaceId = await getOrCreateNewsSpace();

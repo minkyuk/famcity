@@ -41,7 +41,7 @@ export async function GET(req: NextRequest) {
     }
     andClauses.push({ spaceId });
   } else {
-    // "All" feed: member spaces (excl. system) + global posts scoped to shared-space members
+    // "All" feed: member spaces (excl. system) + all global posts
     const [memberships, excludedSpaces] = await Promise.all([
       prisma.spaceMember.findMany({ where: { userId: session.user.id }, select: { spaceId: true } }),
       prisma.space.findMany({ where: { excludeFromAll: true }, select: { id: true } }),
@@ -49,20 +49,10 @@ export async function GET(req: NextRequest) {
     const excludedIds = new Set(excludedSpaces.map((s) => s.id));
     const spaceIds = memberships.map((m) => m.spaceId).filter((id) => !excludedIds.has(id));
 
-    // Global posts are only visible from people who share at least one space with you
-    const coMembers = await prisma.spaceMember.findMany({
-      where: { spaceId: { in: spaceIds } },
-      select: { userId: true },
-      distinct: ["userId"],
-    });
-    const coMemberIds = coMembers.map((m) => m.userId);
-
     andClauses.push({
       OR: [
-        { spaceId: { in: spaceIds } },                          // posts in your spaces
-        { spaceId: null, userId: { in: coMemberIds } },         // global posts by co-members
-        { spaceId: null, userId: session.user.id },             // your own global posts
-        { spaceId: null, userId: null },                        // legacy posts with no user
+        ...(spaceIds.length > 0 ? [{ spaceId: { in: spaceIds } }] : []),
+        { spaceId: null }, // all global posts visible to all users
       ],
     });
   }

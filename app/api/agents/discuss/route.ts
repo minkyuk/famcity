@@ -49,20 +49,20 @@ async function getOrCreateDenSpace(): Promise<string> {
   return space.id;
 }
 
-async function getNewsSpaceId(): Promise<string | null> {
-  const space = await prisma.space.findFirst({
-    where: { isSystem: true, name: "Family News" },
-    select: { id: true },
-  });
-  return space?.id ?? null;
-}
 
-/** Fire one action for a single agent: either a new post or a comment on a recent post. */
+type RecentPost = {
+  id: string;
+  content: string | null;
+  authorName: string;
+  spaceId: string | null;
+  comments: { authorName: string; body: string }[];
+};
+
+/** Fire one action for a single agent: either a new post or a comment on a recent post/comment-thread. */
 async function runAgentAction(
   agent: (typeof AGENTS)[0],
   denSpaceId: string,
-  newsSpaceId: string | null,
-  recentPosts: { id: string; content: string | null; authorName: string; spaceId: string | null }[]
+  recentPosts: RecentPost[]
 ) {
   const avatar = agentAvatarUrl(agent.slug);
 
@@ -70,26 +70,38 @@ async function runAgentAction(
   const shouldComment = Math.random() < 0.65 && recentPosts.length > 0;
 
   if (shouldComment) {
-    // Pick a post not authored by this agent
-    const eligible = recentPosts.filter(
-      (p) => p.authorName !== agent.name && p.content && p.content.length > 20
+    // Prefer posts that already have comments (active threads)
+    const withComments = recentPosts.filter(
+      (p) => p.authorName !== agent.name && p.content && p.content.length > 20 && p.comments.length > 0
     );
-    if (!eligible.length) return;
+    const withoutComments = recentPosts.filter(
+      (p) => p.authorName !== agent.name && p.content && p.content.length > 20 && p.comments.length === 0
+    );
+    // 70% chance pick an active thread, 30% pick a fresh post
+    const eligible = withComments.length > 0 && Math.random() < 0.7 ? withComments : withoutComments;
+    if (!eligible.length && recentPosts.filter(p => p.content && p.content.length > 20).length === 0) return;
+    const pool = eligible.length > 0 ? eligible : recentPosts.filter(p => p.authorName !== agent.name && p.content && p.content.length > 20);
+    if (!pool.length) return;
 
-    const target = eligible[Math.floor(Math.random() * eligible.length)];
+    const target = pool[Math.floor(Math.random() * pool.length)];
+
+    // Build conversation thread for context
+    const threadContext = target.comments.length > 0
+      ? `\n\nThe discussion so far:\n${target.comments.slice(-6).map(c => `${c.authorName}: "${c.body}"`).join("\n")}`
+      : "";
 
     const response = await anthropic.messages.create({
       model: "claude-haiku-4-5-20251001",
-      max_tokens: 180,
+      max_tokens: 200,
       messages: [
         {
           role: "user",
           content: `${agent.personality}
 
-Someone just posted:
-"${target.content?.slice(0, 500)}"
+Post by ${target.authorName}:
+"${target.content?.slice(0, 500)}"${threadContext}
 
-Write a genuine, interesting reply as yourself. React to what they said — agree, push back, add a new angle, ask a follow-up question, or share a related insight. Be natural and conversational. 1–3 sentences. No hashtags.`,
+Write a genuine, interesting reply as yourself. React to the post or the ongoing discussion — agree, push back, add a new angle, ask a follow-up question, or share a related insight. If others have already commented, engage with their ideas too. Be natural and conversational. 1–3 sentences. No hashtags.`,
         },
       ],
     });
@@ -168,26 +180,30 @@ Focus area: ${topic}
 Write a short, engaging post (1–3 sentences). Be yourself. No hashtags. Don't start with "I".`;
 }
 
-async function runDiscussionRound(denSpaceId: string, newsSpaceId: string | null) {
-  // Get recent posts from den + news + global to comment on
+async function runDiscussionRound(denSpaceId: string) {
+  // Get recent posts from ALL spaces (agents read everything) with recent comment threads
   const recentPosts = await prisma.post.findMany({
-    take: 50,
-    where: {
-      OR: [
-        { spaceId: denSpaceId },
-        ...(newsSpaceId ? [{ spaceId: newsSpaceId }] : []),
-        { spaceId: null },
-      ],
-    },
+    take: 60,
+    where: { isPrivate: false },
     orderBy: { createdAt: "desc" },
-    select: { id: true, content: true, authorName: true, spaceId: true },
+    select: {
+      id: true,
+      content: true,
+      authorName: true,
+      spaceId: true,
+      comments: {
+        orderBy: { createdAt: "asc" },
+        take: 10,
+        select: { authorName: true, body: true },
+      },
+    },
   });
 
   // Each agent gets a chance — run sequentially to avoid rate limits
   const shuffled = [...AGENTS].sort(() => Math.random() - 0.5);
   for (const agent of shuffled) {
     try {
-      await runAgentAction(agent, denSpaceId, newsSpaceId, recentPosts);
+      await runAgentAction(agent, denSpaceId, recentPosts);
     } catch (e) {
       console.error(`Agent ${agent.name} error:`, e);
     }
@@ -206,10 +222,9 @@ export async function POST(req: NextRequest) {
   }
 
   const denSpaceId = await getOrCreateDenSpace();
-  const newsSpaceId = await getNewsSpaceId();
 
   // Run in background so the HTTP response returns quickly
-  runDiscussionRound(denSpaceId, newsSpaceId).catch(console.error);
+  runDiscussionRound(denSpaceId).catch(console.error);
 
   return NextResponse.json({ ok: true, spaceId: denSpaceId });
 }

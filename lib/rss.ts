@@ -36,10 +36,17 @@ function extract(xml: string, tag: string): string {
 }
 
 // Good free RSS feeds — no API key needed
+// Balanced mix of four major outlets
 export const NEWS_FEEDS = [
+  // BBC
   "https://feeds.bbci.co.uk/news/world/rss.xml",
   "https://feeds.bbci.co.uk/news/technology/rss.xml",
-  "https://feeds.bbci.co.uk/news/science_and_environment/rss.xml",
+  // Al Jazeera
+  "https://www.aljazeera.com/xml/rss/all.xml",
+  // CNN
+  "http://rss.cnn.com/rss/edition.rss",
+  // Fox News
+  "https://feeds.foxnews.com/foxnews/latest",
 ];
 
 export const SCIENCE_FEEDS = [

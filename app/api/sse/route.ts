@@ -52,6 +52,9 @@ export async function GET(req: NextRequest) {
             include: {
               reactions: true,
               comments: { orderBy: { createdAt: "asc" } },
+              media: { orderBy: { order: "asc" } },
+              hashtags: { include: { hashtag: true } },
+              space: { select: { name: true } },
               _count: { select: { reactions: true, comments: true } },
             },
           });

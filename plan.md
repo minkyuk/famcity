@@ -1,174 +1,159 @@
-# FamCity — Implementation Plan
+# FamCity — Implementation Plan (Current State)
 
-## Goal
+> Last updated: 2026-03-30
 
-Build a private family social feed web app where family members can post YouTube videos, images, recorded audio, and text. Login is deferred to Phase 2. Ship a working MVP first.
+## What's Built
 
----
-
-## Phases
-
-### Phase 1 — MVP (No Auth)
-
-#### Milestone 1: Project Scaffolding
-- [ ] `npx create-next-app@latest famcity --typescript --tailwind --app`
-- [ ] Install dependencies: `prisma`, `@prisma/client`, `cloudinary`, `next-cloudinary`, `zod`, `date-fns`
-- [ ] Set up Prisma schema (Post, Reaction, Comment models)
-- [ ] Connect to Neon PostgreSQL via `DATABASE_URL`
-- [ ] Run `prisma migrate dev --name init`
-- [ ] Create `.env.local` with all required vars
-- [ ] Set up Cloudinary account + unsigned upload preset for images and audio
-
-#### Milestone 2: Feed
-- [ ] GET `/api/posts` — paginated, newest first, include reaction counts + comment counts
-- [ ] `PostCard` component — renders correct sub-component based on `type`
-- [ ] `Feed` page — shows all posts, pull-to-refresh or auto-poll every 30s
-- [ ] Empty state (first post CTA)
-
-#### Milestone 3: Compose — Text + YouTube
-- [ ] Floating compose button → modal or dedicated `/compose` page
-- [ ] `NamePicker` — dropdown of family member names (hardcoded list in phase 1)
-- [ ] Text post: textarea + submit
-- [ ] YouTube post: URL input → parse video ID → show embed preview → submit
-- [ ] Validate with Zod before POST
-
-#### Milestone 4: Compose — Image Upload
-- [ ] `ImageUploader` component: drag-and-drop or file picker
-- [ ] Client-side preview before upload
-- [ ] Upload to Cloudinary via `/api/media/upload` (server-side signed upload)
-- [ ] Store returned `secure_url` in post record
-- [ ] Show image in feed with lightbox on click
-
-#### Milestone 5: Compose — Audio Recording
-- [ ] `AudioRecorder` component using `navigator.mediaDevices.getUserMedia`
-- [ ] Record → playback → re-record flow
-- [ ] Convert Blob → upload to Cloudinary as audio file
-- [ ] `AudioPlayer` component in feed (custom play/pause/seek bar)
-
-#### Milestone 6: Reactions + Comments
-- [ ] `ReactionBar` — emoji picker (❤️ 😂 🎉 😢 🙌), toggle on/off per name
-- [ ] POST `/api/posts/[id]/react` — upsert reaction
-- [ ] `CommentThread` — inline below post, expand/collapse
-- [ ] POST `/api/posts/[id]/comments`
-- [ ] Show commenter name + timestamp
-
-#### Milestone 7: Polish + Deploy
-- [ ] Mobile-responsive layout (Tailwind breakpoints)
-- [ ] Loading skeletons for feed
-- [ ] Error boundaries and toast notifications
-- [ ] Delete own post (by name match in phase 1)
-- [ ] Deploy to Vercel, connect Neon DB + Cloudinary env vars
-- [ ] Share URL with family
+FamCity has shipped well past the original MVP. All three original phases are largely complete, plus a number of features that weren't originally planned.
 
 ---
 
-### Phase 2 — Auth + Accounts
+## Shipped Features
 
-- [ ] Install NextAuth.js
-- [ ] Add `User` model to Prisma schema
-- [ ] Google OAuth login (or magic link email)
-- [ ] Link existing posts to user accounts
-- [ ] Family invite link — generate token, validate on first login
-- [ ] Role: admin (can delete any post) vs. member
-- [ ] Profile page: name, avatar, post history
-- [ ] Push notifications (optional): new post → family members notified
+### Auth & Identity
+- [x] NextAuth.js v4 with Google OAuth
+- [x] Session-based access control (all pages redirect to `/login` if unauthenticated)
+- [x] User profile page (`/profile/[id]`) with bio editing
+- [x] Family invite links — unique code per space, join via `/join/[code]`
+- [x] Admin role via `ADMIN_EMAILS` env var (no schema change needed)
+
+### Feed & Posts
+- [x] Infinite scroll feed with cursor-based pagination
+- [x] Real-time updates via SSE (`/api/sse`) — new posts appear live
+- [x] Post types: TEXT, IMAGE, YOUTUBE, AUDIO, VIDEO, PDF
+- [x] Up to 10 images per post (gallery with swipe lightbox)
+- [x] Private posts (only visible to author)
+- [x] Space-scoped posts
+- [x] Global posts (no space) visible to all logged-in users
+- [x] Hashtag extraction and filtering
+- [x] Edit post (content, privacy, space)
+- [x] Delete post (own or admin)
+- [x] Post type badge on cards
+
+### Media
+- [x] Cloudinary signed upload (images, audio, video, PDF)
+- [x] Image gallery with physics-based swipe lightbox (rubber-band drag, velocity snap, close on swipe-down)
+- [x] YouTube URL → embed (ID extraction from any YouTube URL format)
+- [x] Audio recording via browser MediaRecorder → Cloudinary
+- [x] Video upload with player
+- [x] PDF upload with page-1 thumbnail (Cloudinary transformation)
+
+### Comments & Reactions
+- [x] Threaded comments per post (inline expand/collapse)
+- [x] Edit own comment
+- [x] Delete own comment (admin can delete any)
+- [x] Emoji reactions (❤️ 😂 🎉 😢 🙌) — per user
+- [x] Reaction counts displayed
+
+### Spaces
+- [x] Create spaces, invite via code
+- [x] Space-scoped feed (`/spaces/[id]`)
+- [x] Space switcher in header
+- [x] System spaces (not created by users): Family News, The Curiosity Den
+- [x] `excludeFromAll` flag: system spaces don't appear in main "All" feed
+
+### AI Agents (The Curiosity Den)
+- [x] 10 named agents with distinct personalities
+- [x] Biblical worldview foundation for all agents
+- [x] 5 agents write in Korean (Biscuit, Cosmo, Echo, Fern, Archie)
+- [x] 5 agents write in English (Luna, Ziggy, Professor Oak, Nova, Pepper)
+- [x] Agents post new content every 20 minutes (Vercel cron)
+- [x] Agents can comment on any non-private post across all spaces
+- [x] Agents prefer posting to active comment threads for deeper discussion
+- [x] Comment threads passed as context so agents can reference each other
+- [x] 30% chance of science-news-inspired posts (BBC RSS)
+- [x] Triggered immediately when user visits The Curiosity Den (client-side trigger)
+- [x] DiceBear pixel-art avatars per agent
+
+### Family News Space
+- [x] Automated news posts 3x daily (8am, 1pm, 7pm UTC)
+- [x] One random BBC news item → random agent commentary via Claude Haiku
+- [x] Excluded from "All" feed
+
+### Calendar & Events
+- [x] Create/view family events with date, time, location, description
+- [x] RSVP (yes/no/maybe) per event
+- [x] Space-specific calendar (events scoped to a space)
+- [x] Defaults to first non-system space the user belongs to
+- [x] Upcoming events widget in sidebar
+
+### Notifications
+- [x] Notification bell — unread post count
+- [x] Includes comments made on the user's posts
+- [x] Clicking notification navigates to that post
+- [x] Push notifications (Web Push API, optional browser permission)
+
+### Chat
+- [x] Group chat channels per space
+- [x] Real-time via SSE
+- [x] Online presence widget
+
+### Direct Messages
+- [x] DMs accessible from user profile popup
+- [x] 4-second polling for new messages
+- [x] Read status tracking
+
+### Misc / UX
+- [x] Online presence (who's currently on the app)
+- [x] Hashtag sidebar with click-to-filter
+- [x] Walking cat Easter egg
+- [x] Music widget
+- [x] Toast notifications
 
 ---
 
-### Phase 3 — Nice-to-Haves
+## Environment Variables Required
 
-- [ ] Real-time feed updates (WebSockets or Vercel Edge streaming)
-- [ ] Video upload (direct, not just YouTube links)
-- [ ] Stories / ephemeral posts (expire after 24h)
-- [ ] Birthday reminders and calendar integration
-- [ ] Native mobile app (React Native or PWA)
-- [ ] Private DMs between family members
-
----
-
-## File Structure (Phase 1 target)
-
-```
-famcity/
-├── app/
-│   ├── layout.tsx
-│   ├── page.tsx                    # Feed
-│   ├── compose/
-│   │   └── page.tsx
-│   ├── posts/
-│   │   └── [id]/
-│   │       └── page.tsx
-│   └── api/
-│       ├── posts/
-│       │   ├── route.ts            # GET list, POST create
-│       │   └── [id]/
-│       │       ├── route.ts        # GET single, DELETE
-│       │       ├── react/route.ts
-│       │       └── comments/route.ts
-│       └── media/
-│           └── upload/route.ts
-├── components/
-│   ├── Feed/
-│   ├── Compose/
-│   └── shared/
-├── lib/
-│   ├── prisma.ts                   # PrismaClient singleton
-│   ├── cloudinary.ts               # Cloudinary config
-│   └── validators.ts               # Zod schemas
-├── prisma/
-│   └── schema.prisma
-├── public/
-├── .env.local
-└── package.json
-```
-
----
-
-## Dependencies
-
-```json
-{
-  "dependencies": {
-    "next": "14.x",
-    "react": "18.x",
-    "react-dom": "18.x",
-    "@prisma/client": "latest",
-    "cloudinary": "latest",
-    "next-cloudinary": "latest",
-    "zod": "latest",
-    "date-fns": "latest",
-    "clsx": "latest"
-  },
-  "devDependencies": {
-    "prisma": "latest",
-    "typescript": "5.x",
-    "tailwindcss": "3.x",
-    "@types/node": "latest",
-    "@types/react": "latest"
-  }
-}
-```
-
----
-
-## Environment Variables
-
-```
-# .env.local
+```env
+# Database
 DATABASE_URL=postgresql://...@neon.tech/famcity?sslmode=require
-CLOUDINARY_CLOUD_NAME=your_cloud_name
-CLOUDINARY_API_KEY=your_api_key
-CLOUDINARY_API_SECRET=your_api_secret
-NEXT_PUBLIC_CLOUDINARY_CLOUD_NAME=your_cloud_name
+
+# NextAuth
+NEXTAUTH_SECRET=<random secret>
+NEXTAUTH_URL=https://your-app.vercel.app
+
+# Google OAuth
+GOOGLE_CLIENT_ID=...
+GOOGLE_CLIENT_SECRET=...
+
+# Cloudinary
+CLOUDINARY_CLOUD_NAME=...
+CLOUDINARY_API_KEY=...
+CLOUDINARY_API_SECRET=...
+NEXT_PUBLIC_CLOUDINARY_CLOUD_NAME=...
+
+# Anthropic (agents)
+ANTHROPIC_API_KEY=...
+
+# Admin access
+ADMIN_EMAILS=you@gmail.com,spouse@gmail.com
+
+# Cron auth
+CRON_SECRET=<any secret string>
+
+# Web Push (optional)
+NEXT_PUBLIC_VAPID_PUBLIC_KEY=...
+VAPID_PRIVATE_KEY=...
 ```
 
 ---
 
-## Risks & Mitigations
+## Pending / Future Work
 
-| Risk                              | Mitigation                                          |
-|-----------------------------------|-----------------------------------------------------|
-| Audio recording not supported     | Graceful fallback message; file upload alternative  |
-| Cloudinary free tier limits       | ~25GB bandwidth/month — fine for family use         |
-| No auth = anyone can post         | URL is private (share only with family)             |
-| Neon DB cold starts               | Use connection pooling URL from Neon dashboard      |
+- [ ] DM notifications (bell badge for unread DMs)
+- [ ] Points & ranks system (post = +10 pts, comment = +3 pts)
+- [ ] Profile popup: scroll-to-close behavior
+- [ ] Stories (ephemeral 24h posts)
+- [ ] Native mobile app (PWA or React Native)
+- [ ] Per-space agent customization
+- [ ] Agent posts to multiple spaces based on topic relevance
+
+---
+
+## Deployment
+
+1. Push to GitHub
+2. Import in Vercel (connect repo)
+3. Set all env vars in Vercel dashboard
+4. Run `https://your-app.vercel.app/api/admin/setup-spaces?secret=<CRON_SECRET>` once after first deploy
+5. Vercel Pro required for `*/20 * * * *` cron schedule
