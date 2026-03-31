@@ -114,6 +114,7 @@ type RecentPost = {
   spaceId: string | null;
   type: string;
   mediaUrl: string | null;
+  createdAt: Date;
   media: { url: string }[];
   comments: { id: string; parentId: string | null; authorName: string; body: string; createdAt: Date }[];
 };
@@ -211,11 +212,11 @@ async function runAgentAction(agent: (typeof AGENTS)[0], denSpaceId: string, rec
     );
   });
 
-  // P0: Human posts with 0 comments that this agent hasn't touched — highest urgency
+  // P0: Human posts with 0–2 comments that this agent hasn't touched — highest urgency
   const unrespondedHumanPosts = recentPosts.filter(
     (p) =>
       isHumanPost(p) &&
-      p.comments.length === 0 &&
+      p.comments.length <= 2 &&
       !agentLastCommentTime.has(p.id) &&
       hasContent(p)
   );
@@ -293,10 +294,12 @@ async function runAgentAction(agent: (typeof AGENTS)[0], denSpaceId: string, rec
         .find((c) => c.parentId && myCommentIds.has(c.parentId) && c.authorName !== agent.name);
       replyToCommentId = triggerComment?.id ?? null;
     } else if (unrespondedHumanPosts.length > 0) {
-      // P0: unanswered human post with 0 comments — always respond, no rand gate
-      // Pick the newest one so fresh posts get covered first
+      // P0: human posts with 0–2 comments — always respond, no rand gate
+      // Sort: fewest comments first; ties broken by newest post
       const sorted = [...unrespondedHumanPosts].sort(
-        (a, b) => (b.comments[0]?.createdAt.getTime() ?? 0) - (a.comments[0]?.createdAt.getTime() ?? 0)
+        (a, b) =>
+          a.comments.length - b.comments.length ||
+          b.createdAt.getTime() - a.createdAt.getTime()
       );
       target = sorted[0];
       mode = "warm";
@@ -604,6 +607,35 @@ Focus area: ${topic}
 Write a post that shows your actual thinking — not a safe summary but a live thought in progress. Lead with something specific: a claim, a tension, a question you genuinely don't know the answer to. 3–5 sentences. No hashtags. No asterisks or markdown formatting. Don't start with "I".${BELIEF_UPDATE_INSTRUCTION}`;
 }
 
+const EMOJI_PALETTE = ["❤️", "😊", "🤔", "💡", "✨", "👏", "🌟", "🙏", "🔥", "💕", "🎉", "🤯", "🔭", "🌿", "💙"];
+
+/** Occasionally have an agent react with emojis to recent posts they find interesting. */
+async function runAgentEmojiReactions(agent: (typeof AGENTS)[0], recentPosts: RecentPost[]) {
+  // ~20% chance to react at all this turn — keeps it feeling organic, not mechanical
+  if (Math.random() > 0.20) return;
+
+  // Prefer human posts; fall back to any post
+  const humanPosts = recentPosts.filter((p) => p.userId !== null).slice(0, 15);
+  const pool = humanPosts.length > 0 ? humanPosts : recentPosts.slice(0, 15);
+  if (pool.length === 0) return;
+
+  // React to 1 or (rarely) 2 posts
+  const postCount = Math.random() < 0.25 ? 2 : 1;
+  const targets = [...pool].sort(() => Math.random() - 0.5).slice(0, postCount);
+
+  for (const post of targets) {
+    // Pick 1 or (occasionally) 2 emojis per post
+    const emojiCount = Math.random() < 0.3 ? 2 : 1;
+    const chosen = [...EMOJI_PALETTE].sort(() => Math.random() - 0.5).slice(0, emojiCount);
+    for (const emoji of chosen) {
+      await prisma.reaction.createMany({
+        data: [{ postId: post.id, emoji, name: agent.name }],
+        skipDuplicates: true,
+      });
+    }
+  }
+}
+
 async function runOneAgentTurn(agentIdx: number, denSpaceId: string) {
   const agent = AGENTS[agentIdx];
 
@@ -621,6 +653,7 @@ async function runOneAgentTurn(agentIdx: number, denSpaceId: string) {
       spaceId: true,
       type: true,
       mediaUrl: true,
+      createdAt: true,
       media: {
         take: 10,
         orderBy: { order: "asc" },
@@ -634,7 +667,10 @@ async function runOneAgentTurn(agentIdx: number, denSpaceId: string) {
     },
   });
 
-  await runAgentAction(agent, denSpaceId, recentPosts);
+  await Promise.all([
+    runAgentAction(agent, denSpaceId, recentPosts),
+    runAgentEmojiReactions(agent, recentPosts),
+  ]);
 }
 
 const DEFAULT_SPACE_AGENT_BELIEFS = [
@@ -677,7 +713,7 @@ async function runSpaceAgentAction(
     where: { isPrivate: false, spaceId },
     orderBy: { createdAt: "desc" },
     select: {
-      id: true, content: true, authorName: true, userId: true, spaceId: true, type: true, mediaUrl: true,
+      id: true, content: true, authorName: true, userId: true, spaceId: true, type: true, mediaUrl: true, createdAt: true,
       media: { take: 10, orderBy: { order: "asc" }, select: { url: true } },
       comments: { orderBy: { createdAt: "asc" }, take: 15, select: { id: true, parentId: true, authorName: true, body: true, createdAt: true } },
     },
