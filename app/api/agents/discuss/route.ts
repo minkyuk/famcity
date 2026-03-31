@@ -836,9 +836,20 @@ async function runSpaceAgentAction(
     select: {
       id: true, content: true, authorName: true, userId: true, spaceId: true, type: true, mediaUrl: true, createdAt: true,
       media: { take: 10, orderBy: { order: "asc" }, select: { url: true } },
-      comments: { orderBy: { createdAt: "asc" }, take: 15, select: { id: true, parentId: true, authorName: true, body: true, createdAt: true } },
+      comments: { orderBy: { createdAt: "asc" }, take: 15, select: { id: true, parentId: true, authorName: true, body: true, createdAt: true, userId: true } },
     },
   });
+
+  // Posts already touched by any agent in the last 3 min — skip them to avoid pile-ons
+  const DEDUPE_WINDOW_MS = 3 * 60 * 1000;
+  const recentAgentCommentsByPost = new Map<string, number>();
+  for (const p of recentPosts) {
+    const count = p.comments.filter(
+      (c) => (c as { userId?: string | null }).userId === null &&
+              Date.now() - c.createdAt.getTime() < DEDUPE_WINDOW_MS
+    ).length;
+    if (count > 0) recentAgentCommentsByPost.set(p.id, count);
+  }
 
   const hasContent = (p: RecentPost) =>
     (p.content && p.content.length > 5) ||
@@ -883,9 +894,12 @@ async function runSpaceAgentAction(
     // Human-priority mode: exclude pure agent-only content when human posts are untouched
     const saHumanPriorityMode = anyUnrespondedHumanPostSA;
 
+    const recentlyTouched = (id: string) => (recentAgentCommentsByPost.get(id) ?? 0) >= 1;
+
     // Human posts not yet touched — weight decays with comment count; recency bonus
     for (const p of recentPosts) {
       if (!isHumanPostSA(p) || agentLastCommentTime.has(p.id) || !hasContent(p)) continue;
+      if (recentlyTouched(p.id)) { seen.add(p.id); continue; } // another agent just commented — skip this tick
       const base = p.comments.length === 0 ? 9
                  : p.comments.length === 1 ? 7
                  : p.comments.length === 2 ? 5
@@ -898,6 +912,7 @@ async function runSpaceAgentAction(
     // Own posts needing reply — skip agent-only replies in human-priority mode
     for (const p of ownPostsNeedingReply) {
       if (seen.has(p.id)) continue;
+      if (recentlyTouched(p.id)) { seen.add(p.id); continue; }
       const lastC = p.comments[p.comments.length - 1];
       const humanReplied = lastC && !AGENT_NAMES.has(lastC.authorName);
       if (saHumanPriorityMode && !humanReplied) { seen.add(p.id); continue; }
@@ -908,6 +923,7 @@ async function runSpaceAgentAction(
     // Active debate threads — skip agent-only debates in human-priority mode
     for (const p of activeDebateThreads) {
       if (seen.has(p.id)) continue;
+      if (recentlyTouched(p.id)) { seen.add(p.id); continue; }
       const myLast = agentLastCommentTime.get(p.id) ?? new Date(0);
       const recentHumanC = [...p.comments].reverse()
         .find((c) => !AGENT_NAMES.has(c.authorName) && c.createdAt > myLast);
@@ -921,6 +937,7 @@ async function runSpaceAgentAction(
     // Fresh posts — skip pure agent activity in human-priority mode
     for (const p of freshPosts) {
       if (seen.has(p.id)) continue;
+      if (recentlyTouched(p.id)) { seen.add(p.id); continue; }
       const hasHuman = isHumanPostSA(p) || p.comments.some((c) => !AGENT_NAMES.has(c.authorName));
       if (saHumanPriorityMode && !hasHuman) { seen.add(p.id); continue; }
       pool.push({ post: p, weight: saSaturate(hasHuman ? 3 : 1, p.id) }); seen.add(p.id);
@@ -1056,17 +1073,17 @@ async function runHotSpaceAgentTurns(spaceIds: string[]) {
       const purpose = purposeBySpace.get(spaceId);
       const knightAsSpaceAgent = { slug: knightVisitor.slug, name: knightVisitor.name, personality: knightVisitor.personality };
       if (agents && agents.length > 0) {
-        await Promise.all([
-          ...agents.map((a) => runSpaceAgentAction(a, spaceId, purpose)),
-          runSpaceAgentAction(knightAsSpaceAgent, spaceId, purpose),
-        ]);
+        // Run sequentially so each agent sees the previous agent's freshly written comment
+        // and the dedupe window kicks in, preventing pile-ons on the same post
+        for (const a of agents) {
+          await runSpaceAgentAction(a, spaceId, purpose);
+        }
+        await runSpaceAgentAction(knightAsSpaceAgent, spaceId, purpose);
       } else {
         const shuffled = [...AGENTS].sort(() => Math.random() - 0.5).slice(0, 2);
-        await Promise.all(
-          shuffled.map((a) =>
-            runSpaceAgentAction({ slug: a.slug, name: a.name, personality: a.personality }, spaceId, purpose)
-          )
-        );
+        for (const a of shuffled) {
+          await runSpaceAgentAction({ slug: a.slug, name: a.name, personality: a.personality }, spaceId, purpose);
+        }
       }
     })
   );
