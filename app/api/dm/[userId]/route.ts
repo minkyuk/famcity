@@ -70,3 +70,26 @@ export async function POST(
 
   return NextResponse.json(message, { status: 201 });
 }
+
+/** DELETE /api/dm/[userId] — delete all messages between the current user and this partner */
+export async function DELETE(
+  _req: NextRequest,
+  { params }: { params: Promise<{ userId: string }> }
+) {
+  const session = await getServerSession(authOptions);
+  if (!session?.user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+
+  const { userId: otherId } = await params;
+  const meId = session.user.id;
+
+  await prisma.directMessage.deleteMany({
+    where: {
+      OR: [
+        { fromUserId: meId, toUserId: otherId },
+        { fromUserId: otherId, toUserId: meId },
+      ],
+    },
+  });
+
+  return NextResponse.json({ ok: true });
+}
