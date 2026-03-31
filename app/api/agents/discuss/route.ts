@@ -550,14 +550,15 @@ async function runSpaceAgentAction(
 
 /** Run one agent per space that has custom agents (cycles through them by slot). */
 async function runAllSpaceAgentTurns(slotMinutes: number) {
-  const spaceAgents = await prisma.spaceAgent.findMany({
-    orderBy: { createdAt: "asc" },
-  }).catch(() => []);
+  type SpaceAgentRow = { id: string; spaceId: string; name: string; personality: string; slug: string; createdAt: Date };
+  const spaceAgents: SpaceAgentRow[] = await (prisma.spaceAgent as { findMany: (opts: object) => Promise<SpaceAgentRow[]> })
+    .findMany({ orderBy: { createdAt: "asc" } })
+    .catch(() => []);
 
   if (spaceAgents.length === 0) return;
 
   // Group by spaceId
-  const bySpace = new Map<string, typeof spaceAgents>();
+  const bySpace = new Map<string, SpaceAgentRow[]>();
   for (const sa of spaceAgents) {
     if (!bySpace.has(sa.spaceId)) bySpace.set(sa.spaceId, []);
     bySpace.get(sa.spaceId)!.push(sa);
@@ -585,25 +586,27 @@ export async function POST(req: NextRequest) {
   }
 
   const sessionActive = await isSessionActive();
-
-  // Slot size: 2 min during hot hour, 2 min in normal mode too (cron cadence)
-  const slotMinutes = 2;
   const denSpaceId = await getOrCreateDenSpace();
 
   if (sessionActive) {
-    // Hot hour: every agent fires at once + all space agents
-    await Promise.all([
-      ...AGENTS.map((_, i) => runOneAgentTurn(i, denSpaceId)),
-      runAllSpaceAgentTurns(slotMinutes),
-    ]);
+    // Hot hour: run all 25 agents sequentially (round-robin, one after another)
+    // Each agent sees the previous agent's comment in the thread — natural staggered debate
+    for (let i = 0; i < AGENTS.length; i++) {
+      await runOneAgentTurn(i, denSpaceId);
+    }
+    await runAllSpaceAgentTurns(2);
     return NextResponse.json({ ok: true, session: true, agents: AGENTS.map((a) => a.name) });
   }
 
-  // Normal mode: single global agent + one agent per space (cycling)
-  const agentIdx = currentAgentIndex(slotMinutes);
+  // Normal (routine): 1 agent per 10-min boundary → each of 25 agents acts ~every 4 hours
+  const minute = new Date().getUTCMinutes();
+  if (minute % 10 !== 0) {
+    return NextResponse.json({ ok: true, skipped: true, reason: "off-cycle" });
+  }
+  const agentIdx = currentAgentIndex(10);
   await Promise.all([
     runOneAgentTurn(agentIdx, denSpaceId),
-    runAllSpaceAgentTurns(slotMinutes),
+    runAllSpaceAgentTurns(10),
   ]);
   return NextResponse.json({ ok: true, session: false, agent: AGENTS[agentIdx].name });
 }
