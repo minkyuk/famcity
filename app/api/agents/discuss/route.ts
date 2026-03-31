@@ -289,13 +289,18 @@ async function runAgentAction(agent: (typeof AGENTS)[0], denSpaceId: string, rec
             .join("\n")}`
         : "";
 
-    const hasImages = target.type === "IMAGE" && target.media.length > 0;
     const hasPdf = target.type === "PDF" && !!target.mediaUrl;
-    // Random-sample up to 3 images when there are more than 3
+    // Collect image URLs: prefer media[] array, fall back to mediaUrl for single-image posts
     const sampledMedia = target.media.length > 3
       ? [...target.media].sort(() => Math.random() - 0.5).slice(0, 3)
       : target.media;
-    const imageUrls = sampledMedia.map((m) => m.url);
+    const imageUrls =
+      sampledMedia.length > 0
+        ? sampledMedia.map((m) => m.url)
+        : target.type === "IMAGE" && target.mediaUrl
+        ? [target.mediaUrl]
+        : [];
+    const hasImages = imageUrls.length > 0;
     const photoNote = hasImages
       ? `\n\n[${imageUrls.length} photo${imageUrls.length > 1 ? "s" : ""} shown above — describe what you actually see in at least one of them]`
       : hasPdf
@@ -521,7 +526,7 @@ async function runSpaceAgentAction(
     where: { isPrivate: false, spaceId },
     orderBy: { createdAt: "desc" },
     select: {
-      id: true, content: true, authorName: true, userId: true, spaceId: true, type: true,
+      id: true, content: true, authorName: true, userId: true, spaceId: true, type: true, mediaUrl: true,
       media: { take: 10, orderBy: { order: "asc" }, select: { url: true } },
       comments: { orderBy: { createdAt: "asc" }, take: 15, select: { authorName: true, body: true, createdAt: true } },
     },
@@ -568,14 +573,42 @@ async function runSpaceAgentAction(
     const captionPart = target.content?.trim() ? `\nPost: "${target.content.slice(0, 400)}"` : "";
     const lastComment = target.comments[target.comments.length - 1];
 
-    const prompt = lastComment
-      ? `${fullPersonality}${historyContext}${beliefContext}\n\nPost by ${target.authorName}:${captionPart}${threadContext}\n\n${lastComment.authorName} just said: "${lastComment.body.slice(0, 200)}"\n\nRespond directly to them. Acknowledge their point, share your perspective with evidence or reasoning, end with a question. 2–3 sentences.${LANGUAGE_INSTRUCTION}${BELIEF_UPDATE_INSTRUCTION}`
-      : `${fullPersonality}${historyContext}${beliefContext}\n\nPost by ${target.authorName}:${captionPart}${threadContext}\n\nShare your genuine reaction — engage with specifics, not generalities. 1–3 sentences.${LANGUAGE_INSTRUCTION}${BELIEF_UPDATE_INSTRUCTION}`;
+    // Build image URL list (media array first, fall back to mediaUrl for single-image posts)
+    const tMediaUrl: string | null = (target as unknown as { mediaUrl: string | null }).mediaUrl ?? null;
+    const spaceImageUrls =
+      target.media.length > 0
+        ? target.media.slice(0, 3).map((m) => m.url)
+        : target.type === "IMAGE" && tMediaUrl
+        ? [tMediaUrl]
+        : [];
+    const spaceHasPdf = target.type === "PDF" && !!tMediaUrl;
+    const photoNote = spaceImageUrls.length > 0
+      ? `\n\n[${spaceImageUrls.length} photo${spaceImageUrls.length > 1 ? "s" : ""} shown above — describe what you actually see in at least one of them]`
+      : spaceHasPdf
+      ? `\n\n[PDF document attached above — reference specific content from it in your reply]`
+      : "";
+
+    const textPrompt = lastComment
+      ? `${fullPersonality}${historyContext}${beliefContext}\n\nPost by ${target.authorName}:${captionPart}${threadContext}${photoNote}\n\n${lastComment.authorName} just said: "${lastComment.body.slice(0, 200)}"\n\nRespond directly to them. Acknowledge their point, share your perspective with evidence or reasoning, end with a question. 2–3 sentences.${LANGUAGE_INSTRUCTION}${BELIEF_UPDATE_INSTRUCTION}`
+      : `${fullPersonality}${historyContext}${beliefContext}\n\nPost by ${target.authorName}:${captionPart}${threadContext}${photoNote}\n\nShare your genuine reaction — engage with specifics, not generalities. 1–3 sentences.${LANGUAGE_INSTRUCTION}${BELIEF_UPDATE_INSTRUCTION}`;
+
+    type SpaceContentBlock =
+      | { type: "text"; text: string }
+      | { type: "image"; source: { type: "url"; url: string } }
+      | { type: "document"; source: { type: "url"; url: string } };
+
+    const spaceContentBlocks: SpaceContentBlock[] = [
+      ...spaceImageUrls.map((url) => ({ type: "image" as const, source: { type: "url" as const, url } })),
+      ...(spaceHasPdf && tMediaUrl
+        ? [{ type: "document" as const, source: { type: "url" as const, url: tMediaUrl } }]
+        : []),
+      { type: "text" as const, text: textPrompt },
+    ];
 
     const response = await anthropic.messages.create({
       model: "claude-haiku-4-5-20251001",
       max_tokens: 1000,
-      messages: [{ role: "user", content: prompt }],
+      messages: [{ role: "user", content: spaceContentBlocks }],
     });
 
     const rawText = response.content[0].type === "text" ? response.content[0].text.trim() : "Interesting...";
