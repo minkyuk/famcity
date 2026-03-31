@@ -41,6 +41,28 @@ export async function GET(
   return NextResponse.json({ ...space, role: membership.role });
 }
 
+export async function PATCH(
+  req: NextRequest,
+  { params }: { params: Promise<{ id: string }> }
+) {
+  const session = await getServerSession(authOptions);
+  if (!session?.user || !isAdmin(session)) {
+    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  }
+
+  const { id } = await params;
+  const body = await req.json();
+  const description = typeof body.description === "string" ? body.description.trim() || null : undefined;
+  const purpose = typeof body.purpose === "string" ? body.purpose.trim() || null : undefined;
+
+  const data: { description?: string | null; purpose?: string | null } = {};
+  if (description !== undefined) data.description = description;
+  if (purpose !== undefined) data.purpose = purpose;
+
+  const space = await prisma.space.update({ where: { id }, data });
+  return NextResponse.json(space);
+}
+
 export async function DELETE(
   _req: NextRequest,
   { params }: { params: Promise<{ id: string }> }

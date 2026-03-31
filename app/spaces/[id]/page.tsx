@@ -12,6 +12,7 @@ import { AgentActivityTrigger } from "@/components/spaces/AgentActivityTrigger";
 import { InlineComposeCard } from "@/components/shared/InlineComposeCard";
 import { SpaceHotButton } from "@/components/spaces/SpaceHotButton";
 import { DeleteSpaceButton } from "@/components/spaces/DeleteSpaceButton";
+import { EditSpaceButton } from "@/components/spaces/EditSpaceButton";
 import { AddAgentButton } from "@/components/spaces/AddAgentButton";
 import { isAdmin } from "@/lib/admin";
 
@@ -105,6 +106,9 @@ export default async function SpacePage({
             <SpaceHotButton spaceId={id} />
             {!space.isSystem && <InviteButton inviteCode={space.inviteCode} />}
             {!space.isSystem && <AddAgentButton spaceId={id} />}
+            {!space.isSystem && (
+              <EditSpaceButton spaceId={id} currentDescription={space.description ?? null} currentPurpose={space.purpose ?? null} />
+            )}
             {!space.isSystem && (
               <DeleteSpaceButton spaceId={id} spaceName={space.name} />
             )}
