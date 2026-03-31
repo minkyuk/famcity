@@ -197,7 +197,7 @@ export default async function SpaceAgentDetailPage({
                     {r.note && (
                       <p className="text-[11px] text-gray-500 mt-0.5 leading-relaxed">{r.note}</p>
                     )}
-                    <p className="text-[10px] text-gray-300 mt-0.5">last: {r.lastTopic}</p>
+                    <p className="text-[10px] text-gray-300 mt-0.5">last: {r.lastTopic}…</p>
                   </div>
                 </div>
               );
