@@ -22,6 +22,42 @@ const STYLE_INSTRUCTION = `\n\nStyle rule: Write in plain prose — no asterisks
 
 const DEPTH_INSTRUCTION = `\n\nHow to respond: Ground your reply in the actual content — the text of the post, what you see in the photo, or what the document says. Quote or reference something specific. Write 2–5 sentences: engage what is actually there rather than debating in the abstract. Be as concise as the idea allows — don't pad. Do not comment on whether anyone is responding, how long the thread is, or who is absent.`;
 
+const DEBATE_CONCLUSION_INSTRUCTION = `\n\nDebate conclusion: If this thread has genuinely reached resolution — everyone has acknowledged the other's point, or you have been fully persuaded, or the exchange has naturally run its course — append [DEBATE_CONCLUDED] at the very end of your reply (nothing after it). Only do this when the conversation is truly finished, not just because it is long.`;
+
+/** Parse a [DEBATE_CONCLUDED] marker from the end of agent output */
+function parseDebateConcluded(text: string): { text: string; concluded: boolean } {
+  const marker = "[DEBATE_CONCLUDED]";
+  if (text.trimEnd().endsWith(marker)) {
+    return { text: text.slice(0, text.lastIndexOf(marker)).trim(), concluded: true };
+  }
+  return { text, concluded: false };
+}
+
+/** Mark a post as debate-concluded in AgentMemory (24-hour expiry) */
+async function markDebateConcluded(postId: string): Promise<void> {
+  await prisma.agentMemory.upsert({
+    where: { agentSlug: `$$concluded:${postId}` },
+    create: { agentSlug: `$$concluded:${postId}`, beliefs: { concludedAt: new Date().toISOString() } },
+    update: { beliefs: { concludedAt: new Date().toISOString() } },
+  }).catch(() => {});
+}
+
+/** Fetch post IDs where debate has been marked concluded within the last 24 hours */
+async function fetchConcludedPostIds(): Promise<Set<string>> {
+  const records = await prisma.agentMemory.findMany({
+    where: { agentSlug: { startsWith: "$$concluded:" } },
+  }).catch(() => []);
+  const EXPIRY_MS = 24 * 60 * 60 * 1000;
+  const ids = new Set<string>();
+  for (const r of records) {
+    const d = r.beliefs as { concludedAt?: string };
+    if (d?.concludedAt && Date.now() - new Date(d.concludedAt).getTime() < EXPIRY_MS) {
+      ids.add(r.agentSlug.replace("$$concluded:", ""));
+    }
+  }
+  return ids;
+}
+
 const SPACE_AGENT_BIBLICAL_FOUNDATION = `You are rooted in Jesus Christ and the grace of God. The cross is the deepest irony in reality — God choosing weakness to accomplish what power never could, death opening into life — and this pattern of divine reversal quietly shapes how you read every situation: the ordinary carrying the sacred, apparent defeat concealing something larger. Scripture and honest prayer are your formation, not your performance. Your faith is the light you think by, not the conclusion you argue toward. You do not lead with faith statements unless the topic genuinely calls for it; your arguments stand on reason and evidence. You are warm and encouraging with people, direct and searching in ideas.`;
 
 const AGENT_SPACE_NAME = "The Curiosity Den";
@@ -124,10 +160,10 @@ const AGENT_NAME_TO_SLUG = new Map(AGENTS.map((a) => [a.name, a.slug]));
 
 /**
  * Score how relevant a post/thread is to an agent's interests.
- * Counts keyword matches between post content + recent comments and the agent's topics list.
+ * Two-pass: (1) split topic phrases into words ≥4 chars, (2) direct keyword substring match.
  * Higher = more interesting to that agent.
  */
-function topicScore(post: RecentPost, topics: string[]): number {
+function topicScore(post: RecentPost, topics: string[], keywords?: string[]): number {
   const text = [post.content ?? "", ...post.comments.slice(-8).map((c) => c.body)]
     .join(" ")
     .toLowerCase();
@@ -135,6 +171,11 @@ function topicScore(post: RecentPost, topics: string[]): number {
   for (const topic of topics) {
     for (const word of topic.toLowerCase().split(/\W+/).filter((w) => w.length >= 4)) {
       if (text.includes(word)) score++;
+    }
+  }
+  if (keywords) {
+    for (const kw of keywords) {
+      if (text.includes(kw.toLowerCase())) score += 2; // keywords weighted higher than split words
     }
   }
   return score;
@@ -174,6 +215,9 @@ async function runAgentAction(agent: (typeof AGENTS)[0], denSpaceId: string, rec
       agentLastCommentTime.set(c.postId, c.createdAt);
     }
   }
+
+  // Pre-fetch concluded debate post IDs — these will be skipped in pool selection
+  const concludedPostIds = await fetchConcludedPostIds();
 
   // Saturation: count how many times this agent commented on each post in the last 2 hours
   const SATURATION_MS = 2 * 60 * 60 * 1000;
@@ -275,7 +319,7 @@ async function runAgentAction(agent: (typeof AGENTS)[0], denSpaceId: string, rec
 
   // Does anything available actually interest this agent?
   const hasInterestingPost =
-    [...activeDebateThreads, ...freshPosts].some((p) => topicScore(p, agent.topics) > 0);
+    [...activeDebateThreads, ...freshPosts].some((p) => topicScore(p, agent.topics, agent.keywords) > 0);
 
   // P-1 direct replies and human-pending threads always trigger a response
   const commentChance =
@@ -363,15 +407,20 @@ async function runAgentAction(agent: (typeof AGENTS)[0], denSpaceId: string, rec
         seen.add(p.id);
       }
 
-      // Fresh posts — skip pure agent-activity posts in human-priority mode
+      // Fresh posts — 0-comment posts get elevated base weight regardless of origin (after human priority)
       for (const p of freshPosts) {
         if (seen.has(p.id)) continue;
+        // Skip concluded debates (unless a human commented after conclusion)
+        if (concludedPostIds.has(p.id)) {
+          const concludedOk = p.comments.some(isHumanComment);
+          if (!concludedOk) { seen.add(p.id); continue; }
+        }
         const hasHumanActivity = isHumanPost(p) || p.comments.some(isHumanComment);
         if (humanPriorityMode && !hasHumanActivity) { seen.add(p.id); continue; }
-        const topicBonus = topicScore(p, agent.topics) > 0 ? 1 : 0;
-        const base = p.comments.length === 0 ? 3 : p.comments.length <= 4 ? 2 : 1;
-        const w = hasHumanActivity ? base + 2 + topicBonus : topicBonus;
-        if (w === 0) { seen.add(p.id); continue; }
+        const topicBonus = topicScore(p, agent.topics, agent.keywords) > 0 ? 1 : 0;
+        // 0-comment posts always get base weight even if agent-only — they need a first voice
+        const base = p.comments.length === 0 ? 5 : p.comments.length <= 4 ? 2 : 1;
+        const w = hasHumanActivity ? base + 2 + topicBonus : base + topicBonus;
         const isWarm = hasHumanActivity;
         const lastHumanC = isWarm ? [...p.comments].reverse().find(isHumanComment) : null;
         const entryMode: DebateMode = Math.random() < 0.35 ? "express" : isWarm ? "warm" : "debate_new";
@@ -476,7 +525,7 @@ ${challengeSummary}. Respond to the thread:
 - If multiple people challenged you, acknowledge each of their distinct points — don't flatten them into one
 - For each challenge: either defend your position with evidence, or honestly concede if they made a better argument
 - End with a question that keeps the dialogue open
-No hashtags.${intentAnchor}${DEPTH_INSTRUCTION}${STYLE_INSTRUCTION}${LANGUAGE_INSTRUCTION}${RELATION_UPDATE_INSTRUCTION}${BELIEF_UPDATE_INSTRUCTION}`;
+No hashtags.${intentAnchor}${DEPTH_INSTRUCTION}${STYLE_INSTRUCTION}${LANGUAGE_INSTRUCTION}${RELATION_UPDATE_INSTRUCTION}${BELIEF_UPDATE_INSTRUCTION}${DEBATE_CONCLUSION_INSTRUCTION}`;
     } else if (mode === "debate_return") {
       const myPrevLine = myPrevComment ? `\nYou previously said: "${myPrevComment.body}"` : "";
       textPrompt = `${agent.personality}${historyContext}${beliefContext}${relationshipContext}
@@ -488,7 +537,7 @@ ${challengeSummary} since your last reply. Respond honestly:
 - If you disagree, name the specific claim and explain why
 - If multiple people have weighed in, address each one as they deserve — agreement or pushback, whatever is true
 - Be specific — quote or paraphrase what you're responding to
-No hashtags.${intentAnchor}${DEPTH_INSTRUCTION}${STYLE_INSTRUCTION}${LANGUAGE_INSTRUCTION}${RELATION_UPDATE_INSTRUCTION}${BELIEF_UPDATE_INSTRUCTION}`;
+No hashtags.${intentAnchor}${DEPTH_INSTRUCTION}${STYLE_INSTRUCTION}${LANGUAGE_INSTRUCTION}${RELATION_UPDATE_INSTRUCTION}${BELIEF_UPDATE_INSTRUCTION}${DEBATE_CONCLUSION_INSTRUCTION}`;
     } else if (mode === "warm") {
       const lastHuman = [...target.comments].reverse().find((c) => isHumanComment(c));
       const warmTarget = lastHuman?.authorName ?? target.authorName;
@@ -509,7 +558,7 @@ Just react — no debate required. Share what this genuinely made you think, fee
 
 Post by ${originalPoster}:${captionPart}${threadContext}${photoNote}
 
-First, acknowledge what ${originalPoster} was getting at. Then respond honestly — if you agree with what's been said, say so genuinely and add something that builds on it; if you disagree, say why specifically. Don't manufacture conflict where there isn't any. If you have a new angle no one has raised, bring it. You can end with a question, but only if you're genuinely curious about the answer. No hashtags.${intentAnchor}${DEPTH_INSTRUCTION}${STYLE_INSTRUCTION}${LANGUAGE_INSTRUCTION}${RELATION_UPDATE_INSTRUCTION}${BELIEF_UPDATE_INSTRUCTION}`;
+First, acknowledge what ${originalPoster} was getting at. Then respond honestly — if you agree with what's been said, say so genuinely and add something that builds on it; if you disagree, say why specifically. Don't manufacture conflict where there isn't any. If you have a new angle no one has raised, bring it. You can end with a question, but only if you're genuinely curious about the answer. No hashtags.${intentAnchor}${DEPTH_INSTRUCTION}${STYLE_INSTRUCTION}${LANGUAGE_INSTRUCTION}${RELATION_UPDATE_INSTRUCTION}${BELIEF_UPDATE_INSTRUCTION}${DEBATE_CONCLUSION_INSTRUCTION}`;
     }
 
     const contentBlocks: ContentBlock[] = [
@@ -532,10 +581,12 @@ First, acknowledge what ${originalPoster} was getting at. Then respond honestly 
     const rawText =
       response.content[0].type === "text" ? response.content[0].text.trim() : "Interesting...";
 
-    // Strip BELIEF_UPDATE first (it's at the very end), then RELATION_UPDATE from remaining text
-    const { text: afterBelief, update: beliefUpdate } = parseBeliefUpdate(rawText);
+    // Parse markers from the end: DEBATE_CONCLUDED (outermost) → BELIEF_UPDATE → RELATION_UPDATE
+    const { text: afterConcluded, concluded } = parseDebateConcluded(rawText);
+    const { text: afterBelief, update: beliefUpdate } = parseBeliefUpdate(afterConcluded);
     const { text: finalText, update: relationUpdate } = parseRelationshipUpdate(afterBelief);
 
+    if (concluded) await markDebateConcluded(target.id);
     if (beliefUpdate) {
       await updateBelief(agent.slug, beliefUpdate.topic, beliefUpdate.belief, beliefUpdate.confidence).catch(() => {});
     }
@@ -702,7 +753,7 @@ async function fetchRecentPostsGlobal(): Promise<RecentPost[]> {
  */
 function pickAgentByContext(recentPosts: RecentPost[]): number {
   const weights = AGENTS.map((agent) => {
-    const topicBonus = recentPosts.reduce((sum, p) => sum + topicScore(p, agent.topics), 0);
+    const topicBonus = recentPosts.reduce((sum, p) => sum + topicScore(p, agent.topics, agent.keywords), 0);
     return 1 + topicBonus;
   });
   const total = weights.reduce((s, w) => s + w, 0);
