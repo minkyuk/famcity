@@ -7,6 +7,7 @@ import { Feed } from "@/app/Feed";
 import { InviteButton } from "@/components/spaces/InviteButton";
 import { HashtagSidebar } from "@/components/shared/HashtagSidebar";
 import { OnlineWidget } from "@/components/shared/OnlineWidget";
+import { SpaceMembersWidget } from "@/components/spaces/SpaceMembersWidget";
 import { AgentActivityTrigger } from "@/components/spaces/AgentActivityTrigger";
 import { InlineComposeCard } from "@/components/shared/InlineComposeCard";
 import { SpaceHotButton } from "@/components/spaces/SpaceHotButton";
@@ -21,10 +22,17 @@ export default async function SpacePage({
   const session = await getServerSession(authOptions);
   if (!session?.user) redirect("/login");
 
-  const space = await prisma.space.findUnique({
-    where: { id },
-    include: { _count: { select: { members: true } } },
-  });
+  const [space, spaceMembers] = await Promise.all([
+    prisma.space.findUnique({
+      where: { id },
+      include: { _count: { select: { members: true } } },
+    }),
+    prisma.spaceMember.findMany({
+      where: { spaceId: id },
+      include: { user: { select: { id: true, name: true, image: true } } },
+      orderBy: { joinedAt: "asc" },
+    }),
+  ]);
   if (!space) notFound();
 
   // System spaces are open to all; regular spaces require membership
@@ -61,7 +69,18 @@ export default async function SpacePage({
     <div className="flex gap-6">
       {/* Sidebar */}
       <aside className="hidden lg:block w-48 shrink-0 pt-1 flex flex-col gap-4">
-        <OnlineWidget />
+        {space.isSystem ? (
+          <OnlineWidget />
+        ) : (
+          <SpaceMembersWidget
+            spaceId={id}
+            members={spaceMembers.map((m) => ({
+              userId: m.user.id,
+              name: m.user.name ?? "?",
+              image: m.user.image ?? null,
+            }))}
+          />
+        )}
         <Suspense>
           <HashtagSidebar spaceId={id} />
         </Suspense>

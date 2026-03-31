@@ -78,6 +78,7 @@ model Space {
   chatChannels   ChatChannel[]
   events         Event[]
   spaceAgents    SpaceAgent[]
+  onlinePresences OnlinePresence[]
 }
 
 model SpaceAgent {
@@ -232,6 +233,8 @@ model OnlinePresence {
   image     String?
   channelId String?
   channel   ChatChannel? @relation(fields: [channelId], references: [id], onDelete: SetNull)
+  spaceId   String?
+  space     Space?      @relation(fields: [spaceId], references: [id], onDelete: SetNull)
   lastSeen  DateTime    @default(now())
 }
 
