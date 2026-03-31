@@ -44,19 +44,6 @@ export async function POST(req: NextRequest) {
 
   const spaceId = await getOrCreateNewsSpace();
 
-  // Pick a random news feed and fetch items
-  const feedUrl = NEWS_FEEDS[Math.floor(Math.random() * NEWS_FEEDS.length)];
-  let items;
-  try {
-    items = await fetchRss(feedUrl, 15);
-  } catch {
-    return NextResponse.json({ error: "RSS fetch failed" }, { status: 502 });
-  }
-
-  if (!items.length) {
-    return NextResponse.json({ error: "No RSS items" }, { status: 502 });
-  }
-
   // Avoid duplicates — get headlines already posted today
   const today = new Date();
   today.setHours(0, 0, 0, 0);
@@ -66,23 +53,45 @@ export async function POST(req: NextRequest) {
   });
   const postedTitles = recentPosts.map((p) => p.content ?? "").join(" ").toLowerCase();
 
-  const fresh = items.filter(
-    (item) => !postedTitles.includes(item.title.toLowerCase().slice(0, 20))
-  );
-  const item = fresh[Math.floor(Math.random() * fresh.length)] ?? items[0];
+  // Post one item from each of the 4 news sources, each with a different random agent
+  const results: { source: string; agent: string; headline: string }[] = [];
+  const usedAgentIndices = new Set<number>();
 
-  // Pick a random agent
-  const agent = AGENTS[Math.floor(Math.random() * AGENTS.length)];
-  const avatar = agentAvatarUrl(agent.slug);
+  // Shuffle feed order so sources appear in different order each run
+  const shuffledFeeds = [...NEWS_FEEDS].sort(() => Math.random() - 0.5);
 
-  // Generate commentary
-  const message = await anthropic.messages.create({
-    model: "claude-haiku-4-5-20251001",
-    max_tokens: 400,
-    messages: [
-      {
-        role: "user",
-        content: `${agent.personality}
+  for (const feedUrl of shuffledFeeds) {
+    let items;
+    try {
+      items = await fetchRss(feedUrl, 15);
+    } catch {
+      continue; // skip this source if RSS fetch fails
+    }
+    if (!items.length) continue;
+
+    const fresh = items.filter(
+      (item) => !postedTitles.includes(item.title.toLowerCase().slice(0, 20))
+    );
+    const item = fresh[Math.floor(Math.random() * fresh.length)] ?? items[0];
+
+    // Pick a unique agent for each source
+    let agentIdx: number;
+    do {
+      agentIdx = Math.floor(Math.random() * AGENTS.length);
+    } while (usedAgentIndices.has(agentIdx) && usedAgentIndices.size < AGENTS.length);
+    usedAgentIndices.add(agentIdx);
+
+    const agent = AGENTS[agentIdx];
+    const avatar = agentAvatarUrl(agent.slug);
+
+    try {
+      const message = await anthropic.messages.create({
+        model: "claude-haiku-4-5-20251001",
+        max_tokens: 400,
+        messages: [
+          {
+            role: "user",
+            content: `${agent.personality}
 
 Here is a news headline and summary:
 
@@ -92,24 +101,35 @@ SUMMARY: ${item.description.slice(0, 400)}
 Write a short, engaging post sharing this news with your unique personality.
 Include the headline naturally. Be conversational, curious, or witty as fits your character.
 Max 2–3 sentences. Do not use hashtags. Do not start with "I".`,
-      },
-    ],
-  });
+          },
+        ],
+      });
 
-  const text =
-    message.content[0].type === "text" ? message.content[0].text.trim() : item.title;
+      const text =
+        message.content[0].type === "text" ? message.content[0].text.trim() : item.title;
 
-  await prisma.post.create({
-    data: {
-      authorName: agent.name,
-      authorImage: avatar,
-      spaceId,
-      content: text,
-      type: "TEXT",
-    },
-  });
+      await prisma.post.create({
+        data: {
+          authorName: agent.name,
+          authorImage: avatar,
+          spaceId,
+          content: text,
+          type: "TEXT",
+        },
+      });
 
-  return NextResponse.json({ ok: true, agent: agent.name, headline: item.title });
+      results.push({ source: feedUrl, agent: agent.name, headline: item.title });
+      // Mark this headline as seen to avoid same-source duplicates within this run
+      postedTitles.concat(" " + item.title.toLowerCase());
+    } catch {
+      // Skip this source if AI or DB fails
+    }
+
+    // Small delay between AI calls to avoid rate limits
+    await new Promise((r) => setTimeout(r, 1000));
+  }
+
+  return NextResponse.json({ ok: true, posted: results.length, results });
 }
 
 // Allow Vercel cron (GET)
