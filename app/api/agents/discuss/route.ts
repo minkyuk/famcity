@@ -228,22 +228,30 @@ async function runAgentAction(agent: (typeof AGENTS)[0], denSpaceId: string, rec
       p.comments[p.comments.length - 1].authorName !== agent.name
   );
 
+  const COMMENT_PILE_ON_LIMIT = 7; // don't pile onto threads already this deep
+
   // P2: Threads I'm already in where a new comment appeared after my last comment
+  // For threads over the pile-on limit, only return if a human has engaged since my last reply
   const activeDebateThreads = recentPosts.filter((p) => {
     if (p.authorName === agent.name) return false;
     const myLastTime = agentLastCommentTime.get(p.id);
     if (!myLastTime) return false;
     const latest = p.comments[p.comments.length - 1];
-    return latest && latest.createdAt > myLastTime && latest.authorName !== agent.name;
+    if (!latest || latest.createdAt <= myLastTime || latest.authorName === agent.name) return false;
+    if (p.comments.length > COMMENT_PILE_ON_LIMIT) {
+      // Only return to busy threads if a human commented since my last reply
+      return p.comments.some((c) => isHumanComment(c) && c.createdAt > myLastTime);
+    }
+    return true;
   });
 
   // P3: Posts I haven't commented on yet (skip own posts)
-  const freshPosts = recentPosts.filter(
-    (p) =>
-      p.authorName !== agent.name &&
-      !agentLastCommentTime.has(p.id) &&
-      hasContent(p)
+  // Prefer posts with fewer comments — cap fresh entry at the pile-on limit
+  const allFreshPosts = recentPosts.filter(
+    (p) => p.authorName !== agent.name && !agentLastCommentTime.has(p.id) && hasContent(p)
   );
+  const freshPosts = allFreshPosts.filter((p) => p.comments.length <= COMMENT_PILE_ON_LIMIT)
+    .concat(allFreshPosts.filter((p) => p.comments.length > COMMENT_PILE_ON_LIMIT)); // overflow fallback
 
   const canComment =
     directReplyPosts.length > 0 ||
@@ -322,14 +330,20 @@ async function runAgentAction(agent: (typeof AGENTS)[0], denSpaceId: string, rec
       mode = "debate_return";
       replyToCommentId = target.comments[target.comments.length - 1]?.id ?? null;
     } else if (freshPosts.length > 0) {
-      // P3: new post to enter — rank by topic interest first, then anti-pile-on (low agent comment count)
+      // P3: new post to enter — score all posts equally (human or agent-authored)
+      // Score: topic interest * 2 + big bonus for 0-comment posts + human-post bonus
+      // This ensures Family News / Curiosity Den posts (agent-authored, often 0 comments) get fair attention
       const agentCommentCount = (p: RecentPost) => p.comments.filter((c) => AGENT_NAMES.has(c.authorName)).length;
-      const humanFresh = freshPosts.filter(isHumanPost);
-      const humanCommented = freshPosts.filter((p) => p.comments.some(isHumanComment));
-      const basePosts = humanFresh.length > 0 ? humanFresh : humanCommented.length > 0 ? humanCommented : freshPosts;
-      // Primary sort: topic interest DESC. Secondary: fewer agent comments first.
-      const scored = basePosts
-        .map((p) => ({ p, score: topicScore(p, agent.topics), count: agentCommentCount(p) }))
+      const scored = freshPosts
+        .map((p) => ({
+          p,
+          score:
+            topicScore(p, agent.topics) * 2
+            + (p.comments.length === 0 ? 4 : 0)           // strong boost for unread posts
+            + (isHumanPost(p) ? 1 : 0)                    // slight human-post preference
+            + (p.comments.some(isHumanComment) ? 1 : 0),  // slight boost if human engaged
+          count: agentCommentCount(p),
+        }))
         .sort((a, b) => b.score - a.score || a.count - b.count);
       target = scored[Math.floor(Math.random() * Math.min(3, scored.length))].p;
       const isWarm = isHumanPost(target) || target.comments.some(isHumanComment);

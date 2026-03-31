@@ -25,6 +25,9 @@ export const authOptions: NextAuthOptions = {
       if (session.user) {
         session.user.id = user.id;
         session.user.email = user.email ?? session.user.email;
+        const admins = (process.env.ADMIN_EMAILS ?? "")
+          .split(",").map((e) => e.trim().toLowerCase()).filter(Boolean);
+        session.user.isAdmin = admins.includes((user.email ?? "").toLowerCase());
       }
       return session;
     },

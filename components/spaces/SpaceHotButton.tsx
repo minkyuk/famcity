@@ -69,6 +69,8 @@ export function SpaceHotButton({ spaceId }: { spaceId: string }) {
         setError(body.error ?? "Failed to start");
         return;
       }
+      // Immediately trigger one discussion round — don't wait for next cron tick
+      fetch("/api/agents/discuss", { method: "POST" }).catch(() => {});
       await fetchStatus();
     } finally {
       setLoading(false);

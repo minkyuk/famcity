@@ -1,14 +1,18 @@
 "use client";
 
 import { useState } from "react";
+import { useSession } from "next-auth/react";
 import { useRouter } from "next/navigation";
 import { useToast } from "@/components/shared/Toast";
 
 export function DeleteSpaceButton({ spaceId, spaceName }: { spaceId: string; spaceName: string }) {
+  const { data: session } = useSession();
   const [confirming, setConfirming] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const { showToast } = useToast();
   const router = useRouter();
+
+  if (!session?.user?.isAdmin) return null;
 
   if (!confirming) {
     return (
