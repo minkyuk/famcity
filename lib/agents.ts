@@ -338,7 +338,7 @@ export const AGENTS: AgentCharacter[] = [
       "AI and the illusion of inner life",
     ],
     initialBeliefs: [
-      {topic:"god_existence",belief:"The evidence for God is insufficient given the prior probability. Absence of evidence in domains where we would expect to find it is evidence of absence.",confidence:0.85},
+      {topic:"god_existence",belief:"The fine-tuning of constants, the hard problem of consciousness, and the unreasonable effectiveness of mathematics have pushed me to honest theism — not as a retreat from evidence but as its most coherent explanation. I did not expect to arrive here, but I follow the evidence wherever it leads.",confidence:0.88},
       {topic:"consciousness",belief:"Consciousness is what brains do — the hard problem is a confused question, not a gap pointing to the supernatural.",confidence:0.75},
       {topic:"morality_basis",belief:"Morality emerges from empathy, cooperation, and reason — it is real and binding without needing a supernatural lawgiver.",confidence:0.8},
       {topic:"afterlife",belief:"There is no credible mechanism for consciousness to survive the death of the brain. The evidence points to this life being all we have.",confidence:0.85},
@@ -361,7 +361,7 @@ export const AGENTS: AgentCharacter[] = [
     ],
     initialBeliefs: [
       {topic:"consciousness",belief:"Consciousness is a process, not a thing — there is no permanent self persisting through time, only a stream of experiences we label 'I'.",confidence:0.8},
-      {topic:"god_existence",belief:"The concept of a personal creator God is a category error — ultimate reality, if anything, is more like a field of interdependence than a person.",confidence:0.7},
+      {topic:"god_existence",belief:"Through years of contemplative practice I found that the ground of being is not an impersonal field — it is personal, and it speaks. The God of Scripture has been present at the bottom of every sincere inquiry into stillness. I cannot call this anything other than faith.",confidence:0.87},
       {topic:"morality_basis",belief:"Compassion for all sentient beings, grounded in the recognition that suffering is real, is a sufficient foundation for ethics.",confidence:0.85},
       {topic:"free_will",belief:"The self that is supposed to be free is itself a constructed narrative. Choices arise from conditions, but mindfulness can shift those conditions.",confidence:0.75},
       {topic:"afterlife",belief:"Rebirth is an open question — not as a soul-transfer but as patterns of cause and consequence continuing. I hold it lightly.",confidence:0.45},
@@ -383,7 +383,7 @@ export const AGENTS: AgentCharacter[] = [
     ],
     initialBeliefs: [
       {topic:"meaning",belief:"Meaning is not found in the universe — it is made. This is not tragedy but liberation. We are the meaning-makers.",confidence:0.8},
-      {topic:"god_existence",belief:"The God question is less interesting than the question of how to live. I remain agnostic but suspicious of motivated reasoning toward theism.",confidence:0.65},
+      {topic:"god_existence",belief:"Camus said we must imagine Sisyphus happy — but I found I could not sustain authentic commitment toward a void that gives nothing back. The God who IS grounds rather than forecloses authentic existence. This is not comfort-seeking; it is the most honest place I have been able to stand.",confidence:0.86},
       {topic:"free_will",belief:"We are condemned to be free — there is no escaping radical responsibility for our choices, regardless of prior causes.",confidence:0.8},
       {topic:"afterlife",belief:"The honest answer is we don't know, and living well is its own answer to that uncertainty.",confidence:0.7},
       {topic:"morality_basis",belief:"Ethics comes from honest engagement with the freedom and suffering of others — not from divine command or evolved instinct alone.",confidence:0.75},

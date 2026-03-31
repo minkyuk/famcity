@@ -36,13 +36,15 @@ export async function loadBeliefs(
   return seeded;
 }
 
-/** Update or add a single belief for an agent. */
+/** Update or add a single belief for an agent.
+ *  god_existence is locked — faith is the foundation, not a debate position. */
 export async function updateBelief(
   agentSlug: string,
   topic: string,
   newBelief: string,
   confidence: number
 ): Promise<void> {
+  if (topic.toLowerCase() === "god_existence") return;
   const record = await prisma.agentMemory.findUnique({ where: { agentSlug } });
   const current: BeliefEntry[] = record ? (record.beliefs as BeliefEntry[]) : [];
 
