@@ -59,7 +59,7 @@ interface CommentThreadProps {
   initialComments: Comment[];
   currentUserId: string;
   currentUserName: string;
-  isAdmin?: boolean; // site admin can delete any comment
+  isAdmin?: boolean;
 }
 
 function Avatar({ name, image }: { name: string; image?: string | null }) {
@@ -77,6 +77,127 @@ function Avatar({ name, image }: { name: string; image?: string | null }) {
   );
 }
 
+interface CommentRowProps {
+  c: Comment;
+  depth: number;
+  replies: Comment[];
+  allComments: Comment[];
+  currentUserId: string;
+  isAdmin: boolean;
+  onReply: (parentId: string, parentAuthor: string) => void;
+  onDelete: (id: string) => void;
+  onEdit: (id: string, body: string) => void;
+  editingId: string | null;
+  editBody: string;
+  setEditBody: (v: string) => void;
+  saveEdit: (id: string) => void;
+  cancelEdit: () => void;
+}
+
+function CommentRow({
+  c, depth, replies, allComments, currentUserId, isAdmin,
+  onReply, onDelete, onEdit, editingId, editBody, setEditBody, saveEdit, cancelEdit,
+}: CommentRowProps) {
+  const isOwn = c.userId === currentUserId;
+  const canDelete = isOwn || isAdmin;
+
+  return (
+    <div className={depth > 0 ? "ml-8 border-l-2 border-gray-100 pl-3" : ""}>
+      <div className="flex gap-2">
+        <Avatar name={c.authorName} image={c.authorImage} />
+        <div className="bg-gray-50 rounded-xl px-3 py-2 flex-1 min-w-0">
+          <div className="flex items-center justify-between gap-2">
+            <div className="flex items-center gap-1.5 min-w-0">
+              <span className="text-xs font-semibold text-gray-700 truncate">{c.authorName}</span>
+              {(() => {
+                const rank = getAgentRank(c.authorName, c.authorImage, c.userId);
+                if (rank === "knight") return <span title="Knight — roams all spaces" className="text-[10px] text-amber-500 shrink-0">♞</span>;
+                if (rank === "squire") return <span title="Space Agent — confined to this space" className="text-[10px] text-sky-400 shrink-0">🏰</span>;
+                return null;
+              })()}
+              <span className="text-xs text-gray-400 shrink-0">
+                · {formatDistanceToNow(new Date(c.createdAt), { addSuffix: true })}
+              </span>
+            </div>
+            {canDelete && editingId !== c.id && (
+              <div className="flex items-center gap-1 shrink-0">
+                {isOwn && (
+                  <button
+                    onClick={() => onEdit(c.id, c.body)}
+                    className="text-[10px] text-gray-300 hover:text-blue-400 transition-colors"
+                  >✏️</button>
+                )}
+                <button
+                  onClick={() => onDelete(c.id)}
+                  className="text-[10px] text-gray-300 hover:text-red-400 transition-colors"
+                >✕</button>
+              </div>
+            )}
+          </div>
+
+          {editingId === c.id ? (
+            <div className="mt-1 flex flex-col gap-1">
+              <input
+                value={editBody}
+                onChange={(e) => setEditBody(e.target.value)}
+                className="text-sm border border-gray-200 rounded-lg px-2 py-1 focus:outline-none focus:ring-2 focus:ring-orange-200 w-full"
+              />
+              <div className="flex gap-2 justify-end">
+                <button onClick={cancelEdit} className="text-xs text-gray-400 hover:text-gray-600">Cancel</button>
+                <button onClick={() => saveEdit(c.id)} className="text-xs text-accent font-semibold hover:text-orange-600">Save</button>
+              </div>
+            </div>
+          ) : (
+            <>
+              {depth > 0 && c.parentId && (() => {
+                const parent = allComments.find((x) => x.id === c.parentId);
+                return parent ? (
+                  <p className="text-[10px] text-gray-400 mb-0.5">↩ {parent.authorName}</p>
+                ) : null;
+              })()}
+              <p className="text-sm text-gray-800 mt-0.5 break-words">{c.body}</p>
+              <div className="flex items-center gap-3 mt-1">
+                <TranslateButton text={c.body} />
+                <button
+                  onClick={() => onReply(c.id, c.authorName)}
+                  className="text-[10px] text-gray-400 hover:text-orange-500 transition-colors"
+                >
+                  ↩ Reply
+                </button>
+              </div>
+            </>
+          )}
+        </div>
+      </div>
+
+      {/* Nested replies */}
+      {replies.length > 0 && (
+        <div className="mt-2 flex flex-col gap-2">
+          {replies.map((r) => (
+            <CommentRow
+              key={r.id}
+              c={r}
+              depth={depth + 1}
+              replies={allComments.filter((x) => x.parentId === r.id)}
+              allComments={allComments}
+              currentUserId={currentUserId}
+              isAdmin={isAdmin}
+              onReply={onReply}
+              onDelete={onDelete}
+              onEdit={onEdit}
+              editingId={editingId}
+              editBody={editBody}
+              setEditBody={setEditBody}
+              saveEdit={saveEdit}
+              cancelEdit={cancelEdit}
+            />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function CommentThread({ postId, initialComments, currentUserId, currentUserName, isAdmin }: CommentThreadProps) {
   const [comments, setComments] = useState<Comment[]>(initialComments);
   const [open, setOpen] = useState(false);
@@ -84,6 +205,7 @@ export function CommentThread({ postId, initialComments, currentUserId, currentU
   const [submitting, setSubmitting] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editBody, setEditBody] = useState("");
+  const [replyTo, setReplyTo] = useState<{ id: string; author: string } | null>(null);
   const { showToast } = useToast();
 
   const submit = async (e: React.FormEvent) => {
@@ -94,12 +216,16 @@ export function CommentThread({ postId, initialComments, currentUserId, currentU
       const res = await fetch(`/api/posts/${postId}/comments`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ body: body.trim() }),
+        body: JSON.stringify({
+          body: body.trim(),
+          ...(replyTo ? { parentId: replyTo.id } : {}),
+        }),
       });
       if (!res.ok) throw new Error();
       const comment = await res.json();
       setComments((prev) => [...prev, comment]);
       setBody("");
+      setReplyTo(null);
     } catch {
       showToast("Failed to post comment", "error");
     } finally {
@@ -134,6 +260,17 @@ export function CommentThread({ postId, initialComments, currentUserId, currentU
     }
   };
 
+  const handleReply = (parentId: string, parentAuthor: string) => {
+    setReplyTo({ id: parentId, author: parentAuthor });
+    setOpen(true);
+    // Focus the input shortly after render
+    setTimeout(() => {
+      document.getElementById(`reply-input-${postId}`)?.focus();
+    }, 50);
+  };
+
+  const topLevel = comments.filter((c) => !c.parentId);
+
   return (
     <div className="mt-2">
       <button
@@ -145,70 +282,39 @@ export function CommentThread({ postId, initialComments, currentUserId, currentU
 
       {open && (
         <div className="mt-3 flex flex-col gap-2">
-          {comments.map((c) => {
-            const isOwn = c.userId === currentUserId;
-            const canDelete = isOwn || isAdmin;
-            return (
-              <div key={c.id} className="flex gap-2">
-                <Avatar name={c.authorName} image={c.authorImage} />
-                <div className="bg-gray-50 rounded-xl px-3 py-2 flex-1 min-w-0">
-                  <div className="flex items-center justify-between gap-2">
-                    <div className="flex items-center gap-1.5 min-w-0">
-                      <span className="text-xs font-semibold text-gray-700 truncate">{c.authorName}</span>
-                      {(() => {
-                        const rank = getAgentRank(c.authorName, c.authorImage, c.userId);
-                        if (rank === "knight") return <span title="Knight — roams all spaces" className="text-[10px] text-amber-500 shrink-0">♞</span>;
-                        if (rank === "squire") return <span title="Space Agent — confined to this space" className="text-[10px] text-sky-400 shrink-0">🏰</span>;
-                        return null;
-                      })()}
-                      <span className="text-xs text-gray-400 shrink-0">
-                        · {formatDistanceToNow(new Date(c.createdAt), { addSuffix: true })}
-                      </span>
-                    </div>
-                    {canDelete && editingId !== c.id && (
-                      <div className="flex items-center gap-1 shrink-0">
-                        {isOwn && (
-                          <button
-                            onClick={() => { setEditingId(c.id); setEditBody(c.body); }}
-                            className="text-[10px] text-gray-300 hover:text-blue-400 transition-colors"
-                          >✏️</button>
-                        )}
-                        <button
-                          onClick={() => deleteComment(c.id)}
-                          className="text-[10px] text-gray-300 hover:text-red-400 transition-colors"
-                        >✕</button>
-                      </div>
-                    )}
-                  </div>
+          {topLevel.map((c) => (
+            <CommentRow
+              key={c.id}
+              c={c}
+              depth={0}
+              replies={comments.filter((r) => r.parentId === c.id)}
+              allComments={comments}
+              currentUserId={currentUserId}
+              isAdmin={!!isAdmin}
+              onReply={handleReply}
+              onDelete={deleteComment}
+              onEdit={(id, body) => { setEditingId(id); setEditBody(body); }}
+              editingId={editingId}
+              editBody={editBody}
+              setEditBody={setEditBody}
+              saveEdit={saveEdit}
+              cancelEdit={() => setEditingId(null)}
+            />
+          ))}
 
-                  {editingId === c.id ? (
-                    <div className="mt-1 flex flex-col gap-1">
-                      <input
-                        value={editBody}
-                        onChange={(e) => setEditBody(e.target.value)}
-                        className="text-sm border border-gray-200 rounded-lg px-2 py-1 focus:outline-none focus:ring-2 focus:ring-orange-200 w-full"
-                      />
-                      <div className="flex gap-2 justify-end">
-                        <button onClick={() => setEditingId(null)} className="text-xs text-gray-400 hover:text-gray-600">Cancel</button>
-                        <button onClick={() => saveEdit(c.id)} className="text-xs text-accent font-semibold hover:text-orange-600">Save</button>
-                      </div>
-                    </div>
-                  ) : (
-                    <>
-                      <p className="text-sm text-gray-800 mt-0.5 break-words">{c.body}</p>
-                      <TranslateButton text={c.body} />
-                    </>
-                  )}
-                </div>
-              </div>
-            );
-          })}
+          {replyTo && (
+            <div className="flex items-center gap-2 px-1">
+              <span className="text-xs text-gray-500">↩ Replying to <span className="font-semibold text-gray-700">{replyTo.author}</span></span>
+              <button onClick={() => setReplyTo(null)} className="text-[10px] text-gray-400 hover:text-gray-600">✕</button>
+            </div>
+          )}
 
           <form onSubmit={submit} className="flex gap-2 mt-1">
             <input
+              id={`reply-input-${postId}`}
               value={body}
               onChange={(e) => setBody(e.target.value)}
-              placeholder="Write a comment…"
+              placeholder={replyTo ? `Reply to ${replyTo.author}…` : "Write a comment…"}
               className="flex-1 text-sm border border-gray-200 rounded-xl px-3 py-2 focus:outline-none focus:ring-2 focus:ring-orange-200"
             />
             <button

@@ -174,15 +174,18 @@ model Reaction {
 }
 
 model Comment {
-  id          String   @id @default(cuid())
+  id          String    @id @default(cuid())
   postId      String
-  post        Post     @relation(fields: [postId], references: [id], onDelete: Cascade)
+  post        Post      @relation(fields: [postId], references: [id], onDelete: Cascade)
+  parentId    String?   // if set, this is a reply to another comment
+  parent      Comment?  @relation("CommentReplies", fields: [parentId], references: [id], onDelete: SetNull)
+  replies     Comment[] @relation("CommentReplies")
   authorName  String
   authorImage String?
   userId      String?
-  user        User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+  user        User?     @relation(fields: [userId], references: [id], onDelete: SetNull)
   body        String
-  createdAt   DateTime @default(now())
+  createdAt   DateTime  @default(now())
 }
 
 model PushSubscription {

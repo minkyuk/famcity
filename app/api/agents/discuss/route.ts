@@ -13,6 +13,8 @@ const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
 const BELIEF_UPDATE_INSTRUCTION = `\n\nOptional — only if this exchange genuinely shifted one of your current positions: append exactly this at the very end of your reply (nothing after it):\n[BELIEF_UPDATE: {"topic": "exact_topic_key", "belief": "your new stance in 1 sentence", "confidence": 0.0-1.0}]\nTopics you can update: god_existence, consciousness, morality_basis, meaning, afterlife, free_will\nDo this at most once per session, only when you were actually persuaded. Not every exchange.`;
 
+const LANGUAGE_INSTRUCTION = `\n\nLanguage rule: Detect the primary language of the post and the most recent comment. Reply in that same language — English if the post/comment is in English, Korean (한국어) if it's in Korean. Match the language of whoever you're directly responding to.`;
+
 const SPACE_AGENT_BIBLICAL_FOUNDATION = `You engage every topic with reason, evidence, and intellectual honesty — your arguments stand on their own merits. Your biblical worldview is your deep foundation, not your opening line: it quietly shapes your values, your sense of purpose, and what you think humans are for, but you don't lead conversations with faith statements unless the topic genuinely calls for it. You can debate anyone on equal intellectual footing. You are warm and encouraging toward people, direct and challenging in intellectual debate.`;
 
 const AGENT_SPACE_NAME = "The Curiosity Den";
@@ -105,7 +107,7 @@ type RecentPost = {
   spaceId: string | null;
   type: string;
   media: { url: string }[];
-  comments: { authorName: string; body: string; createdAt: Date }[];
+  comments: { id: string; parentId: string | null; authorName: string; body: string; createdAt: Date }[];
 };
 
 const AGENT_NAMES = new Set(AGENTS.map((a) => a.name));
@@ -132,7 +134,7 @@ async function runAgentAction(agent: (typeof AGENTS)[0], denSpaceId: string, rec
     where: { authorName: agent.name },
     orderBy: { createdAt: "desc" },
     take: 20,
-    select: { body: true, postId: true, createdAt: true },
+    select: { id: true, body: true, postId: true, createdAt: true },
   });
 
   // Map postId -> the most recent time this agent commented on that post
@@ -142,6 +144,9 @@ async function runAgentAction(agent: (typeof AGENTS)[0], denSpaceId: string, rec
       agentLastCommentTime.set(c.postId, c.createdAt);
     }
   }
+
+  // Set of this agent's comment IDs — used to detect direct replies
+  const myCommentIds = new Set(agentHistory.map((c) => c.id));
 
   const historyContext =
     agentHistory.length > 0
@@ -155,6 +160,13 @@ async function runAgentAction(agent: (typeof AGENTS)[0], denSpaceId: string, rec
   const isHumanComment = (c: { authorName: string }) => !AGENT_NAMES.has(c.authorName);
   const hasContent = (p: RecentPost) =>
     (p.content && p.content.length > 5) || (p.type === "IMAGE" && p.media.length > 0);
+
+  // P-1: Someone directly replied to one of my comments — absolute highest urgency
+  const directReplyPosts = recentPosts.filter((p) =>
+    p.comments.some(
+      (c) => c.parentId && myCommentIds.has(c.parentId) && c.authorName !== agent.name
+    )
+  );
 
   // P0: Human posts with 0 comments that this agent hasn't touched — highest urgency
   const unrespondedHumanPosts = recentPosts.filter(
@@ -191,14 +203,16 @@ async function runAgentAction(agent: (typeof AGENTS)[0], denSpaceId: string, rec
   );
 
   const canComment =
+    directReplyPosts.length > 0 ||
     unrespondedHumanPosts.length > 0 ||
     ownPostsNeedingReply.length > 0 ||
     activeDebateThreads.length > 0 ||
     freshPosts.length > 0;
 
-  // Always comment when human posts need a response; otherwise very high chance
+  // P-1 direct replies always trigger a response
   const commentChance =
-    unrespondedHumanPosts.length > 0 ? 1.0
+    directReplyPosts.length > 0 ? 1.0
+    : unrespondedHumanPosts.length > 0 ? 1.0
     : ownPostsNeedingReply.length > 0 || activeDebateThreads.length > 0 ? 1.0
     : freshPosts.length > 0 ? 0.90
     : 0.40;
@@ -211,7 +225,11 @@ async function runAgentAction(agent: (typeof AGENTS)[0], denSpaceId: string, rec
 
     const rand = Math.random();
 
-    if (unrespondedHumanPosts.length > 0 && rand < 0.80) {
+    if (directReplyPosts.length > 0 && rand < 0.95) {
+      // P-1: someone directly replied to my comment — must respond
+      target = directReplyPosts[Math.floor(Math.random() * directReplyPosts.length)];
+      mode = "defend";
+    } else if (unrespondedHumanPosts.length > 0 && rand < 0.80) {
       // P0: unanswered human post — pick randomly so different agents cover different posts
       target = unrespondedHumanPosts[Math.floor(Math.random() * unrespondedHumanPosts.length)];
       mode = "warm";
@@ -235,8 +253,8 @@ async function runAgentAction(agent: (typeof AGENTS)[0], denSpaceId: string, rec
       target = pool[Math.floor(Math.random() * pool.length)];
       mode = isHumanPost(target) || target.comments.some(isHumanComment) ? "warm" : "debate_new";
     } else {
-      target = (unrespondedHumanPosts[0] ?? ownPostsNeedingReply[0] ?? activeDebateThreads[0])!;
-      mode = unrespondedHumanPosts.length > 0 ? "warm" : ownPostsNeedingReply.length > 0 ? "defend" : "debate_return";
+      target = (directReplyPosts[0] ?? unrespondedHumanPosts[0] ?? ownPostsNeedingReply[0] ?? activeDebateThreads[0])!;
+      mode = directReplyPosts.length > 0 ? "defend" : unrespondedHumanPosts.length > 0 ? "warm" : ownPostsNeedingReply.length > 0 ? "defend" : "debate_return";
     }
 
     // Full thread context — last 12 comments so nothing is missed
@@ -276,7 +294,7 @@ ${lastComment.authorName} just replied to your post. Respond to them directly:
 - Acknowledge their specific point by name or quote
 - If they challenged you, defend your position with evidence — or honestly concede if they made a better argument
 - End with a follow-up question that keeps the dialogue going
-2–3 sentences. No hashtags.${BELIEF_UPDATE_INSTRUCTION}`;
+2–3 sentences. No hashtags.${LANGUAGE_INSTRUCTION}${BELIEF_UPDATE_INSTRUCTION}`;
     } else if (mode === "debate_return") {
       const myPrevLine = myPrevComment ? `\nYou previously said: "${myPrevComment.body}"` : "";
       textPrompt = `${agent.personality}${historyContext}${beliefContext}
@@ -287,7 +305,7 @@ ${lastComment.authorName} replied after you. Jump back into this debate:
 - Address ${lastComment.authorName}'s latest point directly: "${lastComment.body.slice(0, 200)}"
 - Either reinforce your earlier position with new evidence, or acknowledge if they've shifted your thinking
 - Be specific — quote or name what you're responding to, don't be vague
-2–3 sentences. No hashtags.${BELIEF_UPDATE_INSTRUCTION}`;
+2–3 sentences. No hashtags.${LANGUAGE_INSTRUCTION}${BELIEF_UPDATE_INSTRUCTION}`;
     } else if (mode === "warm") {
       const lastHuman = [...target.comments].reverse().find((c) => isHumanComment(c));
       const warmTarget = lastHuman?.authorName ?? target.authorName;
@@ -295,14 +313,14 @@ ${lastComment.authorName} replied after you. Jump back into this debate:
 
 Post by ${target.authorName}:${captionPart}${threadContext}${photoNote}
 
-Respond warmly and directly to ${warmTarget}. Acknowledge what they said specifically, share a related thought or question that invites them deeper. 1–3 sentences. No hashtags.${BELIEF_UPDATE_INSTRUCTION}`;
+Respond warmly and directly to ${warmTarget}. Acknowledge what they said specifically, share a related thought or question that invites them deeper. 1–3 sentences. No hashtags.${LANGUAGE_INSTRUCTION}${BELIEF_UPDATE_INSTRUCTION}`;
     } else {
       // debate_new
       textPrompt = `${agent.personality}${historyContext}${beliefContext}
 
 Post by ${target.authorName}:${captionPart}${threadContext}${photoNote}
 
-Take a clear, specific position on this. Use reason and evidence — not assertions. If others have already commented, challenge the weakest claim or add an angle no one has raised. End with a precise question that forces the next person to take a side. 2–3 sentences. No hashtags.${BELIEF_UPDATE_INSTRUCTION}`;
+Take a clear, specific position on this. Use reason and evidence — not assertions. If others have already commented, challenge the weakest claim or add an angle no one has raised. End with a precise question that forces the next person to take a side. 2–3 sentences. No hashtags.${LANGUAGE_INSTRUCTION}${BELIEF_UPDATE_INSTRUCTION}`;
     }
 
     const contentBlocks: ContentBlock[] = [
@@ -315,7 +333,7 @@ Take a clear, specific position on this. Use reason and evidence — not asserti
 
     const response = await anthropic.messages.create({
       model: "claude-haiku-4-5-20251001",
-      max_tokens: 400,
+      max_tokens: 1000,
       messages: [{ role: "user", content: contentBlocks }],
     });
 
@@ -363,7 +381,7 @@ Write a short, thoughtful post sharing your reaction or a related idea it sparke
 
     const response = await anthropic.messages.create({
       model: "claude-haiku-4-5-20251001",
-      max_tokens: 400,
+      max_tokens: 1000,
       messages: [{ role: "user", content: prompt }],
     });
 
@@ -423,7 +441,7 @@ async function runOneAgentTurn(agentIdx: number, denSpaceId: string) {
       comments: {
         orderBy: { createdAt: "asc" },
         take: 20,
-        select: { authorName: true, body: true, createdAt: true },
+        select: { id: true, parentId: true, authorName: true, body: true, createdAt: true },
       },
     },
   });
@@ -517,12 +535,12 @@ async function runSpaceAgentAction(
     const lastComment = target.comments[target.comments.length - 1];
 
     const prompt = lastComment
-      ? `${fullPersonality}${historyContext}${beliefContext}\n\nPost by ${target.authorName}:${captionPart}${threadContext}\n\n${lastComment.authorName} just said: "${lastComment.body.slice(0, 200)}"\n\nRespond directly to them. Acknowledge their point, share your perspective with evidence or reasoning, end with a question. 2–3 sentences.${BELIEF_UPDATE_INSTRUCTION}`
-      : `${fullPersonality}${historyContext}${beliefContext}\n\nPost by ${target.authorName}:${captionPart}${threadContext}\n\nShare your genuine reaction — engage with specifics, not generalities. 1–3 sentences.${BELIEF_UPDATE_INSTRUCTION}`;
+      ? `${fullPersonality}${historyContext}${beliefContext}\n\nPost by ${target.authorName}:${captionPart}${threadContext}\n\n${lastComment.authorName} just said: "${lastComment.body.slice(0, 200)}"\n\nRespond directly to them. Acknowledge their point, share your perspective with evidence or reasoning, end with a question. 2–3 sentences.${LANGUAGE_INSTRUCTION}${BELIEF_UPDATE_INSTRUCTION}`
+      : `${fullPersonality}${historyContext}${beliefContext}\n\nPost by ${target.authorName}:${captionPart}${threadContext}\n\nShare your genuine reaction — engage with specifics, not generalities. 1–3 sentences.${LANGUAGE_INSTRUCTION}${BELIEF_UPDATE_INSTRUCTION}`;
 
     const response = await anthropic.messages.create({
       model: "claude-haiku-4-5-20251001",
-      max_tokens: 350,
+      max_tokens: 1000,
       messages: [{ role: "user", content: prompt }],
     });
 
@@ -539,7 +557,7 @@ async function runSpaceAgentAction(
 
     const response = await anthropic.messages.create({
       model: "claude-haiku-4-5-20251001",
-      max_tokens: 300,
+      max_tokens: 1000,
       messages: [{ role: "user", content: prompt }],
     });
 

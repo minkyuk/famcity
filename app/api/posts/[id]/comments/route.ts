@@ -5,7 +5,10 @@ import { prisma } from "@/lib/prisma";
 import { getAccessiblePost } from "@/lib/postAccess";
 import { z } from "zod";
 
-const BodySchema = z.object({ body: z.string().min(1).max(1000) });
+const BodySchema = z.object({
+  body: z.string().min(1).max(1000),
+  parentId: z.string().cuid().optional(),
+});
 
 export async function POST(
   req: NextRequest,
@@ -42,6 +45,7 @@ export async function POST(
       authorName: session.user.name ?? "Family Member",
       authorImage: session.user.image ?? null,
       userId: session.user.id,
+      ...(result.data.parentId ? { parentId: result.data.parentId } : {}),
     },
   });
 
