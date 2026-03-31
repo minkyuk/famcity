@@ -14,6 +14,7 @@ import { SpaceHotButton } from "@/components/spaces/SpaceHotButton";
 import { DeleteSpaceButton } from "@/components/spaces/DeleteSpaceButton";
 import { EditSpaceButton } from "@/components/spaces/EditSpaceButton";
 import { AddAgentButton } from "@/components/spaces/AddAgentButton";
+import { SpaceAgentsDropdown } from "@/components/spaces/SpaceAgentsDropdown";
 import { isAdmin } from "@/lib/admin";
 
 export default async function SpacePage({
@@ -25,7 +26,7 @@ export default async function SpacePage({
   const session = await getServerSession(authOptions);
   if (!session?.user) redirect("/login");
 
-  const [space, spaceMembers] = await Promise.all([
+  const [space, spaceMembers, spaceAgents] = await Promise.all([
     prisma.space.findUnique({
       where: { id },
       include: { _count: { select: { members: true } } },
@@ -35,6 +36,9 @@ export default async function SpacePage({
       include: { user: { select: { id: true, name: true, image: true } } },
       orderBy: { joinedAt: "asc" },
     }),
+    (prisma.spaceAgent as { findMany: (opts: object) => Promise<{ id: string; name: string; slug: string }[]> })
+      .findMany({ where: { spaceId: id }, select: { id: true, name: true, slug: true }, orderBy: { createdAt: "asc" } })
+      .catch(() => [] as { id: string; name: string; slug: string }[]),
   ]);
   if (!space) notFound();
 
@@ -103,7 +107,8 @@ export default async function SpacePage({
             )}
           </div>
           <div className="flex items-center gap-2">
-            <SpaceHotButton spaceId={id} />
+            {!space.isSystem && <SpaceAgentsDropdown agents={spaceAgents} />}
+            <SpaceHotButton spaceId={id} isAdmin={isAdmin(session)} />
             {!space.isSystem && <InviteButton inviteCode={space.inviteCode} />}
             {!space.isSystem && <AddAgentButton spaceId={id} />}
             {!space.isSystem && (

@@ -7,7 +7,7 @@ interface SessionStatus {
   remainingMinutes?: number;
 }
 
-export function HotHourButton() {
+export function HotHourButton({ isAdmin }: { isAdmin?: boolean }) {
   const [status, setStatus] = useState<SessionStatus | null>(null);
   const [loading, setLoading] = useState(false);
 
@@ -66,10 +66,10 @@ export function HotHourButton() {
   if (status.active) {
     return (
       <button
-        onClick={stop}
+        onClick={isAdmin ? stop : undefined}
         disabled={loading}
-        title={`Hot hour active — ${status.remainingMinutes ?? "?"} min left. Click to stop.`}
-        className="flex items-center gap-1 text-xs font-semibold text-orange-500 hover:text-orange-700 transition-colors disabled:opacity-50"
+        title={isAdmin ? `Hot hour active — ${status.remainingMinutes ?? "?"} min left. Click to stop.` : `Hot hour active — ${status.remainingMinutes ?? "?"} min left`}
+        className={`flex items-center gap-1 text-xs font-semibold text-orange-500 transition-colors disabled:opacity-50 ${isAdmin ? "hover:text-orange-700 cursor-pointer" : "cursor-default"}`}
       >
         <span className="relative flex h-2 w-2">
           <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-orange-400 opacity-75" />
@@ -82,10 +82,10 @@ export function HotHourButton() {
 
   return (
     <button
-      onClick={start}
+      onClick={isAdmin ? start : undefined}
       disabled={loading}
-      title="Start Hot Hour — all 25 agents fire every minute for 25 minutes"
-      className="text-xs font-semibold text-gray-400 hover:text-orange-500 transition-colors disabled:opacity-50"
+      title={isAdmin ? "Start Hot Hour — all agents fire every minute for 25 minutes" : "Global fire (admin only)"}
+      className={`text-xs font-semibold transition-colors disabled:opacity-50 ${isAdmin ? "text-gray-400 hover:text-orange-500 cursor-pointer" : "text-gray-300 cursor-default"}`}
     >
       🔥
     </button>

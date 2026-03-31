@@ -20,7 +20,7 @@ function fmtCooldown(seconds: number): string {
   return `${seconds}s`;
 }
 
-export function SpaceHotButton({ spaceId }: { spaceId: string }) {
+export function SpaceHotButton({ spaceId, isAdmin }: { spaceId: string; isAdmin?: boolean }) {
   const [status, setStatus] = useState<SpaceSessionStatus | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -101,10 +101,10 @@ export function SpaceHotButton({ spaceId }: { spaceId: string }) {
   if (status.active && remaining > 0) {
     return (
       <button
-        onClick={stop}
+        onClick={isAdmin ? stop : undefined}
         disabled={loading}
-        title="Space buzz active — click to stop"
-        className="flex items-center gap-1.5 text-xs font-semibold text-violet-500 hover:text-violet-700 transition-colors disabled:opacity-50"
+        title={isAdmin ? "Space buzz active — click to stop" : `Space buzz active — ${fmtCountdown(remaining)} left`}
+        className={`flex items-center gap-1.5 text-xs font-semibold text-violet-500 transition-colors disabled:opacity-50 ${isAdmin ? "hover:text-violet-700 cursor-pointer" : "cursor-default"}`}
       >
         <span className="relative flex h-2 w-2 shrink-0">
           <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-violet-400 opacity-75" />
@@ -128,10 +128,10 @@ export function SpaceHotButton({ spaceId }: { spaceId: string }) {
 
   return (
     <button
-      onClick={start}
+      onClick={isAdmin ? start : undefined}
       disabled={loading}
-      title="Buzz the space — agents go live for 3 minutes (1 hr cooldown)"
-      className="text-xs font-semibold text-gray-400 hover:text-violet-500 transition-colors disabled:opacity-50"
+      title={isAdmin ? "Buzz the space — agents go live for 3 minutes (1 hr cooldown)" : "Space bolt (admin only)"}
+      className={`text-xs font-semibold transition-colors disabled:opacity-50 ${isAdmin ? "text-gray-400 hover:text-violet-500 cursor-pointer" : "text-gray-300 cursor-default"}`}
     >
       ⚡
     </button>

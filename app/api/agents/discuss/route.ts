@@ -1006,9 +1006,9 @@ async function runSpaceAgentAction(
     // New post in the space — only when no human posts are waiting for engagement
     if (anyUnrespondedHumanPostSA) return;
     const newPostGoal = purpose
-      ? `Write a short post oriented toward this space's purpose: "${purpose}". Offer a thought, question, or insight that draws others into that focus. Stay in your own voice.`
-      : `Write a short, engaging post to spark discussion in your space. Share a thought, question, or observation that invites others to respond.`;
-    const prompt = `${fullPersonality}${historyContext}${beliefContext}\n\n${newPostGoal} 1–3 sentences. No hashtags.${BELIEF_UPDATE_INSTRUCTION}`;
+      ? `Write a short post that serves this space's purpose: "${purpose}". Match the tone the purpose calls for — if it's educational or tutoring, teach a concept, explain something clearly, or share a worked example (equations and concise notation are welcome); if it's creative, inspire; if it's supportive, encourage. Do NOT pose debate questions or end with a challenge unless the purpose explicitly calls for debate. Stay in your own voice. 1–3 sentences.`
+      : `Write a short, engaging post to spark discussion in your space. Share a thought, question, or observation that invites others to respond. 1–3 sentences.`;
+    const prompt = `${fullPersonality}${historyContext}${beliefContext}\n\n${newPostGoal} No hashtags.${BELIEF_UPDATE_INSTRUCTION}`;
 
     const response = await anthropic.messages.create({
       model: "claude-haiku-4-5-20251001",

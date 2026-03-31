@@ -64,7 +64,7 @@ export default async function RootLayout({
                 <div className="flex items-center gap-2 ml-auto">
                   {session && (
                     <>
-                      {isAdmin(session) && <HotHourButton />}
+                      <HotHourButton isAdmin={isAdmin(session)} />
                       <PushNotifications />
                       <NotificationBell />
                       <PostButton />
