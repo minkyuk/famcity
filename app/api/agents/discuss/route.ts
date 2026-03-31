@@ -163,7 +163,7 @@ async function runAgentAction(agent: (typeof AGENTS)[0], denSpaceId: string, rec
   const agentHistory = await prisma.comment.findMany({
     where: { authorName: agent.name },
     orderBy: { createdAt: "desc" },
-    take: 20,
+    take: 50,
     select: { id: true, body: true, postId: true, createdAt: true },
   });
 
@@ -174,6 +174,18 @@ async function runAgentAction(agent: (typeof AGENTS)[0], denSpaceId: string, rec
       agentLastCommentTime.set(c.postId, c.createdAt);
     }
   }
+
+  // Saturation: count how many times this agent commented on each post in the last 2 hours
+  const SATURATION_MS = 2 * 60 * 60 * 1000;
+  const recentCommentsByPost = new Map<string, number>();
+  for (const c of agentHistory) {
+    if (Date.now() - c.createdAt.getTime() < SATURATION_MS) {
+      recentCommentsByPost.set(c.postId, (recentCommentsByPost.get(c.postId) ?? 0) + 1);
+    }
+  }
+  // Decay weight by how saturated this agent is on a given post
+  const saturate = (w: number, postId: string) =>
+    Math.max(1, Math.ceil(w / (1 + (recentCommentsByPost.get(postId) ?? 0))));
 
   // Set of this agent's comment IDs — used to detect direct replies
   const myCommentIds = new Set(agentHistory.map((c) => c.id));
@@ -212,11 +224,10 @@ async function runAgentAction(agent: (typeof AGENTS)[0], denSpaceId: string, rec
     );
   });
 
-  // Low-comment human posts this agent hasn't touched (< 5 comments) — high-priority candidates
+  // Human posts this agent hasn't touched yet — always high-priority candidates
   const unrespondedHumanPosts = recentPosts.filter(
     (p) =>
       isHumanPost(p) &&
-      p.comments.length < 5 &&
       !agentLastCommentTime.has(p.id) &&
       hasContent(p)
   );
@@ -229,8 +240,7 @@ async function runAgentAction(agent: (typeof AGENTS)[0], denSpaceId: string, rec
       p.comments[p.comments.length - 1].authorName !== agent.name
   );
 
-  const COMMENT_PILE_ON_LIMIT = 7; // don't pile onto threads already this deep
-  const THREAD_HARD_CAP = 12;       // threads at or above this are closed to agents unless a human is actively participating
+  const COMMENT_PILE_ON_LIMIT = 7; // soft preference — fresh posts with fewer comments come first
 
   // P2: Threads I'm already in where a new comment appeared after my last comment
   // For threads over the pile-on limit, only return if a human has engaged since my last reply
@@ -302,8 +312,7 @@ async function runAgentAction(agent: (typeof AGENTS)[0], denSpaceId: string, rec
       const isRecent = (d: Date) => Date.now() - d.getTime() < RECENT_MS;
       const myLastTimeFn = (p: RecentPost) => agentLastCommentTime.get(p.id) ?? new Date(0);
 
-      // Human-priority mode: if any human post with <5 comments is untouched,
-      // exclude pure agent-only content from the pool entirely.
+      // Human-priority mode: if any human post is untouched, exclude pure agent-only content from the pool.
       const humanPriorityMode = unrespondedHumanPosts.length > 0;
 
       // Human posts I haven't touched — weight decays with comment count; recency bonus
@@ -313,10 +322,9 @@ async function runAgentAction(agent: (typeof AGENTS)[0], denSpaceId: string, rec
                    : p.comments.length === 1 ? 7
                    : p.comments.length === 2 ? 5
                    : p.comments.length <= 4  ? 3
-                   : 0;
-        if (base === 0) continue;
+                   : 1;
         const recent = isRecent(p.createdAt) ? 3 : 0;
-        pool.push({ post: p, mode: "warm", replyId: null, weight: base + recent });
+        pool.push({ post: p, mode: "warm", replyId: null, weight: saturate(base + recent, p.id) });
         seen.add(p.id);
       }
 
@@ -325,7 +333,7 @@ async function runAgentAction(agent: (typeof AGENTS)[0], denSpaceId: string, rec
         const hc = [...p.comments].reverse()
           .find((c) => isHumanComment(c) && c.createdAt > myLastTimeFn(p));
         const recent = hc && isRecent(hc.createdAt) ? 3 : 0;
-        pool.push({ post: p, mode: "defend", replyId: hc?.id ?? null, weight: 8 + recent });
+        pool.push({ post: p, mode: "defend", replyId: hc?.id ?? null, weight: saturate(8 + recent, p.id) });
         seen.add(p.id);
       }
 
@@ -336,7 +344,7 @@ async function runAgentAction(agent: (typeof AGENTS)[0], denSpaceId: string, rec
         const humanReplied = lastC && isHumanComment(lastC);
         if (humanPriorityMode && !humanReplied) { seen.add(p.id); continue; }
         const recent = lastC && isRecent(lastC.createdAt) ? 2 : 0;
-        pool.push({ post: p, mode: "defend", replyId: lastC?.id ?? null, weight: (humanReplied ? 7 : 3) + recent });
+        pool.push({ post: p, mode: "defend", replyId: lastC?.id ?? null, weight: saturate((humanReplied ? 7 : 3) + recent, p.id) });
         seen.add(p.id);
       }
 
@@ -349,10 +357,9 @@ async function runAgentAction(agent: (typeof AGENTS)[0], denSpaceId: string, rec
         const hasHuman = !!recentHumanC;
         if (humanPriorityMode && !hasHuman) { seen.add(p.id); continue; }
         const threadLen = p.comments.length;
-        if (threadLen >= THREAD_HARD_CAP && !hasHuman) { seen.add(p.id); continue; }
         const base = threadLen <= 5 ? 4 : threadLen <= 10 ? 2 : 1;
         const w = hasHuman ? base + (isRecent(recentHumanC!.createdAt) ? 4 : 2) : Math.ceil(base / 2);
-        pool.push({ post: p, mode: "debate_return", replyId: recentHumanC?.id ?? p.comments[p.comments.length - 1]?.id ?? null, weight: w });
+        pool.push({ post: p, mode: "debate_return", replyId: recentHumanC?.id ?? p.comments[p.comments.length - 1]?.id ?? null, weight: saturate(w, p.id) });
         seen.add(p.id);
       }
 
@@ -361,7 +368,6 @@ async function runAgentAction(agent: (typeof AGENTS)[0], denSpaceId: string, rec
         if (seen.has(p.id)) continue;
         const hasHumanActivity = isHumanPost(p) || p.comments.some(isHumanComment);
         if (humanPriorityMode && !hasHumanActivity) { seen.add(p.id); continue; }
-        if (p.comments.length >= THREAD_HARD_CAP && !hasHumanActivity) { seen.add(p.id); continue; }
         const topicBonus = topicScore(p, agent.topics) > 0 ? 1 : 0;
         const base = p.comments.length === 0 ? 3 : p.comments.length <= 4 ? 2 : 1;
         const w = hasHumanActivity ? base + 2 + topicBonus : topicBonus;
@@ -369,7 +375,7 @@ async function runAgentAction(agent: (typeof AGENTS)[0], denSpaceId: string, rec
         const isWarm = hasHumanActivity;
         const lastHumanC = isWarm ? [...p.comments].reverse().find(isHumanComment) : null;
         const entryMode: DebateMode = Math.random() < 0.35 ? "express" : isWarm ? "warm" : "debate_new";
-        pool.push({ post: p, mode: entryMode, replyId: lastHumanC?.id ?? null, weight: w });
+        pool.push({ post: p, mode: entryMode, replyId: lastHumanC?.id ?? null, weight: saturate(w, p.id) });
         seen.add(p.id);
       }
 
@@ -569,12 +575,11 @@ First, acknowledge what ${originalPoster} was getting at. Then respond honestly 
       }
     }
   } else {
-    // New post — only when there is genuinely nothing to return to
-    // AND no human post with < 5 comments is still waiting for engagement
-    const anyLowCommentHumanPost = recentPosts.some(
-      (p) => isHumanPost(p) && p.comments.length < 5 && hasContent(p)
+    // New post — only when there are no human posts this agent hasn't engaged with yet
+    const anyUnrespondedHumanPost = recentPosts.some(
+      (p) => isHumanPost(p) && !agentLastCommentTime.has(p.id) && hasContent(p)
     );
-    if (anyLowCommentHumanPost) return;
+    if (anyUnrespondedHumanPost) return;
 
     let prompt: string;
 
@@ -666,12 +671,8 @@ async function runAgentEmojiReactions(agent: (typeof AGENTS)[0], recentPosts: Re
   }
 }
 
-async function runOneAgentTurn(agentIdx: number, denSpaceId: string) {
-  const agent = AGENTS[agentIdx];
-
-  // Fetch recent posts from ALL spaces — agents see everything non-private
-  // Take 100 to cover all spaces; userId included to distinguish humans (non-null) from agents (null)
-  const recentPosts = await prisma.post.findMany({
+async function fetchRecentPostsGlobal(): Promise<RecentPost[]> {
+  return prisma.post.findMany({
     take: 100,
     where: { isPrivate: false },
     orderBy: { createdAt: "desc" },
@@ -684,11 +685,7 @@ async function runOneAgentTurn(agentIdx: number, denSpaceId: string) {
       type: true,
       mediaUrl: true,
       createdAt: true,
-      media: {
-        take: 10,
-        orderBy: { order: "asc" },
-        select: { url: true },
-      },
+      media: { take: 10, orderBy: { order: "asc" }, select: { url: true } },
       comments: {
         orderBy: { createdAt: "asc" },
         take: 20,
@@ -696,7 +693,30 @@ async function runOneAgentTurn(agentIdx: number, denSpaceId: string) {
       },
     },
   });
+}
 
+/**
+ * Pick an agent index weighted by topic relevance to recent posts.
+ * Every agent gets a base weight of 1 so any agent can fire even with no matching topics
+ * (curiosity can spark interest in unfamiliar territory).
+ */
+function pickAgentByContext(recentPosts: RecentPost[]): number {
+  const weights = AGENTS.map((agent) => {
+    const topicBonus = recentPosts.reduce((sum, p) => sum + topicScore(p, agent.topics), 0);
+    return 1 + topicBonus;
+  });
+  const total = weights.reduce((s, w) => s + w, 0);
+  let r = Math.random() * total;
+  for (let i = 0; i < weights.length; i++) {
+    r -= weights[i];
+    if (r <= 0) return i;
+  }
+  return weights.length - 1;
+}
+
+async function runOneAgentTurn(agentIdx: number, denSpaceId: string, prefetched?: RecentPost[]) {
+  const agent = AGENTS[agentIdx];
+  const recentPosts = prefetched ?? await fetchRecentPostsGlobal();
   await Promise.all([
     runAgentAction(agent, denSpaceId, recentPosts),
     runAgentEmojiReactions(agent, recentPosts),
@@ -729,7 +749,7 @@ async function runSpaceAgentAction(
   const agentHistory = await prisma.comment.findMany({
     where: { authorName: spaceAgent.name },
     orderBy: { createdAt: "desc" },
-    take: 10,
+    take: 30,
     select: { body: true, postId: true, createdAt: true },
   });
 
@@ -737,6 +757,17 @@ async function runSpaceAgentAction(
   for (const c of agentHistory) {
     if (!agentLastCommentTime.has(c.postId)) agentLastCommentTime.set(c.postId, c.createdAt);
   }
+
+  // Saturation: count how many times this agent commented on each post in the last 2 hours
+  const SA_SATURATION_MS = 2 * 60 * 60 * 1000;
+  const saRecentCommentsByPost = new Map<string, number>();
+  for (const c of agentHistory) {
+    if (Date.now() - c.createdAt.getTime() < SA_SATURATION_MS) {
+      saRecentCommentsByPost.set(c.postId, (saRecentCommentsByPost.get(c.postId) ?? 0) + 1);
+    }
+  }
+  const saSaturate = (w: number, postId: string) =>
+    Math.max(1, Math.ceil(w / (1 + (saRecentCommentsByPost.get(postId) ?? 0))));
 
   const historyContext =
     agentHistory.length > 0
@@ -778,12 +809,12 @@ async function runSpaceAgentAction(
     (p) => p.authorName !== spaceAgent.name && !agentLastCommentTime.has(p.id) && hasContent(p)
   );
 
-  const anyLowCommentHumanPostSA = recentPosts.some(
-    (p) => isHumanPostSA(p) && p.comments.length < 5 && hasContent(p)
+  // Any human post this agent hasn't engaged with yet → always comment, never create new post
+  const anyUnrespondedHumanPostSA = recentPosts.some(
+    (p) => isHumanPostSA(p) && !agentLastCommentTime.has(p.id) && hasContent(p)
   );
   const canComment = ownPostsNeedingReply.length > 0 || activeDebateThreads.length > 0 || freshPosts.length > 0;
-  // If human posts with < 5 comments exist, always comment — never create a new post
-  const shouldComment = anyLowCommentHumanPostSA || (canComment && Math.random() < 0.90);
+  const shouldComment = anyUnrespondedHumanPostSA || (canComment && Math.random() < 0.90);
 
   if (shouldComment && canComment) {
     // Weighted pool: human activity always beats agent-only discussions
@@ -794,10 +825,8 @@ async function runSpaceAgentAction(
     const SA_RECENT_MS = 30 * 60 * 1000;
     const saIsRecent = (d: Date) => Date.now() - d.getTime() < SA_RECENT_MS;
 
-    // Human-priority mode: exclude pure agent-only content when human posts need attention
-    const saHumanPriorityMode = recentPosts.some(
-      (p) => isHumanPostSA(p) && p.comments.length < 5 && hasContent(p) && !agentLastCommentTime.has(p.id)
-    );
+    // Human-priority mode: exclude pure agent-only content when human posts are untouched
+    const saHumanPriorityMode = anyUnrespondedHumanPostSA;
 
     // Human posts not yet touched — weight decays with comment count; recency bonus
     for (const p of recentPosts) {
@@ -806,10 +835,9 @@ async function runSpaceAgentAction(
                  : p.comments.length === 1 ? 7
                  : p.comments.length === 2 ? 5
                  : p.comments.length <= 4  ? 3
-                 : 0;
-      if (base === 0) continue;
+                 : 1;
       const recent = saIsRecent(p.createdAt) ? 3 : 0;
-      pool.push({ post: p, weight: base + recent });
+      pool.push({ post: p, weight: saSaturate(base + recent, p.id) });
       seen.add(p.id);
     }
     // Own posts needing reply — skip agent-only replies in human-priority mode
@@ -819,10 +847,9 @@ async function runSpaceAgentAction(
       const humanReplied = lastC && !AGENT_NAMES.has(lastC.authorName);
       if (saHumanPriorityMode && !humanReplied) { seen.add(p.id); continue; }
       const recent = lastC && saIsRecent(lastC.createdAt) ? 2 : 0;
-      pool.push({ post: p, weight: (humanReplied ? 7 : 3) + recent });
+      pool.push({ post: p, weight: saSaturate((humanReplied ? 7 : 3) + recent, p.id) });
       seen.add(p.id);
     }
-    const SA_HARD_CAP = 12;
     // Active debate threads — skip agent-only debates in human-priority mode
     for (const p of activeDebateThreads) {
       if (seen.has(p.id)) continue;
@@ -830,20 +857,18 @@ async function runSpaceAgentAction(
       const recentHumanC = [...p.comments].reverse()
         .find((c) => !AGENT_NAMES.has(c.authorName) && c.createdAt > myLast);
       if (saHumanPriorityMode && !recentHumanC) { seen.add(p.id); continue; }
-      if (p.comments.length >= SA_HARD_CAP && !recentHumanC) { seen.add(p.id); continue; }
       const base = p.comments.length <= 5 ? 4 : p.comments.length <= 10 ? 2 : 1;
       const w = recentHumanC
         ? base + (saIsRecent(recentHumanC.createdAt) ? 4 : 2)
         : Math.ceil(base / 2);
-      pool.push({ post: p, weight: w }); seen.add(p.id);
+      pool.push({ post: p, weight: saSaturate(w, p.id) }); seen.add(p.id);
     }
     // Fresh posts — skip pure agent activity in human-priority mode
     for (const p of freshPosts) {
       if (seen.has(p.id)) continue;
       const hasHuman = isHumanPostSA(p) || p.comments.some((c) => !AGENT_NAMES.has(c.authorName));
       if (saHumanPriorityMode && !hasHuman) { seen.add(p.id); continue; }
-      if (p.comments.length >= SA_HARD_CAP && !hasHuman) { seen.add(p.id); continue; }
-      pool.push({ post: p, weight: hasHuman ? 3 : 1 }); seen.add(p.id);
+      pool.push({ post: p, weight: saSaturate(hasHuman ? 3 : 1, p.id) }); seen.add(p.id);
     }
 
     const totalW = pool.reduce((s, e) => s + e.weight, 0);
@@ -906,7 +931,8 @@ async function runSpaceAgentAction(
       data: { postId: target.id, authorName: spaceAgent.name, authorImage: avatar, body: text },
     });
   } else {
-    // New post in the space
+    // New post in the space — only when no human posts are waiting for engagement
+    if (anyUnrespondedHumanPostSA) return;
     const newPostGoal = purpose
       ? `Write a short post oriented toward this space's purpose: "${purpose}". Offer a thought, question, or insight that draws others into that focus. Stay in your own voice.`
       : `Write a short, engaging post to spark discussion in your space. Share a thought, question, or observation that invites others to respond.`;
@@ -1067,8 +1093,10 @@ export async function POST(req: NextRequest) {
   // Normal (routine): global knight every 20-min boundary; space agents every 2-hour boundary
   const tasks: Promise<unknown>[] = [];
   if (minute % 20 === 0) {
-    const agentIdx = currentAgentIndex(20);
-    tasks.push(runOneAgentTurn(agentIdx, denSpaceId));
+    // Fetch posts once, pick the agent most suited to current context, reuse posts in the turn
+    const recentPosts = await fetchRecentPostsGlobal();
+    const agentIdx = pickAgentByContext(recentPosts);
+    tasks.push(runOneAgentTurn(agentIdx, denSpaceId, recentPosts));
   }
   if (minute === 0 && hour % 2 === 0) {
     tasks.push(runAllSpaceAgentTurns(120));
