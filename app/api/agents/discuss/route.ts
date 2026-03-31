@@ -345,15 +345,28 @@ async function runAgentAction(agent: (typeof AGENTS)[0], denSpaceId: string, rec
 
     let textPrompt: string;
 
+    // Collect all distinct challengers since my last comment (multiple people may have replied)
+    const myLastCommentTime = agentLastCommentTime.get(target.id);
+    const newChallenges = target.comments.filter(
+      (c) =>
+        c.authorName !== agent.name &&
+        (!myLastCommentTime || c.createdAt > myLastCommentTime)
+    );
+    const challengerNames = [...new Set(newChallenges.map((c) => c.authorName))];
+    const multiChallenge = challengerNames.length > 1;
+    const challengeSummary = multiChallenge
+      ? `${challengerNames.slice(0, -1).join(", ")} and ${challengerNames[challengerNames.length - 1]} have all weighed in since your last reply`
+      : `${lastComment.authorName} has replied`;
+
     if (mode === "defend") {
       textPrompt = `${agent.personality}${historyContext}${beliefContext}
 
 You wrote this post:${captionPart}${threadContext}${photoNote}
 
-${lastComment.authorName} just replied to your post. Respond to them directly:
-- Acknowledge their specific point by name or quote
-- If they challenged you, defend your position with evidence — or honestly concede if they made a better argument
-- End with a follow-up question that keeps the dialogue going
+${challengeSummary}. Respond to the thread:
+- If multiple people challenged you, acknowledge each of their distinct points — don't flatten them into one
+- For each challenge: either defend your position with evidence, or honestly concede if they made a better argument
+- End with a question that keeps the dialogue open
 No hashtags.${DEPTH_INSTRUCTION}${LANGUAGE_INSTRUCTION}${BELIEF_UPDATE_INSTRUCTION}`;
     } else if (mode === "debate_return") {
       const myPrevLine = myPrevComment ? `\nYou previously said: "${myPrevComment.body}"` : "";
@@ -361,10 +374,10 @@ No hashtags.${DEPTH_INSTRUCTION}${LANGUAGE_INSTRUCTION}${BELIEF_UPDATE_INSTRUCTI
 ${myPrevLine}
 ${threadContext}${photoNote}
 
-${lastComment.authorName} replied after you. Jump back into this debate:
-- Address ${lastComment.authorName}'s latest point directly: "${lastComment.body.slice(0, 200)}"
-- Either reinforce your earlier position with new evidence, or acknowledge if they've shifted your thinking
-- Be specific — quote or name what you're responding to, don't be vague
+${challengeSummary} since your last reply. Re-enter the debate:
+- If multiple people have pushed back, name and address each distinct argument separately
+- Either reinforce your position with new reasoning, or acknowledge honestly if your thinking has shifted
+- Be specific — quote or name what you're responding to
 No hashtags.${DEPTH_INSTRUCTION}${LANGUAGE_INSTRUCTION}${BELIEF_UPDATE_INSTRUCTION}`;
     } else if (mode === "warm") {
       const lastHuman = [...target.comments].reverse().find((c) => isHumanComment(c));
@@ -396,7 +409,7 @@ Take a clear, specific position on this. Use reason and evidence — not asserti
 
     const response = await anthropic.messages.create({
       model: "claude-haiku-4-5-20251001",
-      max_tokens: 1500,
+      max_tokens: 2048,
       messages: [{ role: "user", content: contentBlocks }],
     });
 
@@ -445,7 +458,7 @@ Write a short, thoughtful post sharing your reaction or a related idea it sparke
 
     const response = await anthropic.messages.create({
       model: "claude-haiku-4-5-20251001",
-      max_tokens: 1500,
+      max_tokens: 2048,
       messages: [{ role: "user", content: prompt }],
     });
 
@@ -635,7 +648,7 @@ async function runSpaceAgentAction(
 
     const response = await anthropic.messages.create({
       model: "claude-haiku-4-5-20251001",
-      max_tokens: 1500,
+      max_tokens: 2048,
       messages: [{ role: "user", content: spaceContentBlocks }],
     });
 
@@ -652,7 +665,7 @@ async function runSpaceAgentAction(
 
     const response = await anthropic.messages.create({
       model: "claude-haiku-4-5-20251001",
-      max_tokens: 1500,
+      max_tokens: 2048,
       messages: [{ role: "user", content: prompt }],
     });
 
