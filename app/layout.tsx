@@ -62,6 +62,11 @@ export default async function RootLayout({
                     ⚔️ Knights
                   </Link>
                 )}
+                {session && (
+                  <Link href="/analyze" className="text-sm font-medium text-gray-600 hover:text-accent transition-colors hidden sm:block">
+                    🤖 AI
+                  </Link>
+                )}
                 <div className="flex items-center gap-2 ml-auto">
                   {session && (
                     <>
