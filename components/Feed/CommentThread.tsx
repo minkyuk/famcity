@@ -77,6 +77,28 @@ function Avatar({ name, image }: { name: string; image?: string | null }) {
   );
 }
 
+function CommentSummary({ summary }: { summary: string }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="rounded-md bg-sky-50 border border-sky-100 text-[11px] text-sky-800 mt-1 overflow-hidden">
+      <button
+        onClick={() => setOpen((o) => !o)}
+        className="w-full flex items-center justify-between px-2 py-1 font-medium hover:bg-sky-100 transition-colors"
+      >
+        <span>📚 Key points</span>
+        <span className="text-sky-400">{open ? "▲" : "▼"}</span>
+      </button>
+      {open && (
+        <ul className="px-2 pb-1.5 pt-0.5 flex flex-col gap-0.5 list-none">
+          {summary.split("\n").filter((l) => l.trim()).map((line, i) => (
+            <li key={i} className="leading-relaxed">{line.replace(/^•\s*/, "• ")}</li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
 interface CommentRowProps {
   c: Comment;
   depth: number;
@@ -156,6 +178,7 @@ function CommentRow({
                 ) : null;
               })()}
               <p className="text-sm text-gray-800 mt-0.5 break-words">{c.body}</p>
+              {c.summary && <CommentSummary summary={c.summary} />}
               <div className="flex items-center gap-3 mt-1">
                 <TranslateButton text={c.body} />
                 <button

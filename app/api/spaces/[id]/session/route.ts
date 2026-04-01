@@ -44,17 +44,7 @@ export async function POST(_req: NextRequest, { params }: { params: Promise<{ id
 
   const admin = isAdmin(authSession);
   const BOLT_COST = 10;
-
-  // Check and deduct credits (admins pay nothing)
-  if (!admin) {
-    const user = await prisma.user.findUnique({
-      where: { id: authSession.user.id },
-      select: { credits: true },
-    });
-    if (!user || user.credits < BOLT_COST) {
-      return NextResponse.json({ error: `Not enough credits (need ${BOLT_COST})` }, { status: 402 });
-    }
-  }
+  const userId = authSession.user.id;
 
   // Reject if within cooldown (admins bypass)
   if (!admin) {
@@ -65,8 +55,7 @@ export async function POST(_req: NextRequest, { params }: { params: Promise<{ id
         if (data?.startedAt) {
           const elapsed = Date.now() - new Date(data.startedAt).getTime();
           if (elapsed < COOLDOWN_MINUTES * 60 * 1000) {
-            const s = Math.ceil((COOLDOWN_MINUTES * 60 * 1000 - elapsed) / 1000);
-            const m = Math.ceil(s / 60);
+            const m = Math.ceil((COOLDOWN_MINUTES * 60 * 1000 - elapsed) / 60_000);
             return NextResponse.json({ error: `Cooldown active — ${m}m remaining` }, { status: 429 });
           }
         }
@@ -74,18 +63,30 @@ export async function POST(_req: NextRequest, { params }: { params: Promise<{ id
     } catch {}
   }
 
+  // Atomic: check credits, deduct, and log in a single transaction
+  if (!admin) {
+    try {
+      await prisma.$transaction(async (tx) => {
+        const user = await tx.user.findUnique({ where: { id: userId }, select: { credits: true } });
+        if (!user || user.credits < BOLT_COST) throw new Error("insufficient_credits");
+        await tx.user.update({ where: { id: userId }, data: { credits: { decrement: BOLT_COST } } });
+        await tx.creditTransaction.create({
+          data: { userId, amount: -BOLT_COST, reason: "bolt", spaceId },
+        });
+      });
+    } catch (e) {
+      if ((e as Error).message === "insufficient_credits") {
+        return NextResponse.json({ error: `Not enough credits (need ${BOLT_COST})` }, { status: 402 });
+      }
+      throw e;
+    }
+  }
+
   await prisma.agentMemory.upsert({
     where: { agentSlug: slug(spaceId) },
     update: { beliefs: { startedAt: new Date().toISOString(), durationMinutes: DURATION_MINUTES } },
     create: { agentSlug: slug(spaceId), beliefs: { startedAt: new Date().toISOString(), durationMinutes: DURATION_MINUTES } },
   });
-
-  if (!admin) {
-    await prisma.user.update({
-      where: { id: authSession.user.id },
-      data: { credits: { decrement: BOLT_COST } },
-    });
-  }
 
   return NextResponse.json({ ok: true });
 }

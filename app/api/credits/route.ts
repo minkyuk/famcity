@@ -37,10 +37,16 @@ export async function POST(req: NextRequest) {
   if (!result.success) return NextResponse.json({ error: "Invalid" }, { status: 400 });
 
   const { userId, amount } = result.data;
-  const user = await prisma.user.update({
-    where: { id: userId },
-    data: { credits: { increment: amount } },
-    select: { credits: true },
+  const user = await prisma.$transaction(async (tx) => {
+    const updated = await tx.user.update({
+      where: { id: userId },
+      data: { credits: { increment: amount } },
+      select: { credits: true },
+    });
+    await tx.creditTransaction.create({
+      data: { userId, amount, reason: "admin_grant" },
+    });
+    return updated;
   });
   return NextResponse.json({ credits: user.credits });
 }

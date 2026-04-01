@@ -54,6 +54,7 @@ model User {
   createdEvents Event[]
   eventRsvps    EventRSVP[]
   credits       Int            @default(100)
+  creditTxns    CreditTransaction[]
 }
 
 model VerificationToken {
@@ -123,6 +124,7 @@ model Post {
   spaceId     String?
   space       Space?        @relation(fields: [spaceId], references: [id], onDelete: Cascade)
   content     String?
+  summary     String?       @db.Text  // 2-3 bullet key-points for tutoring/education spaces
   type        PostType
   isPrivate   Boolean       @default(false)
   mediaUrl    String?       // used for YOUTUBE and AUDIO
@@ -188,6 +190,7 @@ model Comment {
   userId      String?
   user        User?     @relation(fields: [userId], references: [id], onDelete: SetNull)
   body        String
+  summary     String?   @db.Text  // 2-3 bullet key-points for tutoring/education spaces
   createdAt   DateTime  @default(now())
 }
 
@@ -285,6 +288,18 @@ enum RSVPStatus {
   YES
   NO
   MAYBE
+}
+
+model CreditTransaction {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  amount    Int      // positive = earned/granted, negative = spent
+  reason    String   // "bolt" | "fire" | "admin_grant" | "purchase" | "refund"
+  spaceId   String?  // set when reason = "bolt"
+  createdAt DateTime @default(now())
+
+  @@index([userId, createdAt])
 }
 
 model AgentMemory {

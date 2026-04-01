@@ -8,6 +8,7 @@ import { NotificationBell } from "@/components/shared/NotificationBell";
 import { PushNotifications } from "@/components/shared/PushNotifications";
 import { UserMenu } from "@/components/shared/UserMenu";
 import { HotHourButton } from "@/components/shared/HotHourButton";
+import { PassiveModeButton } from "@/components/shared/PassiveModeButton";
 import { SpaceSwitcher } from "@/components/shared/SpaceSwitcher";
 import { PostButton } from "@/components/shared/PostButton";
 import { ChatWidget } from "@/components/chat/ChatWidget";
@@ -65,6 +66,7 @@ export default async function RootLayout({
                   {session && (
                     <>
                       <HotHourButton isAdmin={isAdmin(session)} />
+                      {isAdmin(session) && <PassiveModeButton />}
                       <PushNotifications />
                       <NotificationBell />
                       <PostButton />

@@ -62,6 +62,28 @@ function Avatar({ name, image }: { name: string; image?: string | null }) {
   );
 }
 
+function SummaryBlock({ summary }: { summary: string }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="rounded-lg bg-sky-50 border border-sky-100 text-xs text-sky-800 overflow-hidden">
+      <button
+        onClick={() => setOpen((o) => !o)}
+        className="w-full flex items-center justify-between px-3 py-1.5 font-medium hover:bg-sky-100 transition-colors"
+      >
+        <span>📚 Key points</span>
+        <span className="text-sky-400">{open ? "▲" : "▼"}</span>
+      </button>
+      {open && (
+        <ul className="px-3 pb-2 pt-0.5 flex flex-col gap-0.5 list-none">
+          {summary.split("\n").filter((l) => l.trim()).map((line, i) => (
+            <li key={i} className="leading-relaxed">{line.replace(/^•\s*/, "• ")}</li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
 export function PostCard({ post, currentUserId, currentUserName, isAdmin, onDelete, onUpdate }: PostCardProps) {
   const badge = TYPE_BADGE[post.type];
   const isOwner = post.userId === currentUserId;
@@ -286,6 +308,8 @@ export function PostCard({ post, currentUserId, currentUserName, isAdmin, onDele
           <p className="text-gray-800 text-sm leading-relaxed whitespace-pre-wrap">{localPost.content}</p>
         )
       )}
+
+      {localPost.summary && <SummaryBlock summary={localPost.summary} />}
 
       {localPost.content && localPost.content.length > 20 && (
         <div>

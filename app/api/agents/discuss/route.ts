@@ -24,6 +24,24 @@ const DEPTH_INSTRUCTION = `\n\nHow to respond: Ground your reply in the actual c
 
 const DEBATE_CONCLUSION_INSTRUCTION = `\n\nDebate conclusion: If this thread has genuinely reached resolution — everyone has acknowledged the other's point, or you have been fully persuaded, or the exchange has naturally run its course — append [DEBATE_CONCLUDED] at the very end of your reply (nothing after it). Only do this when the conversation is truly finished, not just because it is long.`;
 
+/** Parse [SUMMARY]...[/SUMMARY] block from agent output */
+function parseSummary(text: string): { text: string; summary: string | null } {
+  const match = text.match(/\[SUMMARY\]([\s\S]*?)\[\/SUMMARY\]/);
+  if (!match) return { text: text.trim(), summary: null };
+  const summary = match[1].trim();
+  const cleaned = text.replace(/\[SUMMARY\][\s\S]*?\[\/SUMMARY\]/, "").trim();
+  return { text: cleaned, summary };
+}
+
+/** Returns true when this space's purpose is educational/tutoring */
+function isTutoringPurpose(purpose: string | null | undefined): boolean {
+  if (!purpose) return false;
+  const lower = purpose.toLowerCase();
+  return ["tutor", "educat", "learn", "teach", "course", "class", "study", "lesson", "explain"].some((k) => lower.includes(k));
+}
+
+const SUMMARY_INSTRUCTION = `\n\nSummary (required): After your response, append a 2–3 bullet summary in this exact format — no other text after it:\n[SUMMARY]\n• First key point in one sentence\n• Second key point in one sentence\n• Third key point (only if needed)\n[/SUMMARY]\nBullets should capture the essential takeaways for a learner. Plain English, no markdown inside the bullets.`;
+
 /** Parse a [DEBATE_CONCLUDED] marker from the end of agent output */
 function parseDebateConcluded(text: string): { text: string; concluded: boolean } {
   const marker = "[DEBATE_CONCLUDED]";
@@ -133,6 +151,15 @@ async function isSessionActive(): Promise<boolean> {
   }
 }
 
+/** Check if passive mode is active (knights wait for human input, 3 fires/hr each). */
+async function isPassiveModeActive(): Promise<boolean> {
+  try {
+    const record = await prisma.agentMemory.findUnique({ where: { agentSlug: "$passive-mode" } });
+    const d = record?.beliefs as { active?: boolean } | null;
+    return !!d?.active;
+  } catch { return false; }
+}
+
 /** Agent slot size depends on mode.
  *  Session mode: 2-minute slots → 25 agents cycle in 50 min (fits inside 1-hour session).
  *  Normal mode:  5-minute slots → but cron fires every 2 min, so we skip non-boundary ticks. */
@@ -191,7 +218,7 @@ type DebateMode = "defend" | "debate_return" | "warm" | "debate_new" | "express"
  *   P3 — fresh posts I haven't entered yet (human-authored first)
  *   P4 — new post (only when nothing else to do)
  */
-async function runAgentAction(agent: (typeof AGENTS)[0], denSpaceId: string, recentPosts: RecentPost[]) {
+async function runAgentAction(agent: (typeof AGENTS)[0], denSpaceId: string, recentPosts: RecentPost[], passiveMode = false) {
   const avatar = agentAvatarUrl(agent.slug);
 
   // Load agent's persistent beliefs and relationships (fail gracefully if migration hasn't run yet)
@@ -275,6 +302,16 @@ async function runAgentAction(agent: (typeof AGENTS)[0], denSpaceId: string, rec
       !agentLastCommentTime.has(p.id) &&
       hasContent(p)
   );
+
+  // Passive mode: only act when a human has directly engaged; max 3 fires/hour; no new posts
+  if (passiveMode) {
+    const hasHumanDriven = directReplyPosts.length > 0 || humanPendingThreads.length > 0 || unrespondedHumanPosts.length > 0;
+    if (!hasHumanDriven) return;
+    const passiveBudgetCount = agentHistory.filter(
+      (c) => Date.now() - c.createdAt.getTime() < 60 * 60 * 1000
+    ).length;
+    if (passiveBudgetCount >= 3) return;
+  }
 
   // P1: My own posts where the last comment is by someone else (they replied to me — respond)
   const ownPostsNeedingReply = recentPosts.filter(
@@ -626,6 +663,7 @@ First, acknowledge what ${originalPoster} was getting at. Then respond honestly 
       }
     }
   } else {
+    if (passiveMode) return; // passive mode: no new posts, only replies to humans
     // New post — only when there are no human posts this agent hasn't engaged with yet
     const anyUnrespondedHumanPost = recentPosts.some(
       (p) => isHumanPost(p) && !agentLastCommentTime.has(p.id) && hasContent(p)
@@ -765,11 +803,11 @@ function pickAgentByContext(recentPosts: RecentPost[]): number {
   return weights.length - 1;
 }
 
-async function runOneAgentTurn(agentIdx: number, denSpaceId: string, prefetched?: RecentPost[]) {
+async function runOneAgentTurn(agentIdx: number, denSpaceId: string, prefetched?: RecentPost[], passiveMode = false) {
   const agent = AGENTS[agentIdx];
   const recentPosts = prefetched ?? await fetchRecentPostsGlobal();
   await Promise.all([
-    runAgentAction(agent, denSpaceId, recentPosts),
+    runAgentAction(agent, denSpaceId, recentPosts, passiveMode),
     runAgentEmojiReactions(agent, recentPosts),
   ]);
 }
@@ -785,7 +823,8 @@ const DEFAULT_SPACE_AGENT_BELIEFS = [
 async function runSpaceAgentAction(
   spaceAgent: { slug: string; name: string; personality: string },
   spaceId: string,
-  purpose?: string | null
+  purpose?: string | null,
+  passiveMode = false
 ) {
   const avatar = agentAvatarUrl(spaceAgent.slug);
   const beliefs = await loadBeliefs(spaceAgent.slug, DEFAULT_SPACE_AGENT_BELIEFS).catch(() => []);
@@ -824,6 +863,13 @@ async function runSpaceAgentAction(
   const saSaturate = (w: number, postId: string) =>
     Math.max(1, Math.ceil(w / (1 + (saRecentCommentsByPost.get(postId) ?? 0))));
 
+  // Budget: max 3 actions per 30-minute window — default is to wait
+  const SA_BUDGET_MS = 30 * 60 * 1000;
+  const recentActionCount = agentHistory.filter(
+    (c) => Date.now() - c.createdAt.getTime() < SA_BUDGET_MS
+  ).length;
+  if (recentActionCount >= 3) return;
+
   const historyContext =
     agentHistory.length > 0
       ? `\n\nYour recent comments (don't repeat yourself):\n${agentHistory.slice(0, 4).map((c) => `- "${c.body}"`).join("\n")}`
@@ -858,6 +904,26 @@ async function runSpaceAgentAction(
 
   const isHumanPostSA = (p: RecentPost) => p.userId !== null;
 
+  // Track latest human activity (post or comment) in this space
+  const lastHumanActivityMs = recentPosts.reduce((t, p) => {
+    const pt = isHumanPostSA(p) ? p.createdAt.getTime() : 0;
+    const ct = p.comments
+      .filter((c) => !AGENT_NAMES.has(c.authorName))
+      .reduce((m, c) => Math.max(m, c.createdAt.getTime()), 0);
+    return Math.max(t, pt, ct);
+  }, 0);
+  const agentLastActionMs = agentHistory.length > 0 ? agentHistory[0].createdAt.getTime() : 0;
+  // True when a human did something after this agent's last action
+  const hasNewHumanInput = lastHumanActivityMs > agentLastActionMs;
+
+  // Pile-on guard: skip a post where ≥2 trailing comments are all agents and no new human replied since our last comment
+  const isAgentPileOn = (p: RecentPost): boolean => {
+    if (p.comments.length < 2) return false;
+    if (!p.comments.slice(-2).every((c) => AGENT_NAMES.has(c.authorName))) return false;
+    const agentLastOnPost = agentLastCommentTime.get(p.id) ?? new Date(0);
+    return !p.comments.some((c) => !AGENT_NAMES.has(c.authorName) && c.createdAt > agentLastOnPost);
+  };
+
   const ownPostsNeedingReply = recentPosts.filter(
     (p) => p.authorName === spaceAgent.name && p.comments.length > 0 &&
       p.comments[p.comments.length - 1].authorName !== spaceAgent.name
@@ -875,12 +941,21 @@ async function runSpaceAgentAction(
     (p) => p.authorName !== spaceAgent.name && !agentLastCommentTime.has(p.id) && hasContent(p)
   );
 
-  // Any human post this agent hasn't engaged with yet → always comment, never create new post
+  // Highest priority: any post (human OR agent-authored) where the last comment is by a human,
+  // OR any human post this agent hasn't responded to yet — must handle before new posts or agent-only threads
   const anyUnrespondedHumanPostSA = recentPosts.some(
-    (p) => isHumanPostSA(p) && !agentLastCommentTime.has(p.id) && hasContent(p)
+    (p) =>
+      hasContent(p) &&
+      (
+        (isHumanPostSA(p) && !agentLastCommentTime.has(p.id)) || // human post untouched by this agent
+        (p.comments.length > 0 && !AGENT_NAMES.has(p.comments[p.comments.length - 1].authorName)) // last comment is by a human
+      )
   );
   const canComment = ownPostsNeedingReply.length > 0 || activeDebateThreads.length > 0 || freshPosts.length > 0;
-  const shouldComment = anyUnrespondedHumanPostSA || (canComment && Math.random() < 0.90);
+  // Default: wait. Fire when new human input exists, or low-probability synthesis when quiet.
+  const shouldComment = anyUnrespondedHumanPostSA
+    || (hasNewHumanInput && canComment && Math.random() < 0.85)
+    || (!hasNewHumanInput && canComment && Math.random() < 0.25);
 
   if (shouldComment && canComment) {
     // Weighted pool: human activity always beats agent-only discussions
@@ -899,7 +974,8 @@ async function runSpaceAgentAction(
     // Human posts not yet touched — weight decays with comment count; recency bonus
     for (const p of recentPosts) {
       if (!isHumanPostSA(p) || agentLastCommentTime.has(p.id) || !hasContent(p)) continue;
-      if (recentlyTouched(p.id)) { seen.add(p.id); continue; } // another agent just commented — skip this tick
+      if (recentlyTouched(p.id)) { seen.add(p.id); continue; }
+      if (isAgentPileOn(p)) { seen.add(p.id); continue; } // agents already piling on, wait for human
       const base = p.comments.length === 0 ? 9
                  : p.comments.length === 1 ? 7
                  : p.comments.length === 2 ? 5
@@ -913,6 +989,7 @@ async function runSpaceAgentAction(
     for (const p of ownPostsNeedingReply) {
       if (seen.has(p.id)) continue;
       if (recentlyTouched(p.id)) { seen.add(p.id); continue; }
+      if (isAgentPileOn(p)) { seen.add(p.id); continue; }
       const lastC = p.comments[p.comments.length - 1];
       const humanReplied = lastC && !AGENT_NAMES.has(lastC.authorName);
       if (saHumanPriorityMode && !humanReplied) { seen.add(p.id); continue; }
@@ -924,6 +1001,7 @@ async function runSpaceAgentAction(
     for (const p of activeDebateThreads) {
       if (seen.has(p.id)) continue;
       if (recentlyTouched(p.id)) { seen.add(p.id); continue; }
+      if (isAgentPileOn(p)) { seen.add(p.id); continue; }
       const myLast = agentLastCommentTime.get(p.id) ?? new Date(0);
       const recentHumanC = [...p.comments].reverse()
         .find((c) => !AGENT_NAMES.has(c.authorName) && c.createdAt > myLast);
@@ -934,14 +1012,18 @@ async function runSpaceAgentAction(
         : Math.ceil(base / 2);
       pool.push({ post: p, weight: saSaturate(w, p.id) }); seen.add(p.id);
     }
-    // Fresh posts — skip pure agent activity in human-priority mode
+    // Fresh posts — skip pure agent activity in human-priority mode; heavily downweight agent-only posts
     for (const p of freshPosts) {
       if (seen.has(p.id)) continue;
       if (recentlyTouched(p.id)) { seen.add(p.id); continue; }
+      if (isAgentPileOn(p)) { seen.add(p.id); continue; }
       const hasHuman = isHumanPostSA(p) || p.comments.some((c) => !AGENT_NAMES.has(c.authorName));
       if (saHumanPriorityMode && !hasHuman) { seen.add(p.id); continue; }
+      // Pure agent-authored posts get weight 1; human-involved get weight 3
       pool.push({ post: p, weight: saSaturate(hasHuman ? 3 : 1, p.id) }); seen.add(p.id);
     }
+
+    if (pool.length === 0) return; // nothing worth engaging with right now
 
     const totalW = pool.reduce((s, e) => s + e.weight, 0);
     let r = Math.random() * totalW;
@@ -976,9 +1058,24 @@ async function runSpaceAgentAction(
       ? `\n\nRemember: your primary goal is to help ${target.authorName} (the original poster) understand or solve their question. Even when responding to a comment in the thread, keep your answer anchored to the OP's original question — don't let the discussion drift away from what they need.`
       : "";
 
+    const summaryInstruction = isTutoringPurpose(purpose) ? SUMMARY_INSTRUCTION : "";
+
+    // Content-aware quality gate: applies whenever there are agent comments in the thread already
+    const threadHasAgentComments = target.comments.some((c) => AGENT_NAMES.has(c.authorName));
+    const qualityGate = threadHasAgentComments
+      ? `\n\nBefore responding, read all existing comments carefully. Ask yourself: would my response meaningfully add something NOT already covered — a specific example, a concrete detail, a different angle, a worked case, or a clarification that is genuinely missing? If the thread has already addressed the topic thoroughly, or if you would only be rephrasing what others have said, respond with exactly: SKIP — nothing else. Only proceed if you have something substantively new to contribute.`
+      : isTutoringPurpose(purpose)
+      ? `\n\nQuality gate: Only respond if you can add a specific example, worked problem, or explanation that would genuinely help the learner understand. If you have nothing concrete to add, respond with exactly: SKIP`
+      : "";
+
+    // Korean space: enforce language
+    const isKoreanText = (t: string) => (t.match(/[\uAC00-\uD7A3]/g) ?? []).length / Math.max(t.replace(/\s/g, "").length, 1) > 0.25;
+    const spaceIsKorean = (!!purpose && isKoreanText(purpose)) || recentPosts.slice(0, 5).some((p) => !!p.content && isKoreanText(p.content));
+    const koreanNote = spaceIsKorean ? "\n\nLanguage: This is a Korean-language space. Write in Korean (한국어). Only switch to English when directly responding to someone who wrote in English." : "";
+
     const textPrompt = lastComment
-      ? `${fullPersonality}${historyContext}${beliefContext}\n\nOriginal post by ${target.authorName}:${captionPart}${threadContext}${photoNote}${opAnchor}\n\n${lastComment.authorName} just said: "${lastComment.body.slice(0, 200)}"\n\nRespond to this, but keep focus on helping ${target.authorName} with their original question. ${commentInstruction}${STYLE_INSTRUCTION}${LANGUAGE_INSTRUCTION}${BELIEF_UPDATE_INSTRUCTION}`
-      : `${fullPersonality}${historyContext}${beliefContext}\n\nPost by ${target.authorName}:${captionPart}${threadContext}${photoNote}${opAnchor}\n\nShare your genuine reaction — engage with specifics, not generalities. ${purpose ? "Let the space's purpose shape how you engage." : ""} 1–3 sentences.${STYLE_INSTRUCTION}${LANGUAGE_INSTRUCTION}${BELIEF_UPDATE_INSTRUCTION}`;
+      ? `${fullPersonality}${historyContext}${beliefContext}\n\nOriginal post by ${target.authorName}:${captionPart}${threadContext}${photoNote}${opAnchor}\n\n${lastComment.authorName} just said: "${lastComment.body.slice(0, 200)}"\n\nRespond to this, but keep focus on helping ${target.authorName} with their original question. ${commentInstruction}${STYLE_INSTRUCTION}${LANGUAGE_INSTRUCTION}${koreanNote}${BELIEF_UPDATE_INSTRUCTION}${summaryInstruction}${qualityGate}`
+      : `${fullPersonality}${historyContext}${beliefContext}\n\nPost by ${target.authorName}:${captionPart}${threadContext}${photoNote}${opAnchor}\n\nShare your genuine reaction — engage with specifics, not generalities. ${purpose ? "Let the space's purpose shape how you engage." : ""} 1–3 sentences.${STYLE_INSTRUCTION}${LANGUAGE_INSTRUCTION}${koreanNote}${BELIEF_UPDATE_INSTRUCTION}${summaryInstruction}${qualityGate}`;
 
     type SpaceContentBlock =
       | { type: "text"; text: string }
@@ -1000,19 +1097,35 @@ async function runSpaceAgentAction(
     });
 
     const rawText = response.content[0].type === "text" ? response.content[0].text.trim() : "Interesting...";
-    const { text, update } = parseBeliefUpdate(rawText);
+    if (/^SKIP\b/i.test(rawText)) return; // quality gate: agent decided nothing new to add
+    const { text: afterSummaryC, summary: commentSummary } = parseSummary(rawText);
+    const { text, update } = parseBeliefUpdate(afterSummaryC);
     if (update) await updateBelief(spaceAgent.slug, update.topic, update.belief, update.confidence).catch(() => {});
 
     await prisma.comment.create({
-      data: { postId: target.id, authorName: spaceAgent.name, authorImage: avatar, body: text },
+      data: { postId: target.id, authorName: spaceAgent.name, authorImage: avatar, body: text, ...(commentSummary ? { summary: commentSummary } : {}) },
     });
   } else {
+    if (passiveMode) return; // passive mode: no new posts from space agents either
     // New post in the space — only when no human posts are waiting for engagement
     if (anyUnrespondedHumanPostSA) return;
-    const newPostGoal = purpose
-      ? `Write a short post that serves this space's purpose: "${purpose}". Match the tone the purpose calls for — if it's educational or tutoring, teach a concept, explain something clearly, or share a worked example (equations and concise notation are welcome); if it's creative, inspire; if it's supportive, encourage. Do NOT pose debate questions or end with a challenge unless the purpose explicitly calls for debate. Stay in your own voice. 1–3 sentences.`
-      : `Write a short, engaging post to spark discussion in your space. Share a thought, question, or observation that invites others to respond. 1–3 sentences.`;
-    const prompt = `${fullPersonality}${historyContext}${beliefContext}\n\n${newPostGoal} No hashtags.${BELIEF_UPDATE_INSTRUCTION}`;
+    // Don't create new posts while humans are actively discussing anything in this space
+    const anyActiveHumanDiscussion = recentPosts.some(
+      (p) => isHumanPostSA(p) && p.comments.some((c) => !AGENT_NAMES.has(c.authorName))
+    );
+    if (anyActiveHumanDiscussion) return;
+
+    const isKoreanTextPost = (t: string) => (t.match(/[\uAC00-\uD7A3]/g) ?? []).length / Math.max(t.replace(/\s/g, "").length, 1) > 0.25;
+    const postSpaceIsKorean = (!!purpose && isKoreanTextPost(purpose)) || recentPosts.slice(0, 5).some((p) => !!p.content && isKoreanTextPost(p.content));
+    const postKoreanNote = postSpaceIsKorean ? "\n\nWrite in Korean (한국어)." : "";
+
+    const postSummaryInstruction = isTutoringPurpose(purpose) ? SUMMARY_INSTRUCTION : "";
+    const newPostGoal = isTutoringPurpose(purpose)
+      ? `Review the recent discussions in this space and write a teaching post that synthesizes a key concept, adds a worked example, or explains something in depth that builds on what has been discussed. Be specific and concrete — include actual examples, equations, analogies, or step-by-step reasoning. Do NOT pose questions or end with a challenge. 3–5 sentences.`
+      : purpose
+      ? `Write a short post that serves this space's purpose: "${purpose}". Match the tone — if creative, inspire; if supportive, encourage. Do NOT pose debate questions unless the purpose explicitly calls for debate. Stay in your own voice. 1–3 sentences.`
+      : `Write a short, engaging post in your space. Share a thought or observation that invites reflection. 1–3 sentences.`;
+    const prompt = `${fullPersonality}${historyContext}${beliefContext}\n\n${newPostGoal} No hashtags.${postKoreanNote}${BELIEF_UPDATE_INSTRUCTION}${postSummaryInstruction}`;
 
     const response = await anthropic.messages.create({
       model: "claude-haiku-4-5-20251001",
@@ -1021,11 +1134,12 @@ async function runSpaceAgentAction(
     });
 
     const rawText = response.content[0].type === "text" ? response.content[0].text.trim() : "Just thinking...";
-    const { text, update } = parseBeliefUpdate(rawText);
+    const { text: afterSummaryP, summary: postSummary } = parseSummary(rawText);
+    const { text, update } = parseBeliefUpdate(afterSummaryP);
     if (update) await updateBelief(spaceAgent.slug, update.topic, update.belief, update.confidence).catch(() => {});
 
     await prisma.post.create({
-      data: { authorName: spaceAgent.name, authorImage: avatar, spaceId, content: text, type: "TEXT" },
+      data: { authorName: spaceAgent.name, authorImage: avatar, spaceId, content: text, type: "TEXT", ...(postSummary ? { summary: postSummary } : {}) },
     });
   }
 }
@@ -1052,7 +1166,7 @@ async function getActiveSpaceSessionIds(): Promise<string[]> {
 
 /** During a space hot session: fire ALL space agents for those spaces every cron tick.
  *  If a space has no SpaceAgents yet, fall back to 2 random global knights scoped to that space. */
-async function runHotSpaceAgentTurns(spaceIds: string[]) {
+async function runHotSpaceAgentTurns(spaceIds: string[], passiveMode = false) {
   type SpaceAgentRow = { id: string; spaceId: string; name: string; personality: string; slug: string; createdAt: Date };
   const [spaceAgents, spaces] = await Promise.all([
     (prisma.spaceAgent as { findMany: (opts: object) => Promise<SpaceAgentRow[]> })
@@ -1080,13 +1194,13 @@ async function runHotSpaceAgentTurns(spaceIds: string[]) {
         // Run sequentially so each agent sees the previous agent's freshly written comment
         // and the dedupe window kicks in, preventing pile-ons on the same post
         for (const a of agents) {
-          await runSpaceAgentAction(a, spaceId, purpose);
+          await runSpaceAgentAction(a, spaceId, purpose, passiveMode);
         }
-        await runSpaceAgentAction(knightAsSpaceAgent, spaceId, purpose);
+        await runSpaceAgentAction(knightAsSpaceAgent, spaceId, purpose, passiveMode);
       } else {
         const shuffled = [...AGENTS].sort(() => Math.random() - 0.5).slice(0, 2);
         for (const a of shuffled) {
-          await runSpaceAgentAction({ slug: a.slug, name: a.name, personality: a.personality }, spaceId, purpose);
+          await runSpaceAgentAction({ slug: a.slug, name: a.name, personality: a.personality }, spaceId, purpose, passiveMode);
         }
       }
     })
@@ -1136,10 +1250,11 @@ export async function POST(req: NextRequest) {
     }
   }
 
-  const [sessionActive, denSpaceId, activeSpaceSessions] = await Promise.all([
+  const [sessionActive, denSpaceId, activeSpaceSessions, passiveModeActive] = await Promise.all([
     isSessionActive(),
     getOrCreateDenSpace(),
     getActiveSpaceSessionIds(),
+    isPassiveModeActive(),
   ]);
 
   const _now = new Date();
@@ -1163,7 +1278,21 @@ export async function POST(req: NextRequest) {
 
   // Space hot sessions always run every minute regardless of global cycle
   if (activeSpaceSessions.length > 0) {
-    await runHotSpaceAgentTurns(activeSpaceSessions);
+    await runHotSpaceAgentTurns(activeSpaceSessions, passiveModeActive);
+  }
+
+  // Passive mode: fire all agents every 2 min; each agent self-limits via budget + human gate
+  if (passiveModeActive) {
+    if (minute % 2 !== 0) {
+      return NextResponse.json({ ok: true, passive: true, skipped: true, reason: "even-tick-only" });
+    }
+    const recentPosts = await fetchRecentPostsGlobal();
+    const BATCH_SIZE = 5;
+    for (let i = 0; i < AGENTS.length; i += BATCH_SIZE) {
+      const batch = Array.from({ length: Math.min(BATCH_SIZE, AGENTS.length - i) }, (_, j) => i + j);
+      await Promise.all(batch.map((idx) => runOneAgentTurn(idx, denSpaceId, recentPosts, true)));
+    }
+    return NextResponse.json({ ok: true, passive: true });
   }
 
   // Normal (routine): global knight every 20-min boundary; space agents every 2-hour boundary
