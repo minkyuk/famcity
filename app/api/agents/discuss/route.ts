@@ -848,7 +848,8 @@ async function runSpaceAgentAction(
   spaceAgent: { slug: string; name: string; personality: string },
   spaceId: string,
   purpose?: string | null,
-  passiveMode = false
+  passiveMode = false,
+  hotSession = false
 ) {
   const avatar = agentAvatarUrl(spaceAgent.slug);
   const beliefs = await loadBeliefs(spaceAgent.slug, DEFAULT_SPACE_AGENT_BELIEFS).catch(() => []);
@@ -887,12 +888,12 @@ async function runSpaceAgentAction(
   const saSaturate = (w: number, postId: string) =>
     Math.max(1, Math.ceil(w / (1 + (saRecentCommentsByPost.get(postId) ?? 0))));
 
-  // Budget: max 3 actions per 30-minute window — default is to wait
+  // Budget: max 5 actions per 30-minute window — hot session bypasses this
   const SA_BUDGET_MS = 30 * 60 * 1000;
   const recentActionCount = agentHistory.filter(
     (c) => Date.now() - c.createdAt.getTime() < SA_BUDGET_MS
   ).length;
-  if (recentActionCount >= 3) return;
+  if (!hotSession && recentActionCount >= 5) return;
 
   const historyContext =
     agentHistory.length > 0
@@ -1239,13 +1240,13 @@ async function runHotSpaceAgentTurns(spaceIds: string[], passiveMode = false) {
         // Run sequentially so each agent sees the previous agent's freshly written comment
         // and the dedupe window kicks in, preventing pile-ons on the same post
         for (const a of agents) {
-          await runSpaceAgentAction(a, spaceId, purpose, passiveMode);
+          await runSpaceAgentAction(a, spaceId, purpose, passiveMode, true);
         }
-        await runSpaceAgentAction(knightAsSpaceAgent, spaceId, purpose, passiveMode);
+        await runSpaceAgentAction(knightAsSpaceAgent, spaceId, purpose, passiveMode, true);
       } else {
         const shuffled = [...AGENTS].sort(() => Math.random() - 0.5).slice(0, 2);
         for (const a of shuffled) {
-          await runSpaceAgentAction({ slug: a.slug, name: a.name, personality: a.personality }, spaceId, purpose, passiveMode);
+          await runSpaceAgentAction({ slug: a.slug, name: a.name, personality: a.personality }, spaceId, purpose, passiveMode, true);
         }
       }
     })
