@@ -74,6 +74,8 @@ export function ComposeBar({ inline, onSuccess, defaultSpaceId }: ComposeBarProp
       });
       if (!res.ok) throw new Error();
       showToast("Posted!");
+      // Fire-and-forget: trigger space agents to respond immediately
+      if (spaceId) fetch(`/api/spaces/${spaceId}/trigger`, { method: "POST" }).catch(() => {});
       if (inline) {
         setActiveType("TEXT");
         setTextContent("");

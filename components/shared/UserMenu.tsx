@@ -3,11 +3,19 @@
 import { useSession, signIn, signOut } from "next-auth/react";
 import Image from "next/image";
 import Link from "next/link";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 export function UserMenu() {
   const { data: session, status } = useSession();
   const [open, setOpen] = useState(false);
+  const [credits, setCredits] = useState<number | null>(null);
+
+  useEffect(() => {
+    if (!session) return;
+    fetch("/api/credits").then((r) => r.json()).then((d) => {
+      if (typeof d.credits === "number") setCredits(d.credits);
+    }).catch(() => {});
+  }, [session]);
 
   if (status === "loading") return <div className="w-8 h-8 rounded-full bg-gray-100 animate-pulse" />;
 
@@ -20,7 +28,10 @@ export function UserMenu() {
   }
 
   return (
-    <div className="relative">
+    <div className="relative flex items-center gap-1.5">
+      {credits !== null && (
+        <span className="text-xs text-gray-400 font-medium tabular-nums">{credits}cr</span>
+      )}
       <button onClick={() => setOpen((o) => !o)} className="focus:outline-none">
         {session.user.image ? (
           <div className="relative w-8 h-8 rounded-full overflow-hidden border-2 border-orange-200">
@@ -40,6 +51,9 @@ export function UserMenu() {
             <div className="px-4 py-2 border-b border-gray-100">
               <p className="text-sm font-semibold text-gray-800 truncate">{session.user.name}</p>
               <p className="text-xs text-gray-400 truncate">{session.user.email}</p>
+              {credits !== null && (
+                <p className="text-xs text-orange-500 font-medium mt-0.5">{credits} credits</p>
+              )}
             </div>
             <Link
               href={`/profile/${session.user.id}`}

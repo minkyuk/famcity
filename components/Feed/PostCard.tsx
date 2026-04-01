@@ -370,7 +370,7 @@ export function PostCard({ post, currentUserId, currentUserName, isAdmin, onDele
       )}
 
       <ReactionBar postId={post.id} reactions={post.reactions} currentUserName={currentUserName} />
-      <CommentThread postId={post.id} initialComments={post.comments} currentUserId={currentUserId} currentUserName={currentUserName} isAdmin={isAdmin} />
+      <CommentThread postId={post.id} initialComments={post.comments} currentUserId={currentUserId} currentUserName={currentUserName} isAdmin={isAdmin} spaceId={post.spaceId} />
     </article>
     {showPopup && localPost.userId && (
       <UserPopup

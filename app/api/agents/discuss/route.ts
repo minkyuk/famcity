@@ -305,7 +305,7 @@ async function runAgentAction(agent: (typeof AGENTS)[0], denSpaceId: string, rec
 
   // P-1.6: Any thread with an unanswered human comment at ANY depth.
   // Catches: last comment is human, OR a recent nested human reply with no agent direct-reply yet.
-  const RECENT_HUMAN_REPLY_MS = 30 * 60 * 1000;
+  const RECENT_HUMAN_REPLY_MS = 12 * 60 * 60 * 1000; // 12 hours — catch old unanswered nested replies
   const humanUnansweredThreads = recentPosts.filter((p) => {
     if (p.comments.length === 0) return false;
     // Fast path: last comment is human
@@ -811,7 +811,7 @@ async function fetchRecentPostsGlobal(): Promise<RecentPost[]> {
       media: { take: 10, orderBy: { order: "asc" }, select: { url: true } },
       comments: {
         orderBy: { createdAt: "asc" },
-        take: 20,
+        take: 60,
         select: { id: true, parentId: true, authorName: true, body: true, createdAt: true },
       },
     },
@@ -917,7 +917,7 @@ async function runSpaceAgentAction(
     select: {
       id: true, content: true, authorName: true, userId: true, spaceId: true, type: true, mediaUrl: true, createdAt: true,
       media: { take: 10, orderBy: { order: "asc" }, select: { url: true } },
-      comments: { orderBy: { createdAt: "asc" }, take: 15, select: { id: true, parentId: true, authorName: true, body: true, createdAt: true, userId: true } },
+      comments: { orderBy: { createdAt: "asc" }, take: 60, select: { id: true, parentId: true, authorName: true, body: true, createdAt: true, userId: true } },
     },
   });
 
@@ -978,7 +978,7 @@ async function runSpaceAgentAction(
 
   // Any post with an unanswered human comment at any depth.
   // Fast path: last comment is human. Slow path: recent nested human reply with no agent direct-reply.
-  const SA_RECENT_HUMAN_MS = 30 * 60 * 1000;
+  const SA_RECENT_HUMAN_MS = 12 * 60 * 60 * 1000; // 12 hours — catch old unanswered nested replies
   const humanUnansweredThreadsSA = recentPosts.filter((p) => {
     if (p.comments.length === 0) return false;
     if (!AGENT_NAMES.has(p.comments[p.comments.length - 1].authorName)) return true;
@@ -1319,6 +1319,15 @@ export async function POST(req: NextRequest) {
     if (!session?.user) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
+  }
+
+  // Fast path: space trigger — a human just posted/commented, run agents for that space immediately
+  let bodyJson: Record<string, unknown> = {};
+  try { bodyJson = JSON.parse(await req.text()); } catch {}
+  const triggerSpaceId = typeof bodyJson.triggerSpaceId === "string" ? bodyJson.triggerSpaceId : undefined;
+  if (triggerSpaceId) {
+    await runHotSpaceAgentTurns([triggerSpaceId], false);
+    return NextResponse.json({ ok: true, trigger: true, spaceId: triggerSpaceId });
   }
 
   const [sessionActive, denSpaceId, activeSpaceSessions, passiveModeActive] = await Promise.all([

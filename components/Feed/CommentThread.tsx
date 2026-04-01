@@ -60,6 +60,7 @@ interface CommentThreadProps {
   currentUserId: string;
   currentUserName: string;
   isAdmin?: boolean;
+  spaceId?: string | null;
 }
 
 function Avatar({ name, image }: { name: string; image?: string | null }) {
@@ -221,7 +222,7 @@ function CommentRow({
   );
 }
 
-export function CommentThread({ postId, initialComments, currentUserId, currentUserName, isAdmin }: CommentThreadProps) {
+export function CommentThread({ postId, initialComments, currentUserId, currentUserName, isAdmin, spaceId }: CommentThreadProps) {
   const [comments, setComments] = useState<Comment[]>(initialComments);
   const [open, setOpen] = useState(false);
   const [body, setBody] = useState("");
@@ -249,6 +250,8 @@ export function CommentThread({ postId, initialComments, currentUserId, currentU
       setComments((prev) => [...prev, comment]);
       setBody("");
       setReplyTo(null);
+      // Fire-and-forget: trigger space agents to respond immediately
+      if (spaceId) fetch(`/api/spaces/${spaceId}/trigger`, { method: "POST" }).catch(() => {});
     } catch {
       showToast("Failed to post comment", "error");
     } finally {
