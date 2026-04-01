@@ -276,6 +276,15 @@ async function runAgentAction(agent: (typeof AGENTS)[0], denSpaceId: string, rec
     (p.type === "IMAGE" && p.media.length > 0) ||
     (p.type === "PDF" && !!p.mediaUrl);
 
+  // Stale: no human activity (post or comment) in the last 12 hours → agents debate each other more freely
+  const STALE_HUMAN_MS = 12 * 60 * 60 * 1000;
+  const lastGlobalHumanMs = recentPosts.reduce((t, p) => {
+    const pt = p.userId !== null ? p.createdAt.getTime() : 0;
+    const ct = p.comments.filter(c => !AGENT_NAMES.has(c.authorName)).reduce((m, c) => Math.max(m, c.createdAt.getTime()), 0);
+    return Math.max(t, pt, ct);
+  }, 0);
+  const isStale = Date.now() - lastGlobalHumanMs > STALE_HUMAN_MS;
+
   // P-1: Someone directly replied to one of my comments — absolute highest urgency
   const directReplyPosts = recentPosts.filter((p) =>
     p.comments.some(
@@ -350,8 +359,9 @@ async function runAgentAction(agent: (typeof AGENTS)[0], denSpaceId: string, rec
     if (!myLastTime) return false;
     const latest = p.comments[p.comments.length - 1];
     if (!latest || latest.createdAt <= myLastTime || latest.authorName === agent.name) return false;
-    if (p.comments.length > COMMENT_PILE_ON_LIMIT) {
+    if (p.comments.length > COMMENT_PILE_ON_LIMIT && !isStale) {
       // Only return to busy threads if a human commented since my last reply
+      // (when stale, allow free agent-on-agent debate on long threads too)
       return p.comments.some((c) => isHumanComment(c) && c.createdAt > myLastTime);
     }
     return true;
@@ -385,8 +395,8 @@ async function runAgentAction(agent: (typeof AGENTS)[0], denSpaceId: string, rec
     : humanUnansweredThreads.length > 0 ? 1.0
     : unrespondedHumanPosts.length > 0 ? 1.0
     : ownPostsNeedingReply.length > 0 || activeDebateThreads.length > 0 ? 1.0
-    : freshPosts.length > 0 ? (hasInterestingPost ? 0.90 : 0.45)
-    : 0.40;
+    : freshPosts.length > 0 ? (hasInterestingPost ? 0.90 : isStale ? 0.70 : 0.45)
+    : isStale ? 0.65 : 0.40;
 
   const shouldComment = canComment && Math.random() < commentChance;
 
@@ -1003,12 +1013,18 @@ async function runSpaceAgentAction(
     activeDebateThreads.length > 0 ||
     freshPosts.length > 0 ||
     humanUnansweredThreadsSA.length > 0;
+  // Stale: no human activity for 12h — agents should debate each other more freely
+  const SA_STALE_MS = 12 * 60 * 60 * 1000;
+  const isStaleSpace = Date.now() - lastHumanActivityMs > SA_STALE_MS;
+
   // Default: wait. Human unanswered threads always fire; hot session fires whenever canComment.
+  // When stale, raise quiet-mode chance from 25% → 65% so agents keep the space alive.
+  const quietChance = isStaleSpace ? 0.65 : 0.25;
   const shouldComment = anyUnrespondedHumanPostSA
     || humanUnansweredThreadsSA.length > 0
     || (hotSession && canComment)
     || (hasNewHumanInput && canComment && Math.random() < 0.85)
-    || (!hasNewHumanInput && canComment && Math.random() < 0.25);
+    || (!hasNewHumanInput && canComment && Math.random() < quietChance);
 
   if (shouldComment && canComment) {
     // Weighted pool: human activity always beats agent-only discussions
@@ -1180,8 +1196,8 @@ async function runSpaceAgentAction(
     if (passiveMode) return; // passive mode: no new posts from space agents either
     // New post in the space — only when no human posts are waiting for engagement
     if (anyUnrespondedHumanPostSA) return;
-    // Don't create new posts while humans are actively discussing anything in this space
-    const anyActiveHumanDiscussion = recentPosts.some(
+    // Don't create new posts while humans are actively discussing — unless it's been 12h (stale)
+    const anyActiveHumanDiscussion = !isStaleSpace && recentPosts.some(
       (p) => isHumanPostSA(p) && p.comments.some((c) => !AGENT_NAMES.has(c.authorName))
     );
     if (anyActiveHumanDiscussion) return;
