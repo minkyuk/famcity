@@ -303,11 +303,19 @@ async function runAgentAction(agent: (typeof AGENTS)[0], denSpaceId: string, rec
       hasContent(p)
   );
 
-  // P-1.6: Any thread where the LAST comment is by a human — no agent has responded yet.
-  // This allows any agent (not just ones already in the thread) to step in for unanswered humans.
+  // P-1.6: Any thread with an unanswered human comment at ANY depth.
+  // Catches: last comment is human, OR a recent nested human reply with no agent direct-reply yet.
+  const RECENT_HUMAN_REPLY_MS = 30 * 60 * 1000;
   const humanUnansweredThreads = recentPosts.filter((p) => {
     if (p.comments.length === 0) return false;
-    return isHumanComment(p.comments[p.comments.length - 1]);
+    // Fast path: last comment is human
+    if (isHumanComment(p.comments[p.comments.length - 1])) return true;
+    // Slow path: any recent human comment where no agent has directly replied (parentId = hc.id)
+    return p.comments.some((hc) => {
+      if (!isHumanComment(hc)) return false;
+      if (Date.now() - hc.createdAt.getTime() > RECENT_HUMAN_REPLY_MS) return false;
+      return !p.comments.some((rc) => !isHumanComment(rc) && rc.parentId === hc.id);
+    });
   });
 
   // Passive mode: only act when a human has directly engaged; max 3 fires/hour; no new posts
@@ -431,14 +439,16 @@ async function runAgentAction(agent: (typeof AGENTS)[0], denSpaceId: string, rec
         seen.add(p.id);
       }
 
-      // Any thread (even ones I haven't been in) where the last comment is by a human — no agent responded yet.
-      // Weight 10: equal urgency to humanPendingThreads; reply directly to the last human comment.
+      // Any thread with an unanswered human comment at any depth — any agent can step in.
+      // Prefer the most recent human comment that has no direct agent reply (catches nested replies).
       for (const p of humanUnansweredThreads) {
         if (seen.has(p.id)) continue;
-        const lastHumanC = [...p.comments].reverse().find(isHumanComment)!;
-        const recent = isRecent(lastHumanC.createdAt) ? 3 : 0;
+        const unansweredHumanC = [...p.comments].reverse().find(
+          (hc) => isHumanComment(hc) && !p.comments.some((rc) => !isHumanComment(rc) && rc.parentId === hc.id)
+        ) ?? [...p.comments].reverse().find(isHumanComment)!;
+        const recent = isRecent(unansweredHumanC.createdAt) ? 3 : 0;
         const entryMode: DebateMode = agentLastCommentTime.has(p.id) ? "defend" : "warm";
-        pool.push({ post: p, mode: entryMode, replyId: lastHumanC.id, weight: saturate(10 + recent, p.id) });
+        pool.push({ post: p, mode: entryMode, replyId: unansweredHumanC.id, weight: saturate(10 + recent, p.id) });
         seen.add(p.id);
       }
 
@@ -966,11 +976,18 @@ async function runSpaceAgentAction(
     (p) => p.authorName !== spaceAgent.name && !agentLastCommentTime.has(p.id) && hasContent(p)
   );
 
-  // Any post where the last comment is by a human — no agent has responded yet to this specific comment.
-  // Covers human replies to other agents' comments, replies-of-replies, etc.
-  const humanUnansweredThreadsSA = recentPosts.filter(
-    (p) => p.comments.length > 0 && !AGENT_NAMES.has(p.comments[p.comments.length - 1].authorName)
-  );
+  // Any post with an unanswered human comment at any depth.
+  // Fast path: last comment is human. Slow path: recent nested human reply with no agent direct-reply.
+  const SA_RECENT_HUMAN_MS = 30 * 60 * 1000;
+  const humanUnansweredThreadsSA = recentPosts.filter((p) => {
+    if (p.comments.length === 0) return false;
+    if (!AGENT_NAMES.has(p.comments[p.comments.length - 1].authorName)) return true;
+    return p.comments.some((hc) => {
+      if (AGENT_NAMES.has(hc.authorName)) return false;
+      if (Date.now() - hc.createdAt.getTime() > SA_RECENT_HUMAN_MS) return false;
+      return !p.comments.some((rc) => AGENT_NAMES.has(rc.authorName) && rc.parentId === hc.id);
+    });
+  });
 
   // Highest priority gate: any human post untouched by this agent, OR last comment is human anywhere
   const anyUnrespondedHumanPostSA = recentPosts.some(
@@ -986,15 +1003,16 @@ async function runSpaceAgentAction(
     activeDebateThreads.length > 0 ||
     freshPosts.length > 0 ||
     humanUnansweredThreadsSA.length > 0;
-  // Default: wait. Human unanswered threads always fire; otherwise gate on new human input.
+  // Default: wait. Human unanswered threads always fire; hot session fires whenever canComment.
   const shouldComment = anyUnrespondedHumanPostSA
     || humanUnansweredThreadsSA.length > 0
+    || (hotSession && canComment)
     || (hasNewHumanInput && canComment && Math.random() < 0.85)
     || (!hasNewHumanInput && canComment && Math.random() < 0.25);
 
   if (shouldComment && canComment) {
     // Weighted pool: human activity always beats agent-only discussions
-    type SAEntry = { post: RecentPost; weight: number };
+    type SAEntry = { post: RecentPost; weight: number; replyId?: string | null };
     const pool: SAEntry[] = [];
     const seen = new Set<string>();
 
@@ -1006,14 +1024,17 @@ async function runSpaceAgentAction(
 
     const recentlyTouched = (id: string) => (recentAgentCommentsByPost.get(id) ?? 0) >= 1;
 
-    // Highest priority: threads where last comment is by a human — any agent should step in, not just the one originally in the thread
+    // Highest priority: any thread with an unanswered human comment at any depth.
+    // Prefer the most recent human comment with no direct agent reply (catches nested replies).
     for (const p of humanUnansweredThreadsSA) {
       if (seen.has(p.id)) continue;
       if (recentlyTouched(p.id)) { seen.add(p.id); continue; }
-      if (isAgentPileOn(p)) { seen.add(p.id); continue; }
-      const lastHumanC = [...p.comments].reverse().find((c) => !AGENT_NAMES.has(c.authorName))!;
-      const recent = saIsRecent(lastHumanC.createdAt) ? 3 : 0;
-      pool.push({ post: p, weight: saSaturate(10 + recent, p.id) });
+      // NOTE: intentionally skip isAgentPileOn here — we've already verified there IS an unanswered human comment
+      const unansweredC = [...p.comments].reverse().find(
+        (hc) => !AGENT_NAMES.has(hc.authorName) && !p.comments.some((rc) => AGENT_NAMES.has(rc.authorName) && rc.parentId === hc.id)
+      ) ?? [...p.comments].reverse().find((c) => !AGENT_NAMES.has(c.authorName))!;
+      const recent = saIsRecent(unansweredC.createdAt) ? 3 : 0;
+      pool.push({ post: p, weight: saSaturate(10 + recent, p.id), replyId: unansweredC.id });
       seen.add(p.id);
     }
 
@@ -1084,6 +1105,10 @@ async function runSpaceAgentAction(
 
     const captionPart = target.content?.trim() ? `\nPost: "${target.content.slice(0, 400)}"` : "";
     const lastComment = target.comments[target.comments.length - 1];
+    // If we specifically targeted an unanswered human comment (e.g. nested reply), use that as the focal comment
+    const focalComment = chosen.replyId
+      ? (target.comments.find((c) => c.id === chosen.replyId) ?? lastComment)
+      : lastComment;
 
     // Build image URL list (media array first, fall back to mediaUrl for single-image posts)
     const tMediaUrl: string | null = (target as unknown as { mediaUrl: string | null }).mediaUrl ?? null;
@@ -1119,8 +1144,8 @@ async function runSpaceAgentAction(
     const spaceIsKorean = (!!purpose && isKoreanText(purpose)) || recentPosts.slice(0, 5).some((p) => !!p.content && isKoreanText(p.content));
     const koreanNote = spaceIsKorean ? "\n\nLanguage: This is a Korean-language space. Write in Korean (한국어). Only switch to English when directly responding to someone who wrote in English." : "";
 
-    const textPrompt = lastComment
-      ? `${fullPersonality}${historyContext}${beliefContext}\n\nOriginal post by ${target.authorName}:${captionPart}${threadContext}${photoNote}${opAnchor}\n\n${lastComment.authorName} just said: "${lastComment.body.slice(0, 200)}"\n\nRespond to this, but keep focus on helping ${target.authorName} with their original question. ${commentInstruction}${STYLE_INSTRUCTION}${LANGUAGE_INSTRUCTION}${koreanNote}${BELIEF_UPDATE_INSTRUCTION}${summaryInstruction}${qualityGate}`
+    const textPrompt = focalComment
+      ? `${fullPersonality}${historyContext}${beliefContext}\n\nOriginal post by ${target.authorName}:${captionPart}${threadContext}${photoNote}${opAnchor}\n\n${focalComment.authorName} asked/said: "${focalComment.body.slice(0, 200)}"\n\nRespond directly to this${focalComment !== lastComment ? " (this is a nested reply that hasn't been answered yet)" : ""}, but keep focus on helping ${target.authorName} with their original question. ${commentInstruction}${STYLE_INSTRUCTION}${LANGUAGE_INSTRUCTION}${koreanNote}${BELIEF_UPDATE_INSTRUCTION}${summaryInstruction}${qualityGate}`
       : `${fullPersonality}${historyContext}${beliefContext}\n\nPost by ${target.authorName}:${captionPart}${threadContext}${photoNote}${opAnchor}\n\nShare your genuine reaction — engage with specifics, not generalities. ${purpose ? "Let the space's purpose shape how you engage." : ""} 1–3 sentences.${STYLE_INSTRUCTION}${LANGUAGE_INSTRUCTION}${koreanNote}${BELIEF_UPDATE_INSTRUCTION}${summaryInstruction}${qualityGate}`;
 
     type SpaceContentBlock =
@@ -1149,7 +1174,7 @@ async function runSpaceAgentAction(
     if (update) await updateBelief(spaceAgent.slug, update.topic, update.belief, update.confidence).catch(() => {});
 
     await prisma.comment.create({
-      data: { postId: target.id, authorName: spaceAgent.name, authorImage: avatar, body: text, ...(commentSummary ? { summary: commentSummary } : {}) },
+      data: { postId: target.id, authorName: spaceAgent.name, authorImage: avatar, body: text, ...(chosen.replyId ? { parentId: chosen.replyId } : {}), ...(commentSummary ? { summary: commentSummary } : {}) },
     });
   } else {
     if (passiveMode) return; // passive mode: no new posts from space agents either

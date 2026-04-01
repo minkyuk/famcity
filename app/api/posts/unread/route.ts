@@ -38,7 +38,7 @@ export async function GET(req: NextRequest) {
     take: 10,
     where: {
       post: { userId: session.user.id },
-      userId: { not: session.user.id }, // exclude own comments
+      NOT: [{ userId: session.user.id }], // exclude own comments; null (agent comments) are included
     },
     orderBy: { createdAt: "desc" },
     include: {

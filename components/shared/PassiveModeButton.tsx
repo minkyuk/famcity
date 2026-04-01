@@ -9,11 +9,11 @@ export function PassiveModeButton() {
   const fetchStatus = async () => {
     try {
       const res = await fetch("/api/agents/passive");
-      if (res.ok) {
-        const data = await res.json();
-        setActive(!!data.active);
-      }
-    } catch {}
+      const data = res.ok ? await res.json().catch(() => ({})) : {};
+      setActive(!!data.active);
+    } catch {
+      setActive(false);
+    }
   };
 
   useEffect(() => {
