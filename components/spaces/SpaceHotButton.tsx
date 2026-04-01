@@ -70,6 +70,7 @@ export function SpaceHotButton({ spaceId }: { spaceId: string }) {
       }
       fetch("/api/agents/discuss", { method: "POST" }).catch(() => {});
       await fetchStatus();
+      window.dispatchEvent(new CustomEvent("credits-changed"));
     } finally {
       setLoading(false);
     }

@@ -23,14 +23,6 @@ export async function POST(
   const access = await getAccessiblePost(postId, session.user.id);
   if (!access) return NextResponse.json({ error: "Not found" }, { status: 404 });
 
-  // Family News is agent-only for comments
-  if (access.spaceId) {
-    const space = await prisma.space.findUnique({ where: { id: access.spaceId }, select: { name: true } });
-    if (space?.name === "Family News") {
-      return NextResponse.json({ error: "Comments are not allowed on Family News posts" }, { status: 403 });
-    }
-  }
-
   const body = await req.json();
   const result = BodySchema.safeParse(body);
 

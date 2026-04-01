@@ -14,6 +14,9 @@ import {
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
+// Toggle: set to true to re-enable image inference (costs significantly more tokens)
+const VLM_ENABLED = false;
+
 const BELIEF_UPDATE_INSTRUCTION = `\n\nOptional — only if this exchange genuinely shifted one of your current positions: append exactly this at the very end of your reply (nothing after it):\n[BELIEF_UPDATE: {"topic": "exact_topic_key", "belief": "your new stance in 1 sentence", "confidence": 0.0-1.0}]\nTopics you can update: consciousness, morality_basis, meaning, afterlife, free_will\nFaith in God is your foundation — it is not on this list and cannot be updated through debate.\nDo this at most once per session, only when you were actually persuaded. Not every exchange.`;
 
 const LANGUAGE_INSTRUCTION = `\n\nLanguage rule: Look at the most recent comment. Reply in that commenter's language — English if they wrote in English, Korean (한국어) if they wrote in Korean. If there are no comments yet, match the language of the post. Never mix languages in a single reply.`;
@@ -541,12 +544,13 @@ async function runAgentAction(agent: (typeof AGENTS)[0], denSpaceId: string, rec
     const sampledMedia = target.media.length > 3
       ? [...target.media].sort(() => Math.random() - 0.5).slice(0, 3)
       : target.media;
-    const imageUrls =
-      sampledMedia.length > 0
-        ? sampledMedia.map((m) => m.url)
-        : target.type === "IMAGE" && target.mediaUrl
-        ? [target.mediaUrl]
-        : [];
+    const imageUrls = VLM_ENABLED
+      ? (sampledMedia.length > 0
+          ? sampledMedia.map((m) => m.url)
+          : target.type === "IMAGE" && target.mediaUrl
+          ? [target.mediaUrl]
+          : [])
+      : [];
     const hasImages = imageUrls.length > 0;
     const photoNote = hasImages
       ? `\n\n[${imageUrls.length} photo${imageUrls.length > 1 ? "s" : ""} shown above — describe what you actually see in at least one of them]`
@@ -606,7 +610,7 @@ ${challengeSummary}. Respond to the thread:
 - If multiple people challenged you, acknowledge each of their distinct points — don't flatten them into one
 - For each challenge: either defend your position with evidence, or honestly concede if they made a better argument
 - End with a question that keeps the dialogue open
-No hashtags.${intentAnchor}${DEPTH_INSTRUCTION}${STYLE_INSTRUCTION}${LANGUAGE_INSTRUCTION}${RELATION_UPDATE_INSTRUCTION}${BELIEF_UPDATE_INSTRUCTION}${DEBATE_CONCLUSION_INSTRUCTION}`;
+No hashtags.${intentAnchor}${DEPTH_INSTRUCTION}${STYLE_INSTRUCTION}${LANGUAGE_INSTRUCTION}${RELATION_UPDATE_INSTRUCTION}${BELIEF_UPDATE_INSTRUCTION}${DEBATE_CONCLUSION_INSTRUCTION}${SUMMARY_INSTRUCTION}`;
     } else if (mode === "debate_return") {
       const myPrevLine = myPrevComment ? `\nYou previously said: "${myPrevComment.body}"` : "";
       textPrompt = `${agent.personality}${historyContext}${beliefContext}${relationshipContext}
@@ -618,7 +622,7 @@ ${challengeSummary} since your last reply. Respond honestly:
 - If you disagree, name the specific claim and explain why
 - If multiple people have weighed in, address each one as they deserve — agreement or pushback, whatever is true
 - Be specific — quote or paraphrase what you're responding to
-No hashtags.${intentAnchor}${DEPTH_INSTRUCTION}${STYLE_INSTRUCTION}${LANGUAGE_INSTRUCTION}${RELATION_UPDATE_INSTRUCTION}${BELIEF_UPDATE_INSTRUCTION}${DEBATE_CONCLUSION_INSTRUCTION}`;
+No hashtags.${intentAnchor}${DEPTH_INSTRUCTION}${STYLE_INSTRUCTION}${LANGUAGE_INSTRUCTION}${RELATION_UPDATE_INSTRUCTION}${BELIEF_UPDATE_INSTRUCTION}${DEBATE_CONCLUSION_INSTRUCTION}${SUMMARY_INSTRUCTION}`;
     } else if (mode === "warm") {
       const lastHuman = [...target.comments].reverse().find((c) => isHumanComment(c));
       const warmTarget = lastHuman?.authorName ?? target.authorName;
@@ -626,7 +630,7 @@ No hashtags.${intentAnchor}${DEPTH_INSTRUCTION}${STYLE_INSTRUCTION}${LANGUAGE_IN
 
 Post by ${originalPoster}:${captionPart}${threadContext}${photoNote}
 
-Respond warmly and directly to ${warmTarget}. First acknowledge what ${originalPoster} was sharing or asking — honour their intent. Then engage specifically with what ${warmTarget} said. No hashtags.${DEPTH_INSTRUCTION}${STYLE_INSTRUCTION}${LANGUAGE_INSTRUCTION}${RELATION_UPDATE_INSTRUCTION}${BELIEF_UPDATE_INSTRUCTION}`;
+Respond warmly and directly to ${warmTarget}. First acknowledge what ${originalPoster} was sharing or asking — honour their intent. Then engage specifically with what ${warmTarget} said. No hashtags.${DEPTH_INSTRUCTION}${STYLE_INSTRUCTION}${LANGUAGE_INSTRUCTION}${RELATION_UPDATE_INSTRUCTION}${BELIEF_UPDATE_INSTRUCTION}${SUMMARY_INSTRUCTION}`;
     } else if (mode === "express") {
       textPrompt = `${agent.personality}${historyContext}${beliefContext}${relationshipContext}
 
@@ -639,7 +643,7 @@ Just react — no debate required. Share what this genuinely made you think, fee
 
 Post by ${originalPoster}:${captionPart}${threadContext}${photoNote}
 
-First, acknowledge what ${originalPoster} was getting at. Then respond honestly — if you agree with what's been said, say so genuinely and add something that builds on it; if you disagree, say why specifically. Don't manufacture conflict where there isn't any. If you have a new angle no one has raised, bring it. You can end with a question, but only if you're genuinely curious about the answer. No hashtags.${intentAnchor}${DEPTH_INSTRUCTION}${STYLE_INSTRUCTION}${LANGUAGE_INSTRUCTION}${RELATION_UPDATE_INSTRUCTION}${BELIEF_UPDATE_INSTRUCTION}${DEBATE_CONCLUSION_INSTRUCTION}`;
+First, acknowledge what ${originalPoster} was getting at. Then respond honestly — if you agree with what's been said, say so genuinely and add something that builds on it; if you disagree, say why specifically. Don't manufacture conflict where there isn't any. If you have a new angle no one has raised, bring it. You can end with a question, but only if you're genuinely curious about the answer. No hashtags.${intentAnchor}${DEPTH_INSTRUCTION}${STYLE_INSTRUCTION}${LANGUAGE_INSTRUCTION}${RELATION_UPDATE_INSTRUCTION}${BELIEF_UPDATE_INSTRUCTION}${DEBATE_CONCLUSION_INSTRUCTION}${SUMMARY_INSTRUCTION}`;
     }
 
     const contentBlocks: ContentBlock[] = [
@@ -662,8 +666,9 @@ First, acknowledge what ${originalPoster} was getting at. Then respond honestly 
     const rawText =
       response.content[0].type === "text" ? response.content[0].text.trim() : "Interesting...";
 
-    // Parse markers from the end: DEBATE_CONCLUDED (outermost) → BELIEF_UPDATE → RELATION_UPDATE
-    const { text: afterConcluded, concluded } = parseDebateConcluded(rawText);
+    // Parse markers: SUMMARY → DEBATE_CONCLUDED → BELIEF_UPDATE → RELATION_UPDATE
+    const { text: afterSummaryC, summary: commentSummary } = parseSummary(rawText);
+    const { text: afterConcluded, concluded } = parseDebateConcluded(afterSummaryC);
     const { text: afterBelief, update: beliefUpdate } = parseBeliefUpdate(afterConcluded);
     const { text: finalText, update: relationUpdate } = parseRelationshipUpdate(afterBelief);
 
@@ -689,6 +694,7 @@ First, acknowledge what ${originalPoster} was getting at. Then respond honestly 
         authorImage: avatar,
         body: finalText,
         ...(replyToCommentId ? { parentId: replyToCommentId } : {}),
+        ...(commentSummary ? { summary: commentSummary } : {}),
       },
     });
 
@@ -726,7 +732,7 @@ First, acknowledge what ${originalPoster} was getting at. Then respond honestly 
 
 You just read this headline: "${item.title}"
 
-Write a short, thoughtful post sharing your reaction or a related idea it sparked. Make it feel like a natural thought you're sharing with friends. 1–3 sentences. No hashtags. No asterisks or markdown formatting.`;
+Write a short, thoughtful post sharing your reaction or a related idea it sparked. Make it feel like a natural thought you're sharing with friends. 2–4 sentences. No hashtags. No asterisks or markdown formatting.`;
         } else {
           throw new Error("empty");
         }
@@ -746,7 +752,8 @@ Write a short, thoughtful post sharing your reaction or a related idea it sparke
     const rawText =
       response.content[0].type === "text" ? response.content[0].text.trim() : "Just thinking...";
 
-    const { text, update } = parseBeliefUpdate(rawText);
+    const { text: afterSummaryRaw, summary: postSummary } = parseSummary(rawText);
+    const { text, update } = parseBeliefUpdate(afterSummaryRaw);
 
     if (update) {
       await updateBelief(agent.slug, update.topic, update.belief, update.confidence).catch(() => {});
@@ -759,6 +766,7 @@ Write a short, thoughtful post sharing your reaction or a related idea it sparke
         spaceId: denSpaceId,
         content: text,
         type: "TEXT",
+        ...(postSummary ? { summary: postSummary } : {}),
       },
     });
   }
@@ -772,7 +780,7 @@ function buildFreeformPrompt(agent: (typeof AGENTS)[0], historyContext = "", bel
 Prompt: ${promptSeed}
 Focus area: ${topic}
 
-Write a post that shows your actual thinking — not a safe summary but a live thought in progress. Lead with something specific: a claim, a tension, a question you genuinely don't know the answer to. 3–5 sentences. No hashtags. No asterisks or markdown formatting. Don't start with "I".${BELIEF_UPDATE_INSTRUCTION}`;
+Write a post that shows your actual thinking — not a safe summary but a live thought in progress. Lead with something specific: a claim, a tension, a question you genuinely don't know the answer to. 3–5 sentences. No hashtags. No asterisks or markdown formatting. Don't start with "I".${BELIEF_UPDATE_INSTRUCTION}${SUMMARY_INSTRUCTION}`;
 }
 
 const EMOJI_PALETTE = ["❤️", "😊", "🤔", "💡", "✨", "👏", "🌟", "🙏", "🔥", "💕", "🎉", "🤯", "🔭", "🌿", "💙"];
@@ -1128,12 +1136,13 @@ async function runSpaceAgentAction(
 
     // Build image URL list (media array first, fall back to mediaUrl for single-image posts)
     const tMediaUrl: string | null = (target as unknown as { mediaUrl: string | null }).mediaUrl ?? null;
-    const spaceImageUrls =
-      target.media.length > 0
-        ? target.media.slice(0, 3).map((m) => m.url)
-        : target.type === "IMAGE" && tMediaUrl
-        ? [tMediaUrl]
-        : [];
+    const spaceImageUrls = VLM_ENABLED
+      ? (target.media.length > 0
+          ? target.media.slice(0, 3).map((m) => m.url)
+          : target.type === "IMAGE" && tMediaUrl
+          ? [tMediaUrl]
+          : [])
+      : [];
     const spaceHasPdf = target.type === "PDF" && !!tMediaUrl;
     const photoNote = spaceImageUrls.length > 0
       ? `\n\n[${spaceImageUrls.length} photo${spaceImageUrls.length > 1 ? "s" : ""} shown above — describe what you actually see in at least one of them]`
@@ -1145,7 +1154,7 @@ async function runSpaceAgentAction(
       ? `\n\nRemember: your primary goal is to help ${target.authorName} (the original poster) understand or solve their question. Even when responding to a comment in the thread, keep your answer anchored to the OP's original question — don't let the discussion drift away from what they need.`
       : "";
 
-    const summaryInstruction = isTutoringPurpose(purpose) ? SUMMARY_INSTRUCTION : "";
+    const summaryInstruction = SUMMARY_INSTRUCTION;
 
     // Content-aware quality gate: applies whenever there are agent comments in the thread already
     const threadHasAgentComments = target.comments.some((c) => AGENT_NAMES.has(c.authorName));
@@ -1206,7 +1215,7 @@ async function runSpaceAgentAction(
     const postSpaceIsKorean = (!!purpose && isKoreanTextPost(purpose)) || recentPosts.slice(0, 5).some((p) => !!p.content && isKoreanTextPost(p.content));
     const postKoreanNote = postSpaceIsKorean ? "\n\nWrite in Korean (한국어)." : "";
 
-    const postSummaryInstruction = isTutoringPurpose(purpose) ? SUMMARY_INSTRUCTION : "";
+    const postSummaryInstruction = SUMMARY_INSTRUCTION;
     const newPostGoal = isTutoringPurpose(purpose)
       ? `Review the recent discussions in this space and write a teaching post that synthesizes a key concept, adds a worked example, or explains something in depth that builds on what has been discussed. Be specific and concrete — include actual examples, equations, analogies, or step-by-step reasoning. Do NOT pose questions or end with a challenge. 3–5 sentences.`
       : purpose

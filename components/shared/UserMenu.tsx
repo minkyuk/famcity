@@ -10,11 +10,21 @@ export function UserMenu() {
   const [open, setOpen] = useState(false);
   const [credits, setCredits] = useState<number | null>(null);
 
-  useEffect(() => {
+  const refreshCredits = () => {
     if (!session) return;
     fetch("/api/credits").then((r) => r.json()).then((d) => {
       if (typeof d.credits === "number") setCredits(d.credits);
     }).catch(() => {});
+  };
+
+  useEffect(() => {
+    refreshCredits();
+  }, [session]);
+
+  useEffect(() => {
+    const handler = () => refreshCredits();
+    window.addEventListener("credits-changed", handler);
+    return () => window.removeEventListener("credits-changed", handler);
   }, [session]);
 
   if (status === "loading") return <div className="w-8 h-8 rounded-full bg-gray-100 animate-pulse" />;

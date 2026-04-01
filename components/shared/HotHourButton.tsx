@@ -37,6 +37,7 @@ export function HotHourButton({ isAdmin }: { isAdmin?: boolean }) {
         return;
       }
       await fetchStatus();
+      window.dispatchEvent(new CustomEvent("credits-changed"));
     } finally {
       setLoading(false);
     }
