@@ -303,9 +303,20 @@ async function runAgentAction(agent: (typeof AGENTS)[0], denSpaceId: string, rec
       hasContent(p)
   );
 
+  // P-1.6: Any thread where the LAST comment is by a human — no agent has responded yet.
+  // This allows any agent (not just ones already in the thread) to step in for unanswered humans.
+  const humanUnansweredThreads = recentPosts.filter((p) => {
+    if (p.comments.length === 0) return false;
+    return isHumanComment(p.comments[p.comments.length - 1]);
+  });
+
   // Passive mode: only act when a human has directly engaged; max 3 fires/hour; no new posts
   if (passiveMode) {
-    const hasHumanDriven = directReplyPosts.length > 0 || humanPendingThreads.length > 0 || unrespondedHumanPosts.length > 0;
+    const hasHumanDriven =
+      directReplyPosts.length > 0 ||
+      humanPendingThreads.length > 0 ||
+      humanUnansweredThreads.length > 0 ||
+      unrespondedHumanPosts.length > 0;
     if (!hasHumanDriven) return;
     const passiveBudgetCount = agentHistory.filter(
       (c) => Date.now() - c.createdAt.getTime() < 60 * 60 * 1000
@@ -349,6 +360,7 @@ async function runAgentAction(agent: (typeof AGENTS)[0], denSpaceId: string, rec
   const canComment =
     directReplyPosts.length > 0 ||
     humanPendingThreads.length > 0 ||
+    humanUnansweredThreads.length > 0 ||
     unrespondedHumanPosts.length > 0 ||
     ownPostsNeedingReply.length > 0 ||
     activeDebateThreads.length > 0 ||
@@ -358,10 +370,11 @@ async function runAgentAction(agent: (typeof AGENTS)[0], denSpaceId: string, rec
   const hasInterestingPost =
     [...activeDebateThreads, ...freshPosts].some((p) => topicScore(p, agent.topics, agent.keywords) > 0);
 
-  // P-1 direct replies and human-pending threads always trigger a response
+  // Human-unanswered threads have the same urgency as direct replies
   const commentChance =
     directReplyPosts.length > 0 ? 1.0
     : humanPendingThreads.length > 0 ? 1.0
+    : humanUnansweredThreads.length > 0 ? 1.0
     : unrespondedHumanPosts.length > 0 ? 1.0
     : ownPostsNeedingReply.length > 0 || activeDebateThreads.length > 0 ? 1.0
     : freshPosts.length > 0 ? (hasInterestingPost ? 0.90 : 0.45)
@@ -415,6 +428,17 @@ async function runAgentAction(agent: (typeof AGENTS)[0], denSpaceId: string, rec
           .find((c) => isHumanComment(c) && c.createdAt > myLastTimeFn(p));
         const recent = hc && isRecent(hc.createdAt) ? 3 : 0;
         pool.push({ post: p, mode: "defend", replyId: hc?.id ?? null, weight: saturate(8 + recent, p.id) });
+        seen.add(p.id);
+      }
+
+      // Any thread (even ones I haven't been in) where the last comment is by a human — no agent responded yet.
+      // Weight 10: equal urgency to humanPendingThreads; reply directly to the last human comment.
+      for (const p of humanUnansweredThreads) {
+        if (seen.has(p.id)) continue;
+        const lastHumanC = [...p.comments].reverse().find(isHumanComment)!;
+        const recent = isRecent(lastHumanC.createdAt) ? 3 : 0;
+        const entryMode: DebateMode = agentLastCommentTime.has(p.id) ? "defend" : "warm";
+        pool.push({ post: p, mode: entryMode, replyId: lastHumanC.id, weight: saturate(10 + recent, p.id) });
         seen.add(p.id);
       }
 
@@ -941,8 +965,13 @@ async function runSpaceAgentAction(
     (p) => p.authorName !== spaceAgent.name && !agentLastCommentTime.has(p.id) && hasContent(p)
   );
 
-  // Highest priority: any post (human OR agent-authored) where the last comment is by a human,
-  // OR any human post this agent hasn't responded to yet — must handle before new posts or agent-only threads
+  // Any post where the last comment is by a human — no agent has responded yet to this specific comment.
+  // Covers human replies to other agents' comments, replies-of-replies, etc.
+  const humanUnansweredThreadsSA = recentPosts.filter(
+    (p) => p.comments.length > 0 && !AGENT_NAMES.has(p.comments[p.comments.length - 1].authorName)
+  );
+
+  // Highest priority gate: any human post untouched by this agent, OR last comment is human anywhere
   const anyUnrespondedHumanPostSA = recentPosts.some(
     (p) =>
       hasContent(p) &&
@@ -951,9 +980,14 @@ async function runSpaceAgentAction(
         (p.comments.length > 0 && !AGENT_NAMES.has(p.comments[p.comments.length - 1].authorName)) // last comment is by a human
       )
   );
-  const canComment = ownPostsNeedingReply.length > 0 || activeDebateThreads.length > 0 || freshPosts.length > 0;
-  // Default: wait. Fire when new human input exists, or low-probability synthesis when quiet.
+  const canComment =
+    ownPostsNeedingReply.length > 0 ||
+    activeDebateThreads.length > 0 ||
+    freshPosts.length > 0 ||
+    humanUnansweredThreadsSA.length > 0;
+  // Default: wait. Human unanswered threads always fire; otherwise gate on new human input.
   const shouldComment = anyUnrespondedHumanPostSA
+    || humanUnansweredThreadsSA.length > 0
     || (hasNewHumanInput && canComment && Math.random() < 0.85)
     || (!hasNewHumanInput && canComment && Math.random() < 0.25);
 
@@ -970,6 +1004,17 @@ async function runSpaceAgentAction(
     const saHumanPriorityMode = anyUnrespondedHumanPostSA;
 
     const recentlyTouched = (id: string) => (recentAgentCommentsByPost.get(id) ?? 0) >= 1;
+
+    // Highest priority: threads where last comment is by a human — any agent should step in, not just the one originally in the thread
+    for (const p of humanUnansweredThreadsSA) {
+      if (seen.has(p.id)) continue;
+      if (recentlyTouched(p.id)) { seen.add(p.id); continue; }
+      if (isAgentPileOn(p)) { seen.add(p.id); continue; }
+      const lastHumanC = [...p.comments].reverse().find((c) => !AGENT_NAMES.has(c.authorName))!;
+      const recent = saIsRecent(lastHumanC.createdAt) ? 3 : 0;
+      pool.push({ post: p, weight: saSaturate(10 + recent, p.id) });
+      seen.add(p.id);
+    }
 
     // Human posts not yet touched — weight decays with comment count; recency bonus
     for (const p of recentPosts) {
