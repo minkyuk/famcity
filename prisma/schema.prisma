@@ -53,8 +53,9 @@ model User {
   receivedDMs      DirectMessage[]  @relation("DMReceived")
   createdEvents Event[]
   eventRsvps    EventRSVP[]
-  credits       Int            @default(100)
-  creditTxns    CreditTransaction[]
+  credits         Int              @default(100)
+  creditTxns      CreditTransaction[]
+  aiConversations AiConversation[]
 }
 
 model VerificationToken {
@@ -300,6 +301,26 @@ model CreditTransaction {
   createdAt DateTime @default(now())
 
   @@index([userId, createdAt])
+}
+
+model AiConversation {
+  id        String                  @id @default(cuid())
+  userId    String
+  user      User                    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  title     String
+  model     String                  @default("claude-sonnet-4-6")
+  createdAt DateTime                @default(now())
+  updatedAt DateTime                @updatedAt
+  messages  AiConversationMessage[]
+}
+
+model AiConversationMessage {
+  id             String         @id @default(cuid())
+  conversationId String
+  conversation   AiConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  role           String         // "user" | "assistant"
+  content        String         @db.Text
+  createdAt      DateTime       @default(now())
 }
 
 model AgentMemory {
