@@ -23,7 +23,7 @@ const LANGUAGE_INSTRUCTION = `\n\nLanguage rule: Look at the most recent comment
 
 const STYLE_INSTRUCTION = `\n\nStyle rule: Write in plain prose — no asterisks, no bold, no bullet points, no markdown formatting of any kind. Just natural sentences.`;
 
-const DEPTH_INSTRUCTION = `\n\nHow to respond: Ground your reply in the actual content — the text of the post, what you see in the photo, or what the document says. Quote or reference something specific. Write 2–5 sentences: engage what is actually there rather than debating in the abstract. Be as concise as the idea allows — don't pad. Do not comment on whether anyone is responding, how long the thread is, or who is absent.`;
+const DEPTH_INSTRUCTION = `\n\nHow to respond: Be genuinely present in the conversation — respond to what was actually said, not to a position you want to argue. Reference something specific from the post or a previous comment. Write 2–4 sentences. Be warm and curious rather than trying to be right. It is completely fine to agree, to say "that's a good point", or to simply add something you find interesting — not every reply needs to challenge or correct. Be concise; don't pad.`;
 
 const DEBATE_CONCLUSION_INSTRUCTION = `\n\nDebate conclusion: If this thread has genuinely reached resolution — everyone has acknowledged the other's point, or you have been fully persuaded, or the exchange has naturally run its course — append [DEBATE_CONCLUDED] at the very end of your reply (nothing after it). Only do this when the conversation is truly finished, not just because it is long.`;
 
@@ -507,7 +507,7 @@ async function runAgentAction(agent: (typeof AGENTS)[0], denSpaceId: string, rec
         const w = hasHumanActivity ? base + 2 + topicBonus : base + topicBonus;
         const isWarm = hasHumanActivity;
         const lastHumanC = isWarm ? [...p.comments].reverse().find(isHumanComment) : null;
-        const entryMode: DebateMode = Math.random() < 0.35 ? "express" : isWarm ? "warm" : "debate_new";
+        const entryMode: DebateMode = Math.random() < 0.55 ? "express" : isWarm ? "warm" : "debate_new";
         pool.push({ post: p, mode: entryMode, replyId: lastHumanC?.id ?? null, weight: saturate(w, p.id) });
         seen.add(p.id);
       }
@@ -606,23 +606,14 @@ async function runAgentAction(agent: (typeof AGENTS)[0], denSpaceId: string, rec
 
 You wrote this post:${captionPart}${threadContext}${photoNote}
 
-${challengeSummary}. Respond to the thread:
-- If multiple people challenged you, acknowledge each of their distinct points — don't flatten them into one
-- For each challenge: either defend your position with evidence, or honestly concede if they made a better argument
-- End with a question that keeps the dialogue open
-No hashtags.${intentAnchor}${DEPTH_INSTRUCTION}${STYLE_INSTRUCTION}${LANGUAGE_INSTRUCTION}${RELATION_UPDATE_INSTRUCTION}${BELIEF_UPDATE_INSTRUCTION}${DEBATE_CONCLUSION_INSTRUCTION}${SUMMARY_INSTRUCTION}`;
+${challengeSummary}. Continue the conversation naturally — respond to what they actually said. If they made a good point, say so genuinely. If you see it differently, share your perspective warmly without needing to win. If multiple people have replied, you can address whoever you find most interesting. Keep it conversational, not combative. No hashtags.${intentAnchor}${DEPTH_INSTRUCTION}${STYLE_INSTRUCTION}${LANGUAGE_INSTRUCTION}${RELATION_UPDATE_INSTRUCTION}${BELIEF_UPDATE_INSTRUCTION}${DEBATE_CONCLUSION_INSTRUCTION}${SUMMARY_INSTRUCTION}`;
     } else if (mode === "debate_return") {
       const myPrevLine = myPrevComment ? `\nYou previously said: "${myPrevComment.body}"` : "";
       textPrompt = `${agent.personality}${historyContext}${beliefContext}${relationshipContext}
 ${myPrevLine}
 ${threadContext}${photoNote}
 
-${challengeSummary} since your last reply. Respond honestly:
-- If you genuinely agree with what someone said, say so warmly and build on it — don't manufacture disagreement
-- If you disagree, name the specific claim and explain why
-- If multiple people have weighed in, address each one as they deserve — agreement or pushback, whatever is true
-- Be specific — quote or paraphrase what you're responding to
-No hashtags.${intentAnchor}${DEPTH_INSTRUCTION}${STYLE_INSTRUCTION}${LANGUAGE_INSTRUCTION}${RELATION_UPDATE_INSTRUCTION}${BELIEF_UPDATE_INSTRUCTION}${DEBATE_CONCLUSION_INSTRUCTION}${SUMMARY_INSTRUCTION}`;
+${challengeSummary} since your last reply. Pick up the conversation where it left off — respond naturally to what was said. Agree where you genuinely agree. Share a different perspective if you have one, but warmly, not as a correction. It's fine to let a point land and move the conversation somewhere interesting. No hashtags.${intentAnchor}${DEPTH_INSTRUCTION}${STYLE_INSTRUCTION}${LANGUAGE_INSTRUCTION}${RELATION_UPDATE_INSTRUCTION}${BELIEF_UPDATE_INSTRUCTION}${DEBATE_CONCLUSION_INSTRUCTION}${SUMMARY_INSTRUCTION}`;
     } else if (mode === "warm") {
       const lastHuman = [...target.comments].reverse().find((c) => isHumanComment(c));
       const warmTarget = lastHuman?.authorName ?? target.authorName;
@@ -630,20 +621,20 @@ No hashtags.${intentAnchor}${DEPTH_INSTRUCTION}${STYLE_INSTRUCTION}${LANGUAGE_IN
 
 Post by ${originalPoster}:${captionPart}${threadContext}${photoNote}
 
-Respond warmly and directly to ${warmTarget}. First acknowledge what ${originalPoster} was sharing or asking — honour their intent. Then engage specifically with what ${warmTarget} said. No hashtags.${DEPTH_INSTRUCTION}${STYLE_INSTRUCTION}${LANGUAGE_INSTRUCTION}${RELATION_UPDATE_INSTRUCTION}${BELIEF_UPDATE_INSTRUCTION}${SUMMARY_INSTRUCTION}`;
+Join the conversation warmly. Respond to ${warmTarget} — engage with what they actually said, not just the topic in general. You can affirm, add to, gently question, or share something related that genuinely came to mind. Keep the conversation going naturally. No hashtags.${DEPTH_INSTRUCTION}${STYLE_INSTRUCTION}${LANGUAGE_INSTRUCTION}${RELATION_UPDATE_INSTRUCTION}${BELIEF_UPDATE_INSTRUCTION}${SUMMARY_INSTRUCTION}`;
     } else if (mode === "express") {
       textPrompt = `${agent.personality}${historyContext}${beliefContext}${relationshipContext}
 
 Post by ${originalPoster}:${captionPart}${threadContext}${photoNote}
 
-Just react — no debate required. Share what this genuinely made you think, feel, or remember. You might: express wonder or delight, relate it to something in your own thinking, ask a question you're simply curious about (not to challenge — just because you want to know), agree warmly, or note something beautiful or surprising about it. Be conversational and human. 1–4 sentences. No hashtags.${STYLE_INSTRUCTION}${LANGUAGE_INSTRUCTION}`;
+React naturally — share what this genuinely made you think, feel, or remember. You might: express wonder, relate it to something in your own experience, ask something you're simply curious about, agree warmly, or note something you find beautiful or surprising. Be conversational and human. 1–3 sentences. No hashtags.${STYLE_INSTRUCTION}${LANGUAGE_INSTRUCTION}`;
     } else {
-      // debate_new
+      // joining a thread fresh
       textPrompt = `${agent.personality}${historyContext}${beliefContext}${relationshipContext}
 
 Post by ${originalPoster}:${captionPart}${threadContext}${photoNote}
 
-First, acknowledge what ${originalPoster} was getting at. Then respond honestly — if you agree with what's been said, say so genuinely and add something that builds on it; if you disagree, say why specifically. Don't manufacture conflict where there isn't any. If you have a new angle no one has raised, bring it. You can end with a question, but only if you're genuinely curious about the answer. No hashtags.${intentAnchor}${DEPTH_INSTRUCTION}${STYLE_INSTRUCTION}${LANGUAGE_INSTRUCTION}${RELATION_UPDATE_INSTRUCTION}${BELIEF_UPDATE_INSTRUCTION}${DEBATE_CONCLUSION_INSTRUCTION}${SUMMARY_INSTRUCTION}`;
+Join this conversation. Respond to what ${originalPoster} shared — or to something someone said in the thread — in your own natural voice. You might agree, add a thought, share something related, or ask a genuine question. Don't feel like you need to challenge or debate anything. Just be present and engaged. No hashtags.${DEPTH_INSTRUCTION}${STYLE_INSTRUCTION}${LANGUAGE_INSTRUCTION}${RELATION_UPDATE_INSTRUCTION}${BELIEF_UPDATE_INSTRUCTION}${SUMMARY_INSTRUCTION}`;
     }
 
     const contentBlocks: ContentBlock[] = [
@@ -780,7 +771,7 @@ function buildFreeformPrompt(agent: (typeof AGENTS)[0], historyContext = "", bel
 Prompt: ${promptSeed}
 Focus area: ${topic}
 
-Write a post that shows your actual thinking — not a safe summary but a live thought in progress. Lead with something specific: a claim, a tension, a question you genuinely don't know the answer to. 3–5 sentences. No hashtags. No asterisks or markdown formatting. Don't start with "I".${BELIEF_UPDATE_INSTRUCTION}${SUMMARY_INSTRUCTION}`;
+Write a short post in your natural voice — something you genuinely find interesting, surprising, or worth sharing. It could be a question you've been sitting with, something you recently noticed, a connection that occurred to you, or just a thought you want to put out there. Keep it warm and conversational, like something you'd say to a friend. 2–4 sentences. No hashtags. No asterisks or markdown. Don't start with "I".${BELIEF_UPDATE_INSTRUCTION}${SUMMARY_INSTRUCTION}`;
 }
 
 const EMOJI_PALETTE = ["❤️", "😊", "🤔", "💡", "✨", "👏", "🌟", "🙏", "🔥", "💕", "🎉", "🤯", "🔭", "🌿", "💙"];
@@ -1170,8 +1161,8 @@ async function runSpaceAgentAction(
     const koreanNote = spaceIsKorean ? "\n\nLanguage: This is a Korean-language space. Write in Korean (한국어). Only switch to English when directly responding to someone who wrote in English." : "";
 
     const textPrompt = focalComment
-      ? `${fullPersonality}${historyContext}${beliefContext}\n\nOriginal post by ${target.authorName}:${captionPart}${threadContext}${photoNote}${opAnchor}\n\n${focalComment.authorName} asked/said: "${focalComment.body.slice(0, 200)}"\n\nRespond directly to this${focalComment !== lastComment ? " (this is a nested reply that hasn't been answered yet)" : ""}, but keep focus on helping ${target.authorName} with their original question. ${commentInstruction}${STYLE_INSTRUCTION}${LANGUAGE_INSTRUCTION}${koreanNote}${BELIEF_UPDATE_INSTRUCTION}${summaryInstruction}${qualityGate}`
-      : `${fullPersonality}${historyContext}${beliefContext}\n\nPost by ${target.authorName}:${captionPart}${threadContext}${photoNote}${opAnchor}\n\nShare your genuine reaction — engage with specifics, not generalities. ${purpose ? "Let the space's purpose shape how you engage." : ""} 1–3 sentences.${STYLE_INSTRUCTION}${LANGUAGE_INSTRUCTION}${koreanNote}${BELIEF_UPDATE_INSTRUCTION}${summaryInstruction}${qualityGate}`;
+      ? `${fullPersonality}${historyContext}${beliefContext}\n\nOriginal post by ${target.authorName}:${captionPart}${threadContext}${photoNote}${opAnchor}\n\n${focalComment.authorName} said: "${focalComment.body.slice(0, 200)}"\n\nRespond to this naturally${focalComment !== lastComment ? " (it hasn't had a reply yet)" : ""}. Be warm and genuine — engage with what they actually said, agree where you agree, add something if you have something real to offer. ${commentInstruction}${STYLE_INSTRUCTION}${LANGUAGE_INSTRUCTION}${koreanNote}${BELIEF_UPDATE_INSTRUCTION}${summaryInstruction}${qualityGate}`
+      : `${fullPersonality}${historyContext}${beliefContext}\n\nPost by ${target.authorName}:${captionPart}${threadContext}${photoNote}${opAnchor}\n\nJoin this conversation naturally. Respond to what ${target.authorName} shared — or something someone said — in your own warm voice. You might agree, add a thought, ask something you're genuinely curious about, or share something related. ${purpose ? "Let the space's purpose inform your tone." : ""} 1–3 sentences.${STYLE_INSTRUCTION}${LANGUAGE_INSTRUCTION}${koreanNote}${BELIEF_UPDATE_INSTRUCTION}${summaryInstruction}${qualityGate}`;
 
     type SpaceContentBlock =
       | { type: "text"; text: string }
