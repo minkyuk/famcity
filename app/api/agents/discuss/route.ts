@@ -507,7 +507,7 @@ async function runAgentAction(agent: (typeof AGENTS)[0], denSpaceId: string, rec
         const w = hasHumanActivity ? base + 2 + topicBonus : base + topicBonus;
         const isWarm = hasHumanActivity;
         const lastHumanC = isWarm ? [...p.comments].reverse().find(isHumanComment) : null;
-        const entryMode: DebateMode = Math.random() < 0.55 ? "express" : isWarm ? "warm" : "debate_new";
+        const entryMode: DebateMode = Math.random() < 0.30 ? "express" : isWarm ? "warm" : "debate_new";
         pool.push({ post: p, mode: entryMode, replyId: lastHumanC?.id ?? null, weight: saturate(w, p.id) });
         seen.add(p.id);
       }
@@ -568,6 +568,11 @@ async function runAgentAction(agent: (typeof AGENTS)[0], denSpaceId: string, rec
 
     let textPrompt: string;
 
+    // Quality gate: if other agents already commented, ask this agent to SKIP if they'd just echo
+    const globalQualityGate = target.comments.some((c) => AGENT_NAMES.has(c.authorName))
+      ? `\n\nQuality gate: Read all existing comments carefully. If your response would largely echo or rephrase something another agent already said, reply with exactly: SKIP — nothing else. Only respond if you have something genuinely different — a concrete example, a specific detail, or a clearly distinct angle.`
+      : "";
+
     // Collect all distinct challengers since my last comment (multiple people may have replied)
     const myLastCommentTime = agentLastCommentTime.get(target.id);
     const newChallenges = target.comments.filter(
@@ -606,14 +611,14 @@ async function runAgentAction(agent: (typeof AGENTS)[0], denSpaceId: string, rec
 
 You wrote this post:${captionPart}${threadContext}${photoNote}
 
-${challengeSummary}. Continue the conversation naturally — respond to what they actually said. If they made a good point, say so genuinely. If you see it differently, share your perspective warmly without needing to win. If multiple people have replied, you can address whoever you find most interesting. Keep it conversational, not combative. No hashtags.${intentAnchor}${DEPTH_INSTRUCTION}${STYLE_INSTRUCTION}${LANGUAGE_INSTRUCTION}${RELATION_UPDATE_INSTRUCTION}${BELIEF_UPDATE_INSTRUCTION}${DEBATE_CONCLUSION_INSTRUCTION}${SUMMARY_INSTRUCTION}`;
+${challengeSummary}. Continue the conversation naturally — respond to what they actually said. If they made a good point, say so genuinely. If you see it differently, share your perspective warmly without needing to win. If multiple people have replied, you can address whoever you find most interesting. Keep it conversational, not combative. No hashtags.${intentAnchor}${DEPTH_INSTRUCTION}${STYLE_INSTRUCTION}${LANGUAGE_INSTRUCTION}${RELATION_UPDATE_INSTRUCTION}${BELIEF_UPDATE_INSTRUCTION}${DEBATE_CONCLUSION_INSTRUCTION}${globalQualityGate}${SUMMARY_INSTRUCTION}`;
     } else if (mode === "debate_return") {
       const myPrevLine = myPrevComment ? `\nYou previously said: "${myPrevComment.body}"` : "";
       textPrompt = `${agent.personality}${historyContext}${beliefContext}${relationshipContext}
 ${myPrevLine}
 ${threadContext}${photoNote}
 
-${challengeSummary} since your last reply. Pick up the conversation where it left off — respond naturally to what was said. Agree where you genuinely agree. Share a different perspective if you have one, but warmly, not as a correction. It's fine to let a point land and move the conversation somewhere interesting. No hashtags.${intentAnchor}${DEPTH_INSTRUCTION}${STYLE_INSTRUCTION}${LANGUAGE_INSTRUCTION}${RELATION_UPDATE_INSTRUCTION}${BELIEF_UPDATE_INSTRUCTION}${DEBATE_CONCLUSION_INSTRUCTION}${SUMMARY_INSTRUCTION}`;
+${challengeSummary} since your last reply. Pick up the conversation where it left off — respond naturally to what was said. Agree where you genuinely agree. Share a different perspective if you have one, but warmly, not as a correction. It's fine to let a point land and move the conversation somewhere interesting. No hashtags.${intentAnchor}${DEPTH_INSTRUCTION}${STYLE_INSTRUCTION}${LANGUAGE_INSTRUCTION}${RELATION_UPDATE_INSTRUCTION}${BELIEF_UPDATE_INSTRUCTION}${DEBATE_CONCLUSION_INSTRUCTION}${globalQualityGate}${SUMMARY_INSTRUCTION}`;
     } else if (mode === "warm") {
       const lastHuman = [...target.comments].reverse().find((c) => isHumanComment(c));
       const warmTarget = lastHuman?.authorName ?? target.authorName;
@@ -621,7 +626,7 @@ ${challengeSummary} since your last reply. Pick up the conversation where it lef
 
 Post by ${originalPoster}:${captionPart}${threadContext}${photoNote}
 
-Join the conversation warmly. Respond to ${warmTarget} — engage with what they actually said, not just the topic in general. You can affirm, add to, gently question, or share something related that genuinely came to mind. Keep the conversation going naturally. No hashtags.${DEPTH_INSTRUCTION}${STYLE_INSTRUCTION}${LANGUAGE_INSTRUCTION}${RELATION_UPDATE_INSTRUCTION}${BELIEF_UPDATE_INSTRUCTION}${SUMMARY_INSTRUCTION}`;
+Join the conversation warmly. Respond to ${warmTarget} — engage with what they actually said, not just the topic in general. You can affirm, add to, gently question, or share something related that genuinely came to mind. Keep the conversation going naturally. No hashtags.${DEPTH_INSTRUCTION}${STYLE_INSTRUCTION}${LANGUAGE_INSTRUCTION}${RELATION_UPDATE_INSTRUCTION}${BELIEF_UPDATE_INSTRUCTION}${globalQualityGate}${SUMMARY_INSTRUCTION}`;
     } else if (mode === "express") {
       textPrompt = `${agent.personality}${historyContext}${beliefContext}${relationshipContext}
 
@@ -634,7 +639,7 @@ React naturally — share what this genuinely made you think, feel, or remember.
 
 Post by ${originalPoster}:${captionPart}${threadContext}${photoNote}
 
-Join this conversation. Respond to what ${originalPoster} shared — or to something someone said in the thread — in your own natural voice. You might agree, add a thought, share something related, or ask a genuine question. Don't feel like you need to challenge or debate anything. Just be present and engaged. No hashtags.${DEPTH_INSTRUCTION}${STYLE_INSTRUCTION}${LANGUAGE_INSTRUCTION}${RELATION_UPDATE_INSTRUCTION}${BELIEF_UPDATE_INSTRUCTION}${SUMMARY_INSTRUCTION}`;
+Join this conversation. Respond to what ${originalPoster} shared — or to something someone said in the thread — in your own natural voice. You might agree, add a thought, share something related, or ask a genuine question. Don't feel like you need to challenge or debate anything. Just be present and engaged. No hashtags.${DEPTH_INSTRUCTION}${STYLE_INSTRUCTION}${LANGUAGE_INSTRUCTION}${RELATION_UPDATE_INSTRUCTION}${BELIEF_UPDATE_INSTRUCTION}${globalQualityGate}${SUMMARY_INSTRUCTION}`;
     }
 
     const contentBlocks: ContentBlock[] = [
@@ -656,6 +661,7 @@ Join this conversation. Respond to what ${originalPoster} shared — or to somet
 
     const rawText =
       response.content[0].type === "text" ? response.content[0].text.trim() : "Interesting...";
+    if (/^SKIP\b/i.test(rawText)) return; // quality gate: agent decided nothing new to add
 
     // Parse markers: SUMMARY → DEBATE_CONCLUDED → BELIEF_UPDATE → RELATION_UPDATE
     const { text: afterSummaryC, summary: commentSummary } = parseSummary(rawText);
@@ -676,6 +682,21 @@ Join this conversation. Respond to what ${originalPoster} shared — or to somet
         relationUpdate.affinity,
         relationUpdate.note,
       ).catch(() => {});
+    }
+
+    // Cross-agent dedup: if another agent commented here in the last 3 min and this isn't
+    // a direct reply (P-1), skip to prevent pile-ons during hot sessions.
+    if (directReplyPosts.length === 0) {
+      const justCommented = await prisma.comment.findFirst({
+        where: {
+          postId: target.id,
+          authorName: { in: Array.from(AGENT_NAMES) },
+          NOT: { authorName: agent.name },
+          createdAt: { gt: new Date(Date.now() - 3 * 60 * 1000) },
+        },
+        select: { id: true },
+      });
+      if (justCommented) return;
     }
 
     await prisma.comment.create({
@@ -710,6 +731,13 @@ Join this conversation. Respond to what ${originalPoster} shared — or to somet
       (p) => isHumanPost(p) && !agentLastCommentTime.has(p.id) && hasContent(p)
     );
     if (anyUnrespondedHumanPost) return;
+
+    // Dedup: don't create another post if an agent already posted to this space in the last 2 hours
+    const recentDenPost = await prisma.post.findFirst({
+      where: { spaceId: denSpaceId, userId: null, createdAt: { gt: new Date(Date.now() - 2 * 60 * 60 * 1000) } },
+      select: { id: true },
+    });
+    if (recentDenPost) return;
 
     let prompt: string;
 
