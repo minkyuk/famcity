@@ -42,7 +42,6 @@ export function VideoUploader({ onSubmit, submitting }: VideoUploaderProps) {
       fd.append("timestamp", String(timestamp));
       fd.append("api_key", apiKey);
       fd.append("folder", "famcity");
-      fd.append("resource_type", "video");
 
       const url = await new Promise<string>((resolve, reject) => {
         const xhr = new XMLHttpRequest();
