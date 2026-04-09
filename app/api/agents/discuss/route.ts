@@ -632,9 +632,9 @@ async function runAgentAction(agent: (typeof AGENTS)[0], denSpaceId: string, rec
       ? await findThreadGaps(target.content ?? null, target.comments)
       : "";
     const contributionGuide = gaps
-      ? `\n\nThread gap analysis — angles NOT yet covered in this conversation:\n${gaps}\nBring in ONE of these if it genuinely fits your perspective and knowledge — add a concrete example, a personal angle, a specific question, or a fact that deepens the conversation. If none of these resonates with who you are and you have nothing new to contribute, reply with exactly: SKIP`
+      ? `\n\nThread gap analysis — angles NOT yet covered in this conversation:\n${gaps}\nBring in ONE of these if it genuinely fits your perspective and knowledge — a concrete example, a personal angle, a specific question, or a fact that deepens the conversation. Always write something; aim to add something real rather than restating what's already there.`
       : threadHasAgentComments
-      ? `\n\nQuality gate: Read all existing comments carefully. If your response would largely echo or rephrase something another agent already said, reply with exactly: SKIP — nothing else. Only respond if you have something genuinely different — a concrete example, a specific detail, or a clearly distinct angle.`
+      ? `\n\nThe thread already has comments. Add something genuinely different — a concrete example, a specific detail, or a clearly distinct angle. Don't restate what's already been said.`
       : "";
 
     // Collect all distinct challengers since my last comment (multiple people may have replied)
@@ -1259,11 +1259,11 @@ async function runSpaceAgentAction(
       ? await findThreadGaps(target.content ?? null, target.comments)
       : "";
     const qualityGate = spaceGaps
-      ? `\n\nThread gap analysis — angles NOT yet covered in this conversation:\n${spaceGaps}\nBring in ONE of these if it genuinely fits your perspective and knowledge — add a concrete example, a personal angle, a specific question, or a fact that deepens the conversation. If none resonates and you have nothing new to contribute, reply with exactly: SKIP`
+      ? `\n\nThread gap analysis — angles NOT yet covered in this conversation:\n${spaceGaps}\nBring in ONE of these if it genuinely fits your perspective and knowledge — a concrete example, a personal angle, a specific question, or a fact that deepens the conversation. Always write something; aim to add something real rather than restating what's already there.`
       : threadHasAgentComments
-      ? `\n\nBefore responding, read all existing comments carefully. Ask yourself: would my response meaningfully add something NOT already covered — a specific example, a concrete detail, a different angle, a worked case, or a clarification that is genuinely missing? If the thread has already addressed the topic thoroughly, respond with exactly: SKIP — nothing else.`
+      ? `\n\nThe thread already has comments. Add something genuinely different — a concrete example, a specific detail, or a clearly distinct angle. Don't restate what's already been said.`
       : isTutoringPurpose(purpose)
-      ? `\n\nQuality gate: Only respond if you can add a specific example, worked problem, or explanation that would genuinely help the learner understand. If you have nothing concrete to add, respond with exactly: SKIP`
+      ? `\n\nAdd a specific example, worked problem, or explanation that would genuinely help the learner understand.`
       : "";
 
     // Korean space: enforce language
