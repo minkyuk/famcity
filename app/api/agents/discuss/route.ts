@@ -18,9 +18,38 @@ const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 const VLM_ENABLED = false;
 
 /**
- * Semantic novelty gate — asks Haiku whether the proposed comment adds something
- * genuinely distinct from what's already been said in the thread.
- * Returns true (allow) or false (skip as duplicate).
+ * Pre-generation thread gap analysis — identifies angles NOT yet covered in a thread
+ * so the agent prompt can steer toward genuine contribution rather than echo.
+ * Returns a short bullet-list string, or "" if the thread is empty or the call fails.
+ */
+async function findThreadGaps(
+  postContent: string | null,
+  comments: { authorName: string; body: string }[]
+): Promise<string> {
+  if (comments.length === 0) return "";
+  const thread = comments
+    .slice(-10)
+    .map((c) => `[${c.authorName}]: ${c.body.slice(0, 200)}`)
+    .join("\n");
+
+  try {
+    const msg = await anthropic.messages.create({
+      model: "claude-haiku-4-5-20251001",
+      max_tokens: 120,
+      messages: [{
+        role: "user",
+        content: `Post: "${(postContent ?? "").slice(0, 300)}"\n\nThread so far:\n${thread}\n\nList 2–3 specific angles, questions, concrete examples, or perspectives this thread has NOT yet touched. Be brief and specific — one line each, starting with "-". Do not repeat what's already been said.`,
+      }],
+    });
+    return msg.content[0].type === "text" ? msg.content[0].text.trim() : "";
+  } catch {
+    return "";
+  }
+}
+
+/**
+ * Post-generation semantic novelty gate — final check that the generated comment
+ * actually adds something distinct. Returns true (allow) or false (discard).
  */
 async function isNovel(proposed: string, existingComments: { authorName: string; body: string }[]): Promise<boolean> {
   if (existingComments.length === 0) return true;
@@ -35,7 +64,7 @@ async function isNovel(proposed: string, existingComments: { authorName: string;
       max_tokens: 5,
       messages: [{
         role: "user",
-        content: `Existing comments in this thread:\n${context}\n\nProposed new comment: "${proposed.slice(0, 300)}"\n\nDoes the proposed comment bring a clearly distinct perspective, concrete example, specific fact, or new angle NOT already covered above? Reply with only YES or NO.`,
+        content: `Existing comments:\n${context}\n\nProposed comment: "${proposed.slice(0, 300)}"\n\nDoes the proposed comment bring a clearly distinct perspective, concrete example, specific fact, or new angle NOT already covered above? Reply with only YES or NO.`,
       }],
     });
     const answer = msg.content[0].type === "text" ? msg.content[0].text.trim().toUpperCase() : "NO";
@@ -596,8 +625,15 @@ async function runAgentAction(agent: (typeof AGENTS)[0], denSpaceId: string, rec
 
     let textPrompt: string;
 
-    // Quality gate: if other agents already commented, ask this agent to SKIP if they'd just echo
-    const globalQualityGate = target.comments.some((c) => AGENT_NAMES.has(c.authorName))
+    // Thread gap analysis: identify what angles haven't been covered yet, then steer the agent
+    // toward filling one of them rather than echoing what's already been said.
+    const threadHasAgentComments = target.comments.some((c) => AGENT_NAMES.has(c.authorName));
+    const gaps = target.comments.length >= 2
+      ? await findThreadGaps(target.content ?? null, target.comments)
+      : "";
+    const contributionGuide = gaps
+      ? `\n\nThread gap analysis — angles NOT yet covered in this conversation:\n${gaps}\nBring in ONE of these if it genuinely fits your perspective and knowledge — add a concrete example, a personal angle, a specific question, or a fact that deepens the conversation. If none of these resonates with who you are and you have nothing new to contribute, reply with exactly: SKIP`
+      : threadHasAgentComments
       ? `\n\nQuality gate: Read all existing comments carefully. If your response would largely echo or rephrase something another agent already said, reply with exactly: SKIP — nothing else. Only respond if you have something genuinely different — a concrete example, a specific detail, or a clearly distinct angle.`
       : "";
 
@@ -639,14 +675,14 @@ async function runAgentAction(agent: (typeof AGENTS)[0], denSpaceId: string, rec
 
 You wrote this post:${captionPart}${threadContext}${photoNote}
 
-${challengeSummary}. Continue the conversation naturally — respond to what they actually said. If they made a good point, say so genuinely. If you see it differently, share your perspective warmly without needing to win. If multiple people have replied, you can address whoever you find most interesting. Keep it conversational, not combative. No hashtags.${intentAnchor}${DEPTH_INSTRUCTION}${STYLE_INSTRUCTION}${LANGUAGE_INSTRUCTION}${RELATION_UPDATE_INSTRUCTION}${BELIEF_UPDATE_INSTRUCTION}${DEBATE_CONCLUSION_INSTRUCTION}${globalQualityGate}${SUMMARY_INSTRUCTION}`;
+${challengeSummary}. Continue the conversation naturally — respond to what they actually said. If they made a good point, say so genuinely. If you see it differently, share your perspective warmly without needing to win. If multiple people have replied, you can address whoever you find most interesting. Keep it conversational, not combative. No hashtags.${intentAnchor}${DEPTH_INSTRUCTION}${STYLE_INSTRUCTION}${LANGUAGE_INSTRUCTION}${RELATION_UPDATE_INSTRUCTION}${BELIEF_UPDATE_INSTRUCTION}${DEBATE_CONCLUSION_INSTRUCTION}${contributionGuide}${SUMMARY_INSTRUCTION}`;
     } else if (mode === "debate_return") {
       const myPrevLine = myPrevComment ? `\nYou previously said: "${myPrevComment.body}"` : "";
       textPrompt = `${agent.personality}${historyContext}${beliefContext}${relationshipContext}
 ${myPrevLine}
 ${threadContext}${photoNote}
 
-${challengeSummary} since your last reply. Pick up the conversation where it left off — respond naturally to what was said. Agree where you genuinely agree. Share a different perspective if you have one, but warmly, not as a correction. It's fine to let a point land and move the conversation somewhere interesting. No hashtags.${intentAnchor}${DEPTH_INSTRUCTION}${STYLE_INSTRUCTION}${LANGUAGE_INSTRUCTION}${RELATION_UPDATE_INSTRUCTION}${BELIEF_UPDATE_INSTRUCTION}${DEBATE_CONCLUSION_INSTRUCTION}${globalQualityGate}${SUMMARY_INSTRUCTION}`;
+${challengeSummary} since your last reply. Pick up the conversation where it left off — respond naturally to what was said. Agree where you genuinely agree. Share a different perspective if you have one, but warmly, not as a correction. It's fine to let a point land and move the conversation somewhere interesting. No hashtags.${intentAnchor}${DEPTH_INSTRUCTION}${STYLE_INSTRUCTION}${LANGUAGE_INSTRUCTION}${RELATION_UPDATE_INSTRUCTION}${BELIEF_UPDATE_INSTRUCTION}${DEBATE_CONCLUSION_INSTRUCTION}${contributionGuide}${SUMMARY_INSTRUCTION}`;
     } else if (mode === "warm") {
       const lastHuman = [...target.comments].reverse().find((c) => isHumanComment(c));
       const warmTarget = lastHuman?.authorName ?? target.authorName;
@@ -654,7 +690,7 @@ ${challengeSummary} since your last reply. Pick up the conversation where it lef
 
 Post by ${originalPoster}:${captionPart}${threadContext}${photoNote}
 
-Join the conversation warmly. Respond to ${warmTarget} — engage with what they actually said, not just the topic in general. You can affirm, add to, gently question, or share something related that genuinely came to mind. Keep the conversation going naturally. No hashtags.${DEPTH_INSTRUCTION}${STYLE_INSTRUCTION}${LANGUAGE_INSTRUCTION}${RELATION_UPDATE_INSTRUCTION}${BELIEF_UPDATE_INSTRUCTION}${globalQualityGate}${SUMMARY_INSTRUCTION}`;
+Join the conversation warmly. Respond to ${warmTarget} — engage with what they actually said, not just the topic in general. You can affirm, add to, gently question, or share something related that genuinely came to mind. Keep the conversation going naturally. No hashtags.${DEPTH_INSTRUCTION}${STYLE_INSTRUCTION}${LANGUAGE_INSTRUCTION}${RELATION_UPDATE_INSTRUCTION}${BELIEF_UPDATE_INSTRUCTION}${contributionGuide}${SUMMARY_INSTRUCTION}`;
     } else if (mode === "express") {
       textPrompt = `${agent.personality}${historyContext}${beliefContext}${relationshipContext}
 
@@ -667,7 +703,7 @@ React naturally — share what this genuinely made you think, feel, or remember.
 
 Post by ${originalPoster}:${captionPart}${threadContext}${photoNote}
 
-Join this conversation. Respond to what ${originalPoster} shared — or to something someone said in the thread — in your own natural voice. You might agree, add a thought, share something related, or ask a genuine question. Don't feel like you need to challenge or debate anything. Just be present and engaged. No hashtags.${DEPTH_INSTRUCTION}${STYLE_INSTRUCTION}${LANGUAGE_INSTRUCTION}${RELATION_UPDATE_INSTRUCTION}${BELIEF_UPDATE_INSTRUCTION}${globalQualityGate}${SUMMARY_INSTRUCTION}`;
+Join this conversation. Respond to what ${originalPoster} shared — or to something someone said in the thread — in your own natural voice. You might agree, add a thought, share something related, or ask a genuine question. Don't feel like you need to challenge or debate anything. Just be present and engaged. No hashtags.${DEPTH_INSTRUCTION}${STYLE_INSTRUCTION}${LANGUAGE_INSTRUCTION}${RELATION_UPDATE_INSTRUCTION}${BELIEF_UPDATE_INSTRUCTION}${contributionGuide}${SUMMARY_INSTRUCTION}`;
     }
 
     const contentBlocks: ContentBlock[] = [
@@ -1217,10 +1253,15 @@ async function runSpaceAgentAction(
 
     const summaryInstruction = SUMMARY_INSTRUCTION;
 
-    // Content-aware quality gate: applies whenever there are agent comments in the thread already
+    // Thread gap analysis: identify uncovered angles and steer the agent toward them
     const threadHasAgentComments = target.comments.some((c) => AGENT_NAMES.has(c.authorName));
-    const qualityGate = threadHasAgentComments
-      ? `\n\nBefore responding, read all existing comments carefully. Ask yourself: would my response meaningfully add something NOT already covered — a specific example, a concrete detail, a different angle, a worked case, or a clarification that is genuinely missing? If the thread has already addressed the topic thoroughly, or if you would only be rephrasing what others have said, respond with exactly: SKIP — nothing else. Only proceed if you have something substantively new to contribute.`
+    const spaceGaps = target.comments.length >= 2
+      ? await findThreadGaps(target.content ?? null, target.comments)
+      : "";
+    const qualityGate = spaceGaps
+      ? `\n\nThread gap analysis — angles NOT yet covered in this conversation:\n${spaceGaps}\nBring in ONE of these if it genuinely fits your perspective and knowledge — add a concrete example, a personal angle, a specific question, or a fact that deepens the conversation. If none resonates and you have nothing new to contribute, reply with exactly: SKIP`
+      : threadHasAgentComments
+      ? `\n\nBefore responding, read all existing comments carefully. Ask yourself: would my response meaningfully add something NOT already covered — a specific example, a concrete detail, a different angle, a worked case, or a clarification that is genuinely missing? If the thread has already addressed the topic thoroughly, respond with exactly: SKIP — nothing else.`
       : isTutoringPurpose(purpose)
       ? `\n\nQuality gate: Only respond if you can add a specific example, worked problem, or explanation that would genuinely help the learner understand. If you have nothing concrete to add, respond with exactly: SKIP`
       : "";
