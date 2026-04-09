@@ -4,7 +4,7 @@ import { useRef, useState } from "react";
 import { useToast } from "@/components/shared/Toast";
 
 interface PDFUploaderProps {
-  onSubmit: (data: { mediaUrl: string; content?: string; fileType: "PDF" | "VIDEO" }) => Promise<void>;
+  onSubmit: (data: { mediaUrl: string; content?: string }) => Promise<void>;
   submitting: boolean;
 }
 
@@ -15,16 +15,9 @@ export function PDFUploader({ onSubmit, submitting }: PDFUploaderProps) {
   const inputRef = useRef<HTMLInputElement>(null);
   const { showToast } = useToast();
 
-  const isWebm = file?.type === "video/webm";
-
   const handleFile = (f: File) => {
-    if (f.type === "video/webm") {
-      if (f.size > 50 * 1024 * 1024) { showToast("Video must be under 50MB", "error"); return; }
-    } else if (f.type === "application/pdf") {
-      if (f.size > 10 * 1024 * 1024) { showToast("PDF must be under 10MB", "error"); return; }
-    } else {
-      showToast("PDFs and .webm videos only", "error"); return;
-    }
+    if (f.type !== "application/pdf") { showToast("PDFs only", "error"); return; }
+    if (f.size > 10 * 1024 * 1024) { showToast("PDF must be under 10MB", "error"); return; }
     setFile(f);
   };
 
@@ -42,7 +35,7 @@ export function PDFUploader({ onSubmit, submitting }: PDFUploaderProps) {
       }
       const { url } = await res.json();
       // Store filename in content if no caption provided
-      await onSubmit({ mediaUrl: url, content: caption || file.name, fileType: file.type === "video/webm" ? "VIDEO" : "PDF" });
+      await onSubmit({ mediaUrl: url, content: caption || file.name });
       setFile(null);
       setCaption("");
     } catch (err) {
@@ -62,7 +55,7 @@ export function PDFUploader({ onSubmit, submitting }: PDFUploaderProps) {
       >
         {file ? (
           <div className="flex items-center gap-3">
-            <span className="text-3xl">{isWebm ? "🎬" : "📄"}</span>
+            <span className="text-3xl">📄</span>
             <div className="flex-1 min-w-0">
               <p className="text-sm font-medium text-gray-800 truncate">{file.name}</p>
               <p className="text-xs text-gray-400">{(file.size / 1024 / 1024).toFixed(1)} MB</p>
@@ -76,14 +69,14 @@ export function PDFUploader({ onSubmit, submitting }: PDFUploaderProps) {
         ) : (
           <div className="text-center text-gray-400 py-6">
             <div className="text-3xl mb-2">📄</div>
-            <p className="text-sm">Click to choose a PDF or .webm video</p>
-            <p className="text-xs mt-1">PDF max 10MB · Video max 50MB</p>
+            <p className="text-sm">Click to choose a PDF</p>
+            <p className="text-xs mt-1">Max 10MB · Page 1 shown as preview in feed</p>
           </div>
         )}
         <input
           ref={inputRef}
           type="file"
-          accept="application/pdf,video/webm"
+          accept="application/pdf"
           className="hidden"
           onChange={(e) => { if (e.target.files?.[0]) handleFile(e.target.files[0]); e.target.value = ""; }}
         />
@@ -102,7 +95,7 @@ export function PDFUploader({ onSubmit, submitting }: PDFUploaderProps) {
         disabled={!file || submitting || uploading}
         className="bg-accent text-white rounded-xl py-2.5 text-sm font-semibold disabled:opacity-40 hover:bg-orange-600 transition-colors"
       >
-        {uploading ? "Uploading…" : submitting ? "Posting…" : isWebm ? "Share Video" : "Share PDF"}
+        {uploading ? "Uploading…" : submitting ? "Posting…" : "Share PDF"}
       </button>
     </form>
   );

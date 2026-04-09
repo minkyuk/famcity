@@ -1419,16 +1419,16 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ ok: true, passive: true });
   }
 
-  // Normal (routine): global knight every 60-min boundary; space agents every 2-hour boundary
+  // Normal (routine): global knight every 2-hour boundary; space agents every 4-hour boundary
   const tasks: Promise<unknown>[] = [];
-  if (minute === 0) {
+  if (minute === 0 && hour % 2 === 0) {
     // Fetch posts once, pick the agent most suited to current context, reuse posts in the turn
     const recentPosts = await fetchRecentPostsGlobal();
     const agentIdx = pickAgentByContext(recentPosts);
     tasks.push(runOneAgentTurn(agentIdx, denSpaceId, recentPosts));
   }
-  if (minute === 0 && hour % 2 === 0) {
-    tasks.push(runAllSpaceAgentTurns(120));
+  if (minute === 0 && hour % 4 === 0) {
+    tasks.push(runAllSpaceAgentTurns(240));
   }
   if (tasks.length === 0) {
     return NextResponse.json({ ok: true, skipped: true, reason: "off-cycle", spaceSessions: activeSpaceSessions.length });
