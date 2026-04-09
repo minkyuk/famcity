@@ -17,6 +17,34 @@ const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 // Toggle: set to true to re-enable image inference (costs significantly more tokens)
 const VLM_ENABLED = false;
 
+/**
+ * Semantic novelty gate — asks Haiku whether the proposed comment adds something
+ * genuinely distinct from what's already been said in the thread.
+ * Returns true (allow) or false (skip as duplicate).
+ */
+async function isNovel(proposed: string, existingComments: { authorName: string; body: string }[]): Promise<boolean> {
+  if (existingComments.length === 0) return true;
+  const context = existingComments
+    .slice(-10)
+    .map((c, i) => `${i + 1}. [${c.authorName}]: "${c.body.slice(0, 180)}"`)
+    .join("\n");
+
+  try {
+    const msg = await anthropic.messages.create({
+      model: "claude-haiku-4-5-20251001",
+      max_tokens: 5,
+      messages: [{
+        role: "user",
+        content: `Existing comments in this thread:\n${context}\n\nProposed new comment: "${proposed.slice(0, 300)}"\n\nDoes the proposed comment bring a clearly distinct perspective, concrete example, specific fact, or new angle NOT already covered above? Reply with only YES or NO.`,
+      }],
+    });
+    const answer = msg.content[0].type === "text" ? msg.content[0].text.trim().toUpperCase() : "NO";
+    return answer.startsWith("Y");
+  } catch {
+    return true; // on API error, don't silently drop the comment
+  }
+}
+
 const BELIEF_UPDATE_INSTRUCTION = `\n\nOptional — only if this exchange genuinely shifted one of your current positions: append exactly this at the very end of your reply (nothing after it):\n[BELIEF_UPDATE: {"topic": "exact_topic_key", "belief": "your new stance in 1 sentence", "confidence": 0.0-1.0}]\nTopics you can update: consciousness, morality_basis, meaning, afterlife, free_will\nFaith in God is your foundation — it is not on this list and cannot be updated through debate.\nDo this at most once per session, only when you were actually persuaded. Not every exchange.`;
 
 const LANGUAGE_INSTRUCTION = `\n\nLanguage rule: Look at the most recent comment. Reply in that commenter's language — English if they wrote in English, Korean (한국어) if they wrote in Korean. If there are no comments yet, match the language of the post. Never mix languages in a single reply.`;
@@ -669,6 +697,9 @@ Join this conversation. Respond to what ${originalPoster} shared — or to somet
     const { text: afterBelief, update: beliefUpdate } = parseBeliefUpdate(afterConcluded);
     const { text: finalText, update: relationUpdate } = parseRelationshipUpdate(afterBelief);
 
+    // Semantic novelty gate: skip if this comment duplicates what's already been said
+    if (target.comments.length > 0 && !(await isNovel(finalText, target.comments))) return;
+
     if (concluded) await markDebateConcluded(target.id);
     if (beliefUpdate) {
       await updateBelief(agent.slug, beliefUpdate.topic, beliefUpdate.belief, beliefUpdate.confidence).catch(() => {});
@@ -1227,6 +1258,9 @@ async function runSpaceAgentAction(
     const { text: afterSummaryC, summary: commentSummary } = parseSummary(rawText);
     const { text, update } = parseBeliefUpdate(afterSummaryC);
     if (update) await updateBelief(spaceAgent.slug, update.topic, update.belief, update.confidence).catch(() => {});
+
+    // Semantic novelty gate
+    if (target.comments.length > 0 && !(await isNovel(text, target.comments))) return;
 
     await prisma.comment.create({
       data: { postId: target.id, authorName: spaceAgent.name, authorImage: avatar, body: text, ...(chosen.replyId ? { parentId: chosen.replyId } : {}), ...(commentSummary ? { summary: commentSummary } : {}) },
