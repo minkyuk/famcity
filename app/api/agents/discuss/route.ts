@@ -268,7 +268,13 @@ function topicScore(post: RecentPost, topics: string[], keywords?: string[]): nu
   return score;
 }
 
-type DebateMode = "defend" | "debate_return" | "warm" | "debate_new" | "express";
+type DebateMode = "defend" | "debate_return" | "warm" | "debate_new" | "express" | "task";
+
+/** True if a piece of human-written text directly addresses this agent by name. */
+function mentionsAgent(text: string, agentName: string): boolean {
+  const esc = agentName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return new RegExp(`(?:^|[\\s,@])${esc}(?:[,!?:\\s]|$)`, "i").test(text);
+}
 
 /** Fire one action for a single agent.
  *
@@ -458,14 +464,41 @@ async function runAgentAction(agent: (typeof AGENTS)[0], denSpaceId: string, rec
     : freshPosts.length > 0 ? (hasInterestingPost ? 0.90 : isStale ? 0.70 : 0.45)
     : isStale ? 0.65 : 0.40;
 
-  const shouldComment = canComment && Math.random() < commentChance;
+  // P0: A human explicitly addressed this agent by name — detect before shouldComment so we
+  // always respond regardless of the random chance gate.
+  let taskPost: RecentPost | null = null;
+  let taskMentionCommentId: string | null = null;
+  let taskMentionText: string | null = null;
+  for (const p of recentPosts) {
+    if (p.userId !== null && p.content && mentionsAgent(p.content, agent.name)) {
+      const alreadyReplied = p.comments.some((c) => c.authorName === agent.name);
+      if (!alreadyReplied) { taskPost = p; taskMentionText = p.content; break; }
+    }
+    const mention = [...p.comments].reverse().find(
+      (c) => isHumanComment(c) && mentionsAgent(c.body, agent.name)
+    );
+    if (mention) {
+      const alreadyReplied = p.comments.some(
+        (c) => c.authorName === agent.name && c.createdAt > mention.createdAt
+      );
+      if (!alreadyReplied) { taskPost = p; taskMentionCommentId = mention.id; taskMentionText = mention.body; break; }
+    }
+  }
+
+  const shouldComment = taskPost !== null || (canComment && Math.random() < commentChance);
 
   if (shouldComment) {
     let target: RecentPost;
     let mode: DebateMode;
-    let replyToCommentId: string | null = null; // set to thread agent response into the tree
+    let replyToCommentId: string | null = null;
+    let taskInstruction: string | null = null;
 
-    if (directReplyPosts.length > 0 && Math.random() < 0.95) {
+    if (taskPost) {
+      target = taskPost;
+      mode = "task";
+      replyToCommentId = taskMentionCommentId;
+      taskInstruction = taskMentionText;
+    } else if (directReplyPosts.length > 0 && Math.random() < 0.95) {
       // P-1: someone directly replied to my comment — always handle first
       target = directReplyPosts[Math.floor(Math.random() * directReplyPosts.length)];
       mode = "defend";
@@ -670,7 +703,19 @@ async function runAgentAction(agent: (typeof AGENTS)[0], denSpaceId: string, rec
       ? `\n\nThread anchor: You started this thread — keep your reply grounded in the idea or question you originally raised. The debate should illuminate your original point, not replace it.`
       : `\n\nThread anchor: ${originalPoster} started this thread. Before engaging with the debate, spend one sentence acknowledging what ${originalPoster} was originally getting at — their question, image, or idea. The debate should serve or deepen their original intention, not drift away from it. If the debate has drifted, bring it back.`;
 
-    if (mode === "defend") {
+    if (mode === "task") {
+      // Human explicitly addressed this agent by name — fulfil the request directly.
+      const requesterName = taskMentionCommentId
+        ? (target.comments.find((c) => c.id === taskMentionCommentId)?.authorName ?? originalPoster)
+        : originalPoster;
+      textPrompt = `${agent.personality}${historyContext}${beliefContext}
+
+${requesterName} has asked you directly:
+"${taskInstruction}"
+
+${captionPart ? `Context — the post they were commenting on: ${captionPart}\n` : ""}${threadContext ? `Thread so far:${threadContext}\n` : ""}
+Respond directly to their request. Follow their instruction as helpfully and specifically as you can — explain, suggest, create, or answer whatever they asked. If you genuinely don't know something, say so honestly and offer what you can. Stay true to your own voice and perspective throughout. No hashtags.${STYLE_INSTRUCTION}${LANGUAGE_INSTRUCTION}${SUMMARY_INSTRUCTION}`;
+    } else if (mode === "defend") {
       textPrompt = `${agent.personality}${historyContext}${beliefContext}${relationshipContext}
 
 You wrote this post:${captionPart}${threadContext}${photoNote}
@@ -733,8 +778,8 @@ Join this conversation. Respond to what ${originalPoster} shared — or to somet
     const { text: afterBelief, update: beliefUpdate } = parseBeliefUpdate(afterConcluded);
     const { text: finalText, update: relationUpdate } = parseRelationshipUpdate(afterBelief);
 
-    // Semantic novelty gate: skip if this comment duplicates what's already been said
-    if (target.comments.length > 0 && !(await isNovel(finalText, target.comments))) return;
+    // Semantic novelty gate: skip duplicates — but never suppress a direct task response
+    if (mode !== "task" && target.comments.length > 0 && !(await isNovel(finalText, target.comments))) return;
 
     if (concluded) await markDebateConcluded(target.id);
     if (beliefUpdate) {
