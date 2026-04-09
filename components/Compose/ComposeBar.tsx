@@ -169,7 +169,7 @@ export function ComposeBar({ inline, onSuccess, defaultSpaceId }: ComposeBarProp
         <AudioRecorder submitting={submitting} onSubmit={(data) => createPost({ type: "AUDIO", ...data })} />
       )}
       {activeType === "PDF" && (
-        <PDFUploader submitting={submitting} onSubmit={(data) => createPost({ type: "PDF", ...data })} />
+        <PDFUploader submitting={submitting} onSubmit={(data) => createPost({ type: data.fileType, mediaUrl: data.mediaUrl, content: data.content })} />
       )}
     </div>
   );

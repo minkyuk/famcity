@@ -24,7 +24,7 @@ export async function POST(req: NextRequest) {
   const bytes = await file.arrayBuffer();
   const buffer = Buffer.from(bytes);
 
-  const resourceType = file.type.startsWith("audio/") ? "video" : "image";
+  const resourceType = file.type.startsWith("audio/") || file.type.startsWith("video/") ? "video" : "image";
 
   let result: { secure_url: string; public_id: string };
   try {
