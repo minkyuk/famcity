@@ -832,9 +832,20 @@ async function runAgentEmojiReactions(agent: (typeof AGENTS)[0], recentPosts: Re
 }
 
 async function fetchRecentPostsGlobal(): Promise<RecentPost[]> {
+  // Exclude spaces that opted out of the global feed (e.g. Family News) — those get
+  // their own controlled commentary and don't need knight pile-ons
+  const excludedSpaces = await prisma.space.findMany({
+    where: { excludeFromAll: true },
+    select: { id: true },
+  });
+  const excludedIds = excludedSpaces.map((s) => s.id);
+
   return prisma.post.findMany({
     take: 100,
-    where: { isPrivate: false },
+    where: {
+      isPrivate: false,
+      ...(excludedIds.length > 0 ? { NOT: { spaceId: { in: excludedIds } } } : {}),
+    },
     orderBy: { createdAt: "desc" },
     select: {
       id: true,

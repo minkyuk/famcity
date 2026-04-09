@@ -271,8 +271,9 @@ No hashtags. Do not start with "I". Do not repeat the headline verbatim. No aste
         data: { authorName: posterAgent.name, authorImage: avatar, spaceId, content: rawText, type: "TEXT" },
       });
 
-      // Add vote-reason comments from agents who voted for this story (excluding the poster)
-      const commenters = entry.voters.filter((v) => v.name !== posterAgent!.name).slice(0, 3);
+      // Add one vote-reason comment from the top voter who didn't post (keeps it from feeling empty
+      // without generating duplicate pile-on commentary)
+      const commenters = entry.voters.filter((v) => v.name !== posterAgent!.name).slice(0, 1);
       for (const commenter of commenters) {
         const commenterAgent = AGENTS.find((a) => a.slug === commenter.slug);
         if (!commenterAgent) continue;
