@@ -39,9 +39,7 @@ function pdfThumbnail(url: string): string {
 }
 
 function pdfDownloadUrl(url: string): string {
-  // fl_attachment forces Cloudinary to serve the original PDF bytes with correct content-type
-  // Without this, image-resource PDFs are served as the first-page JPEG
-  return url.replace("/upload/", "/upload/fl_attachment/");
+  return `/api/media/download?url=${encodeURIComponent(url)}`;
 }
 
 interface PostCardProps {
@@ -362,8 +360,7 @@ export function PostCard({ post, currentUserId, currentUserName, isAdmin, onDele
           />
           <a
             href={pdfDownloadUrl(post.mediaUrl)}
-            target="_blank"
-            rel="noopener noreferrer"
+            download
             className="flex items-center gap-2 text-sm text-orange-600 hover:text-orange-700 font-medium"
           >
             📄 Download PDF
