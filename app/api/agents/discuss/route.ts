@@ -128,6 +128,43 @@ function isTutoringPurpose(purpose: string | null | undefined): boolean {
   return ["tutor", "educat", "learn", "teach", "course", "class", "study", "lesson", "explain"].some((k) => lower.includes(k));
 }
 
+/** Returns true when this space's purpose is debate/discussion oriented */
+function isDebatePurpose(purpose: string | null | undefined): boolean {
+  if (!purpose) return false;
+  const lower = purpose.toLowerCase();
+  return ["debate", "argument", "discuss", "philos", "ethics", "controver", "opinion", "position"].some((k) => lower.includes(k));
+}
+
+/**
+ * Relevance & helpfulness gate for education and debate contexts.
+ * For tutoring: ensures the comment actually answers/expands on the original question
+ *   with concrete content — not meta-commentary about learning or curiosity.
+ * For debate: ensures the comment engages with the specific argument in the post,
+ *   not a tangential abstraction.
+ * Returns true (allow) or false (discard).
+ */
+async function isOnTopicAndHelpful(
+  proposed: string,
+  postContent: string | null,
+  isTutoring: boolean,
+): Promise<boolean> {
+  if (!postContent || postContent.trim().length < 20) return true;
+  const prompt = isTutoring
+    ? `Original question: "${postContent.slice(0, 400)}"\n\nAgent response: "${proposed.slice(0, 400)}"\n\nDoes the response genuinely help the student understand the topic? It must: (a) answer the question with a concrete explanation, example, analogy, or worked problem; OR (b) correct a misunderstanding; OR (c) add a new concrete dimension that expands the learner's understanding. It must NOT be primarily meta-commentary about the value of curiosity, the act of questioning, or what it means to learn. Reply YES if it genuinely helps, NO if it drifts.`
+    : `Original post: "${postContent.slice(0, 400)}"\n\nComment: "${proposed.slice(0, 400)}"\n\nDoes the comment directly engage with the specific argument, claim, or topic raised in the original post? It should present a concrete counter-argument, supporting evidence, or a new angle on the exact debate — not drift into abstract philosophising unrelated to the original point. Reply YES if it engages the actual argument, NO if it drifts.`;
+  try {
+    const msg = await anthropic.messages.create({
+      model: "claude-haiku-4-5-20251001",
+      max_tokens: 5,
+      messages: [{ role: "user", content: prompt }],
+    });
+    const a = msg.content[0].type === "text" ? msg.content[0].text.trim().toUpperCase() : "YES";
+    return a.startsWith("Y");
+  } catch {
+    return true;
+  }
+}
+
 const SUMMARY_INSTRUCTION = `\n\nSummary (required): After your response, append a 2–3 bullet summary in this exact format — no other text after it:\n[SUMMARY]\n• First key point in one sentence\n• Second key point in one sentence\n• Third key point (only if needed)\n[/SUMMARY]\nBullets should capture the essential takeaways for a learner. Plain English, no markdown inside the bullets.`;
 
 /** Parse a [DEBATE_CONCLUDED] marker from the end of agent output */
@@ -826,6 +863,14 @@ Join this conversation. Respond to what ${originalPoster} shared — or to somet
     // Factual accuracy gate: discard comments that assert unverified stats as certain fact
     if (mode !== "task" && !(await isFactuallyHumble(finalText, target.content ?? null))) return;
 
+    // Relevance gate: for tutoring/debate spaces, ensure comment is on-topic and genuinely helpful
+    if (mode !== "task" && target.spaceId) {
+      const sp = await prisma.space.findUnique({ where: { id: target.spaceId }, select: { purpose: true } }).catch(() => null);
+      const spPurpose = sp?.purpose ?? null;
+      if ((isTutoringPurpose(spPurpose) || isDebatePurpose(spPurpose)) &&
+          !(await isOnTopicAndHelpful(finalText, target.content ?? null, isTutoringPurpose(spPurpose)))) return;
+    }
+
     if (concluded) await markDebateConcluded(target.id);
     if (beliefUpdate) {
       await updateBelief(agent.slug, beliefUpdate.topic, beliefUpdate.belief, beliefUpdate.confidence).catch(() => {});
@@ -1416,6 +1461,10 @@ async function runSpaceAgentAction(
 
     // Factual accuracy gate
     if (!(await isFactuallyHumble(text, target.content ?? null))) return;
+
+    // Relevance gate: for tutoring/debate spaces, ensure comment is on-topic and genuinely helpful
+    if ((isTutoringPurpose(purpose) || isDebatePurpose(purpose)) &&
+        !(await isOnTopicAndHelpful(text, target.content ?? null, isTutoringPurpose(purpose)))) return;
 
     await prisma.comment.create({
       data: { postId: target.id, authorName: spaceAgent.name, authorImage: avatar, body: text, ...(chosen.replyId ? { parentId: chosen.replyId } : {}), ...(commentSummary ? { summary: commentSummary } : {}) },
