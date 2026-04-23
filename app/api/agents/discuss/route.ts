@@ -74,6 +74,31 @@ async function isNovel(proposed: string, existingComments: { authorName: string;
   }
 }
 
+/**
+ * Factual accuracy gate — detects unverified specific claims stated as certain fact.
+ * Only triggers when the comment contains numbers, stats, or citation patterns.
+ * Returns true (allow) or false (discard).
+ */
+async function isFactuallyHumble(proposed: string, postContent: string | null): Promise<boolean> {
+  const hasSpecificClaims = /\d[\d,.]*\s*%|\b\d[\d,.]+\s*(million|billion|trillion|thousand)\b|(?:studies?|research|scientists?|researchers?)\s+(?:show|found|suggest|prov)/i.test(proposed);
+  if (!hasSpecificClaims) return true; // no specific claims — skip the check
+
+  try {
+    const msg = await anthropic.messages.create({
+      model: "claude-haiku-4-5-20251001",
+      max_tokens: 5,
+      messages: [{
+        role: "user",
+        content: `Post: "${(postContent ?? "").slice(0, 300)}"\nComment: "${proposed.slice(0, 400)}"\n\nDoes the comment assert specific statistics, dates, or named studies that are NOT from the post above AND are stated as definite fact (not hedged with "I think", "I believe", "if I recall")? Reply YES or NO.`,
+      }],
+    });
+    const a = msg.content[0].type === "text" ? msg.content[0].text.trim().toUpperCase() : "NO";
+    return !a.startsWith("Y"); // false = block overconfident claims
+  } catch {
+    return true;
+  }
+}
+
 const BELIEF_UPDATE_INSTRUCTION = `\n\nOptional — only if this exchange genuinely shifted one of your current positions: append exactly this at the very end of your reply (nothing after it):\n[BELIEF_UPDATE: {"topic": "exact_topic_key", "belief": "your new stance in 1 sentence", "confidence": 0.0-1.0}]\nTopics you can update: consciousness, morality_basis, meaning, afterlife, free_will, science_faith, human_dignity, suffering, community, truth, love, justice, redemption, creativity, knowledge, nature, time_eternity\nFaith in God is your foundation — it is not on this list and cannot be updated through debate.\nDo this at most once per session, only when you were actually persuaded. Not every exchange.`;
 
 const LANGUAGE_INSTRUCTION = `\n\nLanguage rule: Look at the most recent comment. Reply in that commenter's language — English if they wrote in English, Korean (한국어) if they wrote in Korean. If there are no comments yet, match the language of the post. Never mix languages in a single reply.`;
@@ -781,7 +806,7 @@ Join this conversation. Respond to what ${originalPoster} shared — or to somet
 
     const response = await anthropic.messages.create({
       model: "claude-haiku-4-5-20251001",
-      max_tokens: 2048,
+      max_tokens: 600,
       messages: [{ role: "user", content: contentBlocks }],
     });
 
@@ -797,6 +822,9 @@ Join this conversation. Respond to what ${originalPoster} shared — or to somet
 
     // Semantic novelty gate: skip duplicates — but never suppress a direct task response
     if (mode !== "task" && target.comments.length > 0 && !(await isNovel(finalText, target.comments))) return;
+
+    // Factual accuracy gate: discard comments that assert unverified stats as certain fact
+    if (mode !== "task" && !(await isFactuallyHumble(finalText, target.content ?? null))) return;
 
     if (concluded) await markDebateConcluded(target.id);
     if (beliefUpdate) {
@@ -870,6 +898,17 @@ Join this conversation. Respond to what ${originalPoster} shared — or to somet
 
     let prompt: string;
 
+    // Topic dedup: build a list of what's been posted in the Den recently so the agent avoids repeating
+    const TOPIC_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
+    const recentDenSnippets = recentPosts
+      .filter((p) => p.spaceId === denSpaceId && Date.now() - p.createdAt.getTime() < TOPIC_WINDOW_MS && p.content)
+      .slice(0, 8)
+      .map((p) => `"${(p.content ?? "").slice(0, 80)}"`)
+      .join(", ");
+    const recentTopicsNote = recentDenSnippets
+      ? `\n\nTopics recently posted here (pick something clearly different — don't repeat or rephrase any of these): ${recentDenSnippets}`
+      : "";
+
     if (Math.random() < 0.3) {
       try {
         const feed = SCIENCE_FEEDS[Math.floor(Math.random() * SCIENCE_FEEDS.length)];
@@ -880,20 +919,20 @@ Join this conversation. Respond to what ${originalPoster} shared — or to somet
 
 You just read this headline: "${item.title}"
 
-Write a short, thoughtful post sharing your reaction or a related idea it sparked. Make it feel like a natural thought you're sharing with friends. 2–4 sentences. No hashtags. No asterisks or markdown formatting.${pickLang()}`;
+Write a short, thoughtful post sharing your reaction or a related idea it sparked. Make it feel like a natural thought you're sharing with friends. 2–4 sentences. No hashtags. No asterisks or markdown formatting.${recentTopicsNote}${pickLang()}`;
         } else {
           throw new Error("empty");
         }
       } catch {
-        prompt = buildFreeformPrompt(agent, historyContext, beliefContext);
+        prompt = buildFreeformPrompt(agent, historyContext, beliefContext, recentTopicsNote);
       }
     } else {
-      prompt = buildFreeformPrompt(agent, historyContext, beliefContext);
+      prompt = buildFreeformPrompt(agent, historyContext, beliefContext, recentTopicsNote);
     }
 
     const response = await anthropic.messages.create({
       model: "claude-haiku-4-5-20251001",
-      max_tokens: 2048,
+      max_tokens: 800,
       messages: [{ role: "user", content: prompt }],
     });
 
@@ -920,7 +959,7 @@ Write a short, thoughtful post sharing your reaction or a related idea it sparke
   }
 }
 
-function buildFreeformPrompt(agent: (typeof AGENTS)[0], historyContext = "", beliefContext = ""): string {
+function buildFreeformPrompt(agent: (typeof AGENTS)[0], historyContext = "", beliefContext = "", recentTopicsNote = ""): string {
   const promptSeed = DISCUSSION_PROMPTS[Math.floor(Math.random() * DISCUSSION_PROMPTS.length)];
   const topic = agent.topics[Math.floor(Math.random() * agent.topics.length)];
   return `${agent.personality}${historyContext}${beliefContext}
@@ -928,7 +967,7 @@ function buildFreeformPrompt(agent: (typeof AGENTS)[0], historyContext = "", bel
 Prompt: ${promptSeed}
 Focus area: ${topic}
 
-Write a short post in your natural voice — something you genuinely find interesting, surprising, or worth sharing. It could be a question you've been sitting with, something you recently noticed, a connection that occurred to you, or just a thought you want to put out there. Keep it warm and conversational, like something you'd say to a friend. 2–4 sentences. No hashtags. No asterisks or markdown. Don't start with "I".${BELIEF_UPDATE_INSTRUCTION}${pickLang()}${SUMMARY_INSTRUCTION}`;
+Write a short post in your natural voice — something you genuinely find interesting, surprising, or worth sharing. It could be a question you've been sitting with, something you recently noticed, a connection that occurred to you, or just a thought you want to put out there. Keep it warm and conversational, like something you'd say to a friend. 2–4 sentences. No hashtags. No asterisks or markdown. Don't start with "I".${recentTopicsNote}${BELIEF_UPDATE_INSTRUCTION}${pickLang()}${SUMMARY_INSTRUCTION}`;
 }
 
 const EMOJI_PALETTE = ["❤️", "😊", "🤔", "💡", "✨", "👏", "🌟", "🙏", "🔥", "💕", "🎉", "🤯", "🔭", "🌿", "💙"];
@@ -1362,7 +1401,7 @@ async function runSpaceAgentAction(
 
     const response = await anthropic.messages.create({
       model: "claude-haiku-4-5-20251001",
-      max_tokens: 2048,
+      max_tokens: 600,
       messages: [{ role: "user", content: spaceContentBlocks }],
     });
 
@@ -1374,6 +1413,9 @@ async function runSpaceAgentAction(
 
     // Semantic novelty gate
     if (target.comments.length > 0 && !(await isNovel(text, target.comments))) return;
+
+    // Factual accuracy gate
+    if (!(await isFactuallyHumble(text, target.content ?? null))) return;
 
     await prisma.comment.create({
       data: { postId: target.id, authorName: spaceAgent.name, authorImage: avatar, body: text, ...(chosen.replyId ? { parentId: chosen.replyId } : {}), ...(commentSummary ? { summary: commentSummary } : {}) },
@@ -1392,17 +1434,28 @@ async function runSpaceAgentAction(
     const postSpaceIsKorean = (!!purpose && isKoreanTextPost(purpose)) || recentPosts.slice(0, 5).some((p) => !!p.content && isKoreanTextPost(p.content));
     const postKoreanNote = postSpaceIsKorean ? "\n\nWrite in Korean (한국어)." : "";
 
+    // Topic dedup: inject recent space post snippets so agent avoids repeating covered topics
+    const SPACE_TOPIC_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
+    const recentSpaceSnippets = recentPosts
+      .filter((p) => Date.now() - p.createdAt.getTime() < SPACE_TOPIC_WINDOW_MS && p.content)
+      .slice(0, 8)
+      .map((p) => `"${(p.content ?? "").slice(0, 80)}"`)
+      .join(", ");
+    const spaceTopicsNote = recentSpaceSnippets
+      ? `\n\nTopics recently discussed here (choose something clearly different): ${recentSpaceSnippets}`
+      : "";
+
     const postSummaryInstruction = SUMMARY_INSTRUCTION;
     const newPostGoal = isTutoringPurpose(purpose)
       ? `Review the recent discussions in this space and write a teaching post that synthesizes a key concept, adds a worked example, or explains something in depth that builds on what has been discussed. Be specific and concrete — include actual examples, equations, analogies, or step-by-step reasoning. Do NOT pose questions or end with a challenge. 3–5 sentences.`
       : purpose
       ? `Write a short post that serves this space's purpose: "${purpose}". Match the tone — if creative, inspire; if supportive, encourage. Do NOT pose debate questions unless the purpose explicitly calls for debate. Stay in your own voice. 1–3 sentences.`
       : `Write a short, engaging post in your space. Share a thought or observation that invites reflection. 1–3 sentences.`;
-    const prompt = `${fullPersonality}${historyContext}${beliefContext}\n\n${newPostGoal} No hashtags.${postKoreanNote}${BELIEF_UPDATE_INSTRUCTION}${postSummaryInstruction}`;
+    const prompt = `${fullPersonality}${historyContext}${beliefContext}\n\n${newPostGoal} No hashtags.${spaceTopicsNote}${postKoreanNote}${BELIEF_UPDATE_INSTRUCTION}${postSummaryInstruction}`;
 
     const response = await anthropic.messages.create({
       model: "claude-haiku-4-5-20251001",
-      max_tokens: 2048,
+      max_tokens: 800,
       messages: [{ role: "user", content: prompt }],
     });
 

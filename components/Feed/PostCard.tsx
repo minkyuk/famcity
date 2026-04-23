@@ -372,6 +372,30 @@ export function PostCard({ post, currentUserId, currentUserName, isAdmin, onDele
         <p className="text-[10px] text-gray-300 text-right">via 👥 {post.mutualSpace}</p>
       )}
 
+      {(() => {
+        const meta = post.metadata as { votes?: number; qualityGated?: boolean; deduplicated?: boolean } | null;
+        if (!meta) return null;
+        return (
+          <div className="flex flex-wrap gap-1.5">
+            {meta.votes != null && (
+              <span className="text-[10px] text-gray-400 bg-gray-50 border border-gray-100 rounded-full px-2 py-0.5">
+                🗳️ {meta.votes} vote{meta.votes !== 1 ? "s" : ""}
+              </span>
+            )}
+            {meta.qualityGated && (
+              <span className="text-[10px] text-green-500 bg-green-50 border border-green-100 rounded-full px-2 py-0.5">
+                ✓ quality-checked
+              </span>
+            )}
+            {meta.deduplicated && (
+              <span className="text-[10px] text-blue-400 bg-blue-50 border border-blue-100 rounded-full px-2 py-0.5">
+                ✓ deduplicated
+              </span>
+            )}
+          </div>
+        );
+      })()}
+
       <ReactionBar postId={post.id} reactions={post.reactions} currentUserName={currentUserName} />
       <CommentThread postId={post.id} initialComments={post.comments} currentUserId={currentUserId} currentUserName={currentUserName} isAdmin={isAdmin} spaceId={post.spaceId} />
     </article>

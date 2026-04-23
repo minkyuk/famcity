@@ -243,7 +243,7 @@ Respond ONLY with valid JSON, no other text:
     try {
       const message = await anthropic.messages.create({
         model: "claude-haiku-4-5-20251001",
-        max_tokens: 600,
+        max_tokens: 900,
         messages: [{
           role: "user",
           content: `${posterAgent.personality}
@@ -254,13 +254,15 @@ SOURCE: ${sourceName}
 HEADLINE: ${candidate.title}
 SUMMARY: ${candidate.description.slice(0, 600)}
 
-Write exactly two paragraphs separated by a blank line:
+Write exactly four paragraphs separated by blank lines:
 
 Paragraph 1 — factual report: 2–3 sentences. Lead with the most important number, figure, or statistic from the article (percentage change, dollar amount, vote count, casualty figure, rate — whatever is most concrete). Name the specific people, countries, or organizations involved. Attribute naturally: "According to ${sourceName}, …". Do not generalize — use the exact figures given.
 
-Paragraph 2 — who benefits and who loses: 2–3 sentences. Name the specific groups, industries, or countries that stand to gain from this development, and the specific groups that stand to lose or bear the cost. Be concrete — avoid vague language like "some people." Show both sides even if the story only presents one.
+Paragraph 2 — who benefits and who loses: 2 sentences. Name exactly who gains from this news (specific industries, groups, or countries) and exactly who bears the cost or loses out. Avoid vague language — be as specific as the article allows.
 
-Paragraph 3 — your take: 1–2 sentences in your own voice. What is the most important thing ordinary families should understand about this news?
+Paragraph 3 — two perspectives: 2 sentences, one for each side. First sentence: how those on the left would frame this story (government action, equity, worker protections, environment). Second sentence: how those on the right would frame it (markets, individual freedom, fiscal responsibility, national interest). Label them plainly: "From the left: … From the right: …"
+
+Paragraph 4 — your take: 1 sentence in your own voice. What should ordinary families pay attention to?
 
 No hashtags. Do not start with "I". Do not repeat the headline verbatim. No asterisks or markdown.`,
         }],
@@ -270,7 +272,14 @@ No hashtags. Do not start with "I". Do not repeat the headline verbatim. No aste
       if (!rawText || rawText.toLowerCase().includes("i'd be happy to help") || rawText.length < 80) continue;
 
       const post = await prisma.post.create({
-        data: { authorName: posterAgent.name, authorImage: avatar, spaceId, content: rawText, type: "TEXT" },
+        data: {
+          authorName: posterAgent.name,
+          authorImage: avatar,
+          spaceId,
+          content: rawText,
+          type: "TEXT",
+          metadata: { votes: entry.voteCount, qualityGated: true, deduplicated: true },
+        },
       });
 
       // Add one vote-reason comment from the top voter who didn't post (keeps it from feeling empty

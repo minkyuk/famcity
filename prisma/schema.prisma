@@ -126,6 +126,7 @@ model Post {
   space       Space?        @relation(fields: [spaceId], references: [id], onDelete: Cascade)
   content     String?
   summary     String?       @db.Text  // 2-3 bullet key-points for tutoring/education spaces
+  metadata    Json?         // agent-generated metadata: { votes?, qualityGated?, deduplicated? }
   type        PostType
   isPrivate   Boolean       @default(false)
   mediaUrl    String?       // used for YOUTUBE and AUDIO
