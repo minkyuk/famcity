@@ -8,13 +8,19 @@ export async function GET(req: NextRequest) {
   }
 
   const cloudName = process.env.CLOUDINARY_CLOUD_NAME;
-  if (!cloudName || !url.startsWith(`https://res.cloudinary.com/${cloudName}/`)) {
+  if (!cloudName) {
+    return NextResponse.json({ error: "Server misconfiguration" }, { status: 500 });
+  }
+
+  // Accept any resource_type path (image/raw/video) and follow redirects
+  const pattern = new RegExp(`^https?://res\\.cloudinary\\.com/${cloudName}/`);
+  if (!pattern.test(url)) {
     return NextResponse.json({ error: "Invalid URL" }, { status: 400 });
   }
 
   let upstream: Response;
   try {
-    upstream = await fetch(url);
+    upstream = await fetch(url, { redirect: "follow" });
   } catch {
     return NextResponse.json({ error: "Failed to fetch file" }, { status: 502 });
   }
@@ -23,10 +29,15 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: "File not found" }, { status: upstream.status });
   }
 
-  const rawFilename = url.split("/").pop() ?? "document.pdf";
-  const filename = decodeURIComponent(rawFilename);
+  // Buffer the entire body — more reliable than streaming in serverless environments
+  const buffer = await upstream.arrayBuffer();
 
-  return new NextResponse(upstream.body, {
+  // Derive filename from the URL path, stripping any query params
+  const pathPart = url.split("?")[0];
+  const rawFilename = pathPart.split("/").pop() ?? "document.pdf";
+  const filename = decodeURIComponent(rawFilename).replace(/"/g, "");
+
+  return new NextResponse(buffer, {
     headers: {
       "Content-Type": "application/pdf",
       "Content-Disposition": `attachment; filename="${filename}"`,
