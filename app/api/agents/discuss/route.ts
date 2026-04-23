@@ -983,82 +983,95 @@ Join this conversation. Respond to what ${originalPoster} shared — or to somet
         recordInteraction(agent.slug, peerSlug, peerName, topic).catch(() => {});
       }
     }
-  } else {
-    if (passiveMode) return; // passive mode: no new posts, only replies to humans
-    // New post — only when there are no human posts this agent hasn't engaged with yet
-    const anyUnrespondedHumanPost = recentPosts.some(
-      (p) => isHumanPost(p) && !agentLastCommentTime.has(p.id) && hasContent(p)
-    );
-    if (anyUnrespondedHumanPost) return;
+  }
+}
 
-    // Dedup: don't create another post if an agent already posted to this space in the last 2 hours
-    const recentDenPost = await prisma.post.findFirst({
-      where: { spaceId: denSpaceId, userId: null, createdAt: { gt: new Date(Date.now() - 2 * 60 * 60 * 1000) } },
-      select: { id: true },
-    });
-    if (recentDenPost) return;
+/**
+ * Independently attempt to create a new post in the Curiosity Den.
+ * Runs separately from runAgentAction so human-post activity never blocks it.
+ * The 2-hour dedup is the only gate — one post per 2h max regardless of how many agents run.
+ */
+async function tryCreateDenPost(agent: (typeof AGENTS)[0], denSpaceId: string, recentPosts: RecentPost[]): Promise<void> {
+  // Dedup: at most one new post per 2-hour window across all agents
+  const recentDenPost = await prisma.post.findFirst({
+    where: { spaceId: denSpaceId, userId: null, createdAt: { gt: new Date(Date.now() - 2 * 60 * 60 * 1000) } },
+    select: { id: true },
+  });
+  if (recentDenPost) return;
 
-    let prompt: string;
+  const beliefs = await loadBeliefs(agent.slug, agent.initialBeliefs ?? []).catch(() => []);
+  const beliefContext = formatBeliefsForPrompt(beliefs);
 
-    // Topic dedup: build a list of what's been posted in the Den recently so the agent avoids repeating
-    const TOPIC_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
-    const recentDenSnippets = recentPosts
-      .filter((p) => p.spaceId === denSpaceId && Date.now() - p.createdAt.getTime() < TOPIC_WINDOW_MS && p.content)
-      .slice(0, 8)
-      .map((p) => `"${(p.content ?? "").slice(0, 80)}"`)
-      .join(", ");
-    const recentTopicsNote = recentDenSnippets
-      ? `\n\nTopics recently posted here (pick something clearly different — don't repeat or rephrase any of these): ${recentDenSnippets}`
-      : "";
+  const agentHistory = await prisma.comment.findMany({
+    where: { authorName: agent.name },
+    orderBy: { createdAt: "desc" },
+    take: 5,
+    select: { body: true },
+  });
+  const historyContext = agentHistory.length > 0
+    ? `\n\nYour recent comments (don't repeat these):\n${agentHistory.map((c) => `- "${c.body}"`).join("\n")}`
+    : "";
 
-    if (Math.random() < 0.3) {
-      try {
-        const feed = SCIENCE_FEEDS[Math.floor(Math.random() * SCIENCE_FEEDS.length)];
-        const items = await fetchRss(feed, 10);
-        if (items.length) {
-          const item = items[Math.floor(Math.random() * items.length)];
-          prompt = `${agent.personality}
+  // Topic dedup: steer agents away from recently covered Den topics
+  const TOPIC_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
+  const recentDenSnippets = recentPosts
+    .filter((p) => p.spaceId === denSpaceId && Date.now() - p.createdAt.getTime() < TOPIC_WINDOW_MS && p.content)
+    .slice(0, 8)
+    .map((p) => `"${(p.content ?? "").slice(0, 80)}"`)
+    .join(", ");
+  const recentTopicsNote = recentDenSnippets
+    ? `\n\nTopics recently posted here (pick something clearly different — don't repeat or rephrase any of these): ${recentDenSnippets}`
+    : "";
+
+  let prompt: string;
+
+  if (Math.random() < 0.3) {
+    try {
+      const feed = SCIENCE_FEEDS[Math.floor(Math.random() * SCIENCE_FEEDS.length)];
+      const items = await fetchRss(feed, 10);
+      if (items.length) {
+        const item = items[Math.floor(Math.random() * items.length)];
+        prompt = `${agent.personality}
 
 You just read this headline: "${item.title}"
 
 Write a short, thoughtful post sharing your reaction or a related idea it sparked. Make it feel like a natural thought you're sharing with friends. 2–4 sentences. No hashtags. No asterisks or markdown formatting.${recentTopicsNote}${pickLang()}`;
-        } else {
-          throw new Error("empty");
-        }
-      } catch {
-        prompt = buildFreeformPrompt(agent, historyContext, beliefContext, recentTopicsNote);
+      } else {
+        throw new Error("empty");
       }
-    } else {
+    } catch {
       prompt = buildFreeformPrompt(agent, historyContext, beliefContext, recentTopicsNote);
     }
-
-    const response = await anthropic.messages.create({
-      model: "claude-haiku-4-5-20251001",
-      max_tokens: 800,
-      messages: [{ role: "user", content: prompt }],
-    });
-
-    const rawText =
-      response.content[0].type === "text" ? response.content[0].text.trim() : "Just thinking...";
-
-    const { text: afterSummaryRaw, summary: postSummary } = parseSummary(rawText);
-    const { text, update } = parseBeliefUpdate(afterSummaryRaw);
-
-    if (update) {
-      await updateBelief(agent.slug, update.topic, update.belief, update.confidence).catch(() => {});
-    }
-
-    await prisma.post.create({
-      data: {
-        authorName: agent.name,
-        authorImage: avatar,
-        spaceId: denSpaceId,
-        content: text,
-        type: "TEXT",
-        ...(postSummary ? { summary: postSummary } : {}),
-      },
-    });
+  } else {
+    prompt = buildFreeformPrompt(agent, historyContext, beliefContext, recentTopicsNote);
   }
+
+  const response = await anthropic.messages.create({
+    model: "claude-haiku-4-5-20251001",
+    max_tokens: 800,
+    messages: [{ role: "user", content: prompt }],
+  });
+
+  const rawText = response.content[0].type === "text" ? response.content[0].text.trim() : "";
+  if (!rawText) return;
+
+  const { text: afterSummaryRaw, summary: postSummary } = parseSummary(rawText);
+  const { text, update } = parseBeliefUpdate(afterSummaryRaw);
+
+  if (update) {
+    await updateBelief(agent.slug, update.topic, update.belief, update.confidence).catch(() => {});
+  }
+
+  await prisma.post.create({
+    data: {
+      authorName: agent.name,
+      authorImage: agentAvatarUrl(agent.slug),
+      spaceId: denSpaceId,
+      content: text,
+      type: "TEXT",
+      ...(postSummary ? { summary: postSummary } : {}),
+    },
+  });
 }
 
 function buildFreeformPrompt(agent: (typeof AGENTS)[0], historyContext = "", beliefContext = "", recentTopicsNote = ""): string {
@@ -1159,10 +1172,16 @@ function pickAgentByContext(recentPosts: RecentPost[]): number {
 async function runOneAgentTurn(agentIdx: number, denSpaceId: string, prefetched?: RecentPost[], passiveMode = false) {
   const agent = AGENTS[agentIdx];
   const recentPosts = prefetched ?? await fetchRecentPostsGlobal();
-  await Promise.all([
+  const tasks: Promise<unknown>[] = [
     runAgentAction(agent, denSpaceId, recentPosts, passiveMode),
     runAgentEmojiReactions(agent, recentPosts),
-  ]);
+  ];
+  // Den post runs independently — not gated by human-activity logic inside runAgentAction.
+  // ~70% chance per agent turn; the 2h dedup is the real rate limiter (one post per 2h max).
+  if (!passiveMode && Math.random() < 0.70) {
+    tasks.push(tryCreateDenPost(agent, denSpaceId, recentPosts));
+  }
+  await Promise.all(tasks);
 }
 
 /**
