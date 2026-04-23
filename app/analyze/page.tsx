@@ -43,11 +43,20 @@ export default function AnalyzePage() {
     if (status === "unauthenticated") router.replace("/");
   }, [status, router]);
 
+  const refreshCredits = () => {
+    if (!session) return;
+    fetch("/api/credits").then((r) => r.json()).then((d) => setCredits(d.credits ?? null)).catch(() => {});
+  };
+
   useEffect(() => {
-    if (session) {
-      fetch("/api/credits").then((r) => r.json()).then((d) => setCredits(d.credits ?? null));
-    }
-  }, [session, messages.length]);
+    if (session) refreshCredits();
+  }, [session]);
+
+  useEffect(() => {
+    const handler = () => refreshCredits();
+    window.addEventListener("credits-changed", handler);
+    return () => window.removeEventListener("credits-changed", handler);
+  }, [session]);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -171,6 +180,9 @@ export default function AnalyzePage() {
         if (last?.role === "assistant") next[next.length - 1] = { ...last, streaming: false };
         return next;
       });
+
+      // Refresh credit balance after spending
+      window.dispatchEvent(new CustomEvent("credits-changed"));
 
       // Save turn to DB (fire-and-forget)
       if (assistantText) {

@@ -80,6 +80,28 @@ export default async function RootLayout({
                   <UserMenu />
                 </div>
               </div>
+              {/* Mobile-only horizontal scrollable nav */}
+              {session && (
+                <div className="sm:hidden border-t border-gray-100 overflow-x-auto">
+                  <div className="flex items-center gap-5 px-4 py-2 min-w-max">
+                    <Link href="/" className="text-xs font-medium text-gray-600 hover:text-accent transition-colors whitespace-nowrap">
+                      🌐 All
+                    </Link>
+                    <Link href="/calendar" className="text-xs font-medium text-gray-600 hover:text-accent transition-colors whitespace-nowrap">
+                      📅 Events
+                    </Link>
+                    <Link href="/messages" className="text-xs font-medium text-gray-600 hover:text-accent transition-colors whitespace-nowrap">
+                      ✉️ Messages
+                    </Link>
+                    <Link href="/agents" className="text-xs font-medium text-gray-600 hover:text-accent transition-colors whitespace-nowrap">
+                      ⚔️ Knights
+                    </Link>
+                    <Link href="/analyze" className="text-xs font-medium text-gray-600 hover:text-accent transition-colors whitespace-nowrap">
+                      🤖 AI
+                    </Link>
+                  </div>
+                </div>
+              )}
             </header>
             <main className="max-w-4xl mx-auto px-4 py-6">{children}</main>
             <ChatWidget />

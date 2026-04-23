@@ -90,6 +90,7 @@ export default function ProfilePage() {
       if (!res.ok) throw new Error();
       const data = await res.json();
       setCredits(data.credits);
+      window.dispatchEvent(new CustomEvent("credits-changed"));
       showToast(`Granted ${amount} credits`);
     } catch {
       showToast("Failed to grant credits", "error");

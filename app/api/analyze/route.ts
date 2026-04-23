@@ -59,8 +59,10 @@ export async function POST(req: NextRequest) {
     }
   }
 
+  const userId = session.user.id;
   const stream = new ReadableStream({
     async start(controller) {
+      let bytesWritten = 0;
       try {
         const response = await anthropic.messages.stream({
           model,
@@ -71,12 +73,21 @@ export async function POST(req: NextRequest) {
 
         for await (const chunk of response) {
           if (chunk.type === "content_block_delta" && chunk.delta.type === "text_delta") {
-            controller.enqueue(new TextEncoder().encode(chunk.delta.text));
+            const encoded = new TextEncoder().encode(chunk.delta.text);
+            controller.enqueue(encoded);
+            bytesWritten += encoded.length;
           }
         }
       } catch (err) {
         const msg = err instanceof Error ? err.message : "Stream error";
         controller.enqueue(new TextEncoder().encode(`\n\n[Error: ${msg}]`));
+        // Refund if nothing was delivered (Anthropic never responded)
+        if (bytesWritten === 0 && !admin) {
+          prisma.$transaction([
+            prisma.user.update({ where: { id: userId }, data: { credits: { increment: cost } } }),
+            prisma.creditTransaction.create({ data: { userId, amount: cost, reason: `refund_${model}` } }),
+          ]).catch(() => {});
+        }
       } finally {
         controller.close();
       }
