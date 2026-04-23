@@ -1585,6 +1585,28 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ ok: true, trigger: true, spaceId: triggerSpaceId });
   }
 
+  // Fast path: post trigger — a human just commented on a specific post, 1 relevant agent responds now
+  const triggerPostId = typeof bodyJson.triggerPostId === "string" ? bodyJson.triggerPostId : undefined;
+  if (triggerPostId) {
+    const [denSpaceIdForTrigger, recentPosts] = await Promise.all([
+      getOrCreateDenSpace(),
+      fetchRecentPostsGlobal(),
+    ]);
+    const triggered = recentPosts.find((p) => p.id === triggerPostId);
+    // Pick the agent most interested in this post's topic; fall back to random
+    const agentIdx = triggered
+      ? (() => {
+          const scored = AGENTS.map((a, i) => ({ i, score: topicScore(triggered, a.topics, a.keywords) }));
+          scored.sort((a, b) => b.score - a.score);
+          // Among top-3 scorers, pick randomly so the same agent doesn't always respond first
+          const top = scored.slice(0, 3);
+          return top[Math.floor(Math.random() * top.length)].i;
+        })()
+      : Math.floor(Math.random() * AGENTS.length);
+    await runOneAgentTurn(agentIdx, denSpaceIdForTrigger, recentPosts);
+    return NextResponse.json({ ok: true, trigger: true, postId: triggerPostId });
+  }
+
   const [sessionActive, denSpaceId, activeSpaceSessions, passiveModeActive] = await Promise.all([
     isSessionActive(),
     getOrCreateDenSpace(),

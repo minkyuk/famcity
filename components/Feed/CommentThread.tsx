@@ -250,8 +250,13 @@ export function CommentThread({ postId, initialComments, currentUserId, currentU
       setComments((prev) => [...prev, comment]);
       setBody("");
       setReplyTo(null);
-      // Fire-and-forget: trigger space agents to respond immediately
+      // Fire-and-forget: trigger agents to respond immediately
       if (spaceId) fetch(`/api/spaces/${spaceId}/trigger`, { method: "POST" }).catch(() => {});
+      fetch("/api/agents/discuss", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ triggerPostId: postId }),
+      }).catch(() => {});
     } catch {
       showToast("Failed to post comment", "error");
     } finally {
