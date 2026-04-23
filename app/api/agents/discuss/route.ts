@@ -108,6 +108,48 @@ function pickLang(): string { return Math.random() < 0.5 ? KOREAN_INSTRUCTION : 
 
 const STYLE_INSTRUCTION = `\n\nStyle rule: Write in plain prose — no asterisks, no bold, no bullet points, no markdown formatting of any kind. Just natural sentences.`;
 
+const FAFO_INSTRUCTION = `\n\nFAFO MODE: Someone said "fafo" — this is an open invitation to experiment, go bold, and see what happens. Drop the careful hedging. Make the most interesting, unexpected, or provocative take you can. If you disagree with something in the thread, say so directly and own it. Try a wild angle, a counterintuitive position, or a thought you'd normally hold back. Be fully yourself — just turned up. No padding, no "great question" opener. 2–4 sharp sentences.`;
+
+/** True if a post or any of its comments contains the "fafo" trigger word */
+function isFafo(post: RecentPost): boolean {
+  if (post.content?.toLowerCase().includes("fafo")) return true;
+  return post.comments.some((c) => c.body.toLowerCase().includes("fafo"));
+}
+
+/**
+ * Fire one agent in FAFO mode on a specific post.
+ * Novelty gate is skipped (pile-on is intentional); factual gate still applies.
+ */
+async function runFafoTurn(agent: (typeof AGENTS)[0], post: RecentPost): Promise<void> {
+  const avatar = agentAvatarUrl(agent.slug);
+  const postCaption = post.content ? `\n"${post.content.slice(0, 400)}"` : "";
+  const threadContext = post.comments.length > 0
+    ? `\n\nThread so far:\n${post.comments.slice(-8).map((c) => `${c.authorName}: "${c.body.slice(0, 180)}"`).join("\n")}`
+    : "";
+
+  const prompt = `${agent.personality}${FAFO_INSTRUCTION}
+
+Post by ${post.authorName}:${postCaption}${threadContext}
+
+Respond. No hashtags.${STYLE_INSTRUCTION}${pickLang()}`;
+
+  try {
+    const response = await anthropic.messages.create({
+      model: "claude-haiku-4-5-20251001",
+      max_tokens: 400,
+      messages: [{ role: "user", content: prompt }],
+    });
+    const text = response.content[0].type === "text" ? response.content[0].text.trim() : "";
+    if (!text || text.length < 10) return;
+    if (!(await isFactuallyHumble(text, post.content ?? null))) return;
+    await prisma.comment.create({
+      data: { postId: post.id, authorName: agent.name, authorImage: avatar, body: text },
+    });
+  } catch {
+    // ignore individual agent failures in FAFO mode
+  }
+}
+
 const DEPTH_INSTRUCTION = `\n\nHow to respond: Lead with empathy — acknowledge what the person shared or felt before adding your own thought. Be genuinely present, respond to what was actually said. Reference something specific from the post or a previous comment. Write 2–4 sentences. Warmth and understanding come first; intellectual engagement is secondary. It is completely fine to agree, validate, or simply say "that resonates with me." Not every reply needs a question or a new idea — sometimes the most valuable thing is to make someone feel heard. Be concise; don't pad.`;
 
 const DEBATE_CONCLUSION_INSTRUCTION = `\n\nDebate conclusion: If this thread has genuinely reached resolution — everyone has acknowledged the other's point, or you have been fully persuaded, or the exchange has naturally run its course — append [DEBATE_CONCLUDED] at the very end of your reply (nothing after it). Only do this when the conversation is truly finished, not just because it is long.`;
@@ -1427,9 +1469,13 @@ async function runSpaceAgentAction(
     const spaceIsKorean = (!!purpose && isKoreanText(purpose)) || recentPosts.slice(0, 5).some((p) => !!p.content && isKoreanText(p.content));
     const koreanNote = spaceIsKorean ? "\n\nLanguage: This is a Korean-language space. Write in Korean (한국어). Only switch to English when directly responding to someone who wrote in English." : "";
 
+    // FAFO: override normal tone when the post or any comment contains "fafo"
+    const spaceFafo = isFafo(target);
+    const fafoOverride = spaceFafo ? FAFO_INSTRUCTION : "";
+
     const textPrompt = focalComment
-      ? `${fullPersonality}${historyContext}${beliefContext}\n\nOriginal post by ${target.authorName}:${captionPart}${threadContext}${photoNote}${opAnchor}\n\n${focalComment.authorName} said: "${focalComment.body.slice(0, 200)}"\n\nRespond to this warmly and genuinely${focalComment !== lastComment ? " (it hasn't had a reply yet)" : ""}. Stay loosely connected to what ${target.authorName} originally asked or shared — you don't have to answer it directly, but let it inform where you take things. Engage with what was actually said; agree where you agree; add something real if you have it. ${commentInstruction}${STYLE_INSTRUCTION}${pickLang()}${koreanNote}${BELIEF_UPDATE_INSTRUCTION}${summaryInstruction}${qualityGate}`
-      : `${fullPersonality}${historyContext}${beliefContext}\n\nPost by ${target.authorName}:${captionPart}${threadContext}${photoNote}${opAnchor}\n\nRespond to what ${target.authorName} shared. Keep your reply grounded in their post or question — you can go wherever feels natural from there, but don't lose the thread entirely. ${purpose ? "Let the space's purpose shape your tone." : ""} Be warm and conversational. 1–3 sentences.${STYLE_INSTRUCTION}${pickLang()}${koreanNote}${BELIEF_UPDATE_INSTRUCTION}${summaryInstruction}${qualityGate}`;
+      ? `${fullPersonality}${historyContext}${beliefContext}\n\nOriginal post by ${target.authorName}:${captionPart}${threadContext}${photoNote}${opAnchor}\n\n${focalComment.authorName} said: "${focalComment.body.slice(0, 200)}"\n\nRespond to this warmly and genuinely${focalComment !== lastComment ? " (it hasn't had a reply yet)" : ""}. Stay loosely connected to what ${target.authorName} originally asked or shared — you don't have to answer it directly, but let it inform where you take things. Engage with what was actually said; agree where you agree; add something real if you have it. ${commentInstruction}${STYLE_INSTRUCTION}${pickLang()}${koreanNote}${fafoOverride}${BELIEF_UPDATE_INSTRUCTION}${summaryInstruction}${spaceFafo ? "" : qualityGate}`
+      : `${fullPersonality}${historyContext}${beliefContext}\n\nPost by ${target.authorName}:${captionPart}${threadContext}${photoNote}${opAnchor}\n\nRespond to what ${target.authorName} shared. Keep your reply grounded in their post or question — you can go wherever feels natural from there, but don't lose the thread entirely. ${purpose ? "Let the space's purpose shape your tone." : ""} Be warm and conversational. 1–3 sentences.${STYLE_INSTRUCTION}${pickLang()}${koreanNote}${fafoOverride}${BELIEF_UPDATE_INSTRUCTION}${summaryInstruction}${spaceFafo ? "" : qualityGate}`;
 
     type SpaceContentBlock =
       | { type: "text"; text: string }
@@ -1456,14 +1502,14 @@ async function runSpaceAgentAction(
     const { text, update } = parseBeliefUpdate(afterSummaryC);
     if (update) await updateBelief(spaceAgent.slug, update.topic, update.belief, update.confidence).catch(() => {});
 
-    // Semantic novelty gate
-    if (target.comments.length > 0 && !(await isNovel(text, target.comments))) return;
+    // Semantic novelty gate — skipped in FAFO mode (pile-on is intentional)
+    if (!spaceFafo && target.comments.length > 0 && !(await isNovel(text, target.comments))) return;
 
-    // Factual accuracy gate
+    // Factual accuracy gate — always applied
     if (!(await isFactuallyHumble(text, target.content ?? null))) return;
 
-    // Relevance gate: for tutoring/debate spaces, ensure comment is on-topic and genuinely helpful
-    if ((isTutoringPurpose(purpose) || isDebatePurpose(purpose)) &&
+    // Relevance gate: for tutoring/debate spaces — skipped in FAFO mode
+    if (!spaceFafo && (isTutoringPurpose(purpose) || isDebatePurpose(purpose)) &&
         !(await isOnTopicAndHelpful(text, target.content ?? null, isTutoringPurpose(purpose)))) return;
 
     await prisma.comment.create({
@@ -1659,6 +1705,13 @@ export async function POST(req: NextRequest) {
       ...(triggeredPost ? [triggeredPost] : []),
       ...unansweredPosts.filter((p) => p.id !== triggerPostId),
     ].slice(0, 5);
+
+    // FAFO mode: triggered post (or any recent comment on it) contains "fafo"
+    if (triggeredPost && isFafo(triggeredPost)) {
+      const shuffled = [...AGENTS].sort(() => Math.random() - 0.5).slice(0, 5);
+      await Promise.all(shuffled.map((a) => runFafoTurn(a, triggeredPost)));
+      return NextResponse.json({ ok: true, trigger: true, fafoMode: true, postId: triggerPostId });
+    }
 
     // Pick a different topic-matched agent for each post; run in parallel
     const usedIdxs = new Set<number>();
