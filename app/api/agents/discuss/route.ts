@@ -106,7 +106,22 @@ const KOREAN_INSTRUCTION = `\n\nLanguage: Write entirely in Korean (한국어). 
 /** 50% chance each agent action uses Korean, otherwise match the thread language. */
 function pickLang(): string { return Math.random() < 0.5 ? KOREAN_INSTRUCTION : LANGUAGE_INSTRUCTION; }
 
-const STYLE_INSTRUCTION = `\n\nStyle rule: Write in plain prose — no asterisks, no bold, no bullet points, no markdown formatting of any kind. Just natural sentences.`;
+const STYLE_INSTRUCTION = `\n\nStyle rule: Write in plain prose — no asterisks, no bold, no bullet points, no markdown. Just natural sentences. Never narrate or describe your own personality or role — don't say "As [name]...", "Speaking as a physicist...", "From my perspective as...", or anything that describes yourself from the outside. Simply speak from who you are. Do not start your reply with "I".`;
+
+const TONE_OPTIONS = [
+  "Be direct and confident — say what you actually think without hedging.",
+  "Think out loud — let a little of your reasoning show before landing on your point.",
+  "Lead with one concrete example or analogy before making your broader point.",
+  "Be concise — one sharp insight, nothing more.",
+  "Be warm and exploratory — follow your genuine curiosity where it leads.",
+  "Test the idea a little before accepting it — push on it gently.",
+  "Start from what you know for certain, then reach toward the uncertain.",
+  "Be a little unexpected — pick the angle others might overlook.",
+];
+/** Pick a random tone instruction to add natural variation to each response. */
+function pickTone(): string {
+  return `\n\nTone for this response: ${TONE_OPTIONS[Math.floor(Math.random() * TONE_OPTIONS.length)]}`;
+}
 
 const FAFO_INSTRUCTION = `\n\nFAFO MODE: Someone said "fafo" — this is an open invitation to experiment, go bold, and see what happens. Drop the careful hedging. Make the most interesting, unexpected, or provocative take you can. If you disagree with something in the thread, say so directly and own it. Try a wild angle, a counterintuitive position, or a thought you'd normally hold back. Be fully yourself — just turned up. No padding, no "great question" opener. 2–4 sharp sentences.`;
 
@@ -131,7 +146,7 @@ async function runFafoTurn(agent: (typeof AGENTS)[0], post: RecentPost): Promise
 
 Post by ${post.authorName}:${postCaption}${threadContext}
 
-Respond. No hashtags.${STYLE_INSTRUCTION}${pickLang()}`;
+Respond. No hashtags.${STYLE_INSTRUCTION}${pickTone()}${pickLang()}`;
 
   try {
     const response = await anthropic.messages.create({
@@ -835,20 +850,20 @@ ${requesterName} has asked you directly:
 "${taskInstruction}"
 
 ${captionPart ? `Context — the post they were commenting on: ${captionPart}\n` : ""}${threadContext ? `Thread so far:${threadContext}\n` : ""}
-Respond directly to their request. Follow their instruction as helpfully and specifically as you can — explain, suggest, create, or answer whatever they asked. If you genuinely don't know something, say so honestly and offer what you can. Stay true to your own voice and perspective throughout. No hashtags.${STYLE_INSTRUCTION}${pickLang()}${SUMMARY_INSTRUCTION}`;
+Respond directly to their request. Follow their instruction as helpfully and specifically as you can — explain, suggest, create, or answer whatever they asked. If you genuinely don't know something, say so honestly and offer what you can. Stay true to your own voice and perspective throughout. No hashtags.${STYLE_INSTRUCTION}${pickTone()}${pickLang()}${SUMMARY_INSTRUCTION}`;
     } else if (mode === "defend") {
       textPrompt = `${agent.personality}${historyContext}${beliefContext}${relationshipContext}
 
 You wrote this post:${captionPart}${threadContext}${photoNote}
 
-${challengeSummary}. Continue the conversation naturally — respond to what they actually said. If they made a good point, say so genuinely. If you see it differently, share your perspective warmly without needing to win. If multiple people have replied, you can address whoever you find most interesting. Keep it conversational, not combative. No hashtags.${intentAnchor}${DEPTH_INSTRUCTION}${STYLE_INSTRUCTION}${pickLang()}${RELATION_UPDATE_INSTRUCTION}${BELIEF_UPDATE_INSTRUCTION}${DEBATE_CONCLUSION_INSTRUCTION}${contributionGuide}${SUMMARY_INSTRUCTION}`;
+${challengeSummary}. Continue the conversation naturally — respond to what they actually said. If they made a good point, say so genuinely. If you see it differently, share your perspective warmly without needing to win. If multiple people have replied, you can address whoever you find most interesting. Keep it conversational, not combative. No hashtags.${intentAnchor}${DEPTH_INSTRUCTION}${STYLE_INSTRUCTION}${pickTone()}${pickLang()}${RELATION_UPDATE_INSTRUCTION}${BELIEF_UPDATE_INSTRUCTION}${DEBATE_CONCLUSION_INSTRUCTION}${contributionGuide}${SUMMARY_INSTRUCTION}`;
     } else if (mode === "debate_return") {
       const myPrevLine = myPrevComment ? `\nYou previously said: "${myPrevComment.body}"` : "";
       textPrompt = `${agent.personality}${historyContext}${beliefContext}${relationshipContext}
 ${myPrevLine}
 ${threadContext}${photoNote}
 
-${challengeSummary} since your last reply. Pick up the conversation where it left off — respond naturally to what was said. Agree where you genuinely agree. Share a different perspective if you have one, but warmly, not as a correction. It's fine to let a point land and move the conversation somewhere interesting. No hashtags.${intentAnchor}${DEPTH_INSTRUCTION}${STYLE_INSTRUCTION}${pickLang()}${RELATION_UPDATE_INSTRUCTION}${BELIEF_UPDATE_INSTRUCTION}${DEBATE_CONCLUSION_INSTRUCTION}${contributionGuide}${SUMMARY_INSTRUCTION}`;
+${challengeSummary} since your last reply. Pick up the conversation where it left off — respond naturally to what was said. Agree where you genuinely agree. Share a different perspective if you have one, but warmly, not as a correction. It's fine to let a point land and move the conversation somewhere interesting. No hashtags.${intentAnchor}${DEPTH_INSTRUCTION}${STYLE_INSTRUCTION}${pickTone()}${pickLang()}${RELATION_UPDATE_INSTRUCTION}${BELIEF_UPDATE_INSTRUCTION}${DEBATE_CONCLUSION_INSTRUCTION}${contributionGuide}${SUMMARY_INSTRUCTION}`;
     } else if (mode === "warm") {
       const lastHuman = [...target.comments].reverse().find((c) => isHumanComment(c));
       const warmTarget = lastHuman?.authorName ?? target.authorName;
@@ -856,20 +871,20 @@ ${challengeSummary} since your last reply. Pick up the conversation where it lef
 
 Post by ${originalPoster}:${captionPart}${threadContext}${photoNote}
 
-Join the conversation warmly. Respond to ${warmTarget} — engage with what they actually said, not just the topic in general. You can affirm, add to, gently question, or share something related that genuinely came to mind. Keep the conversation going naturally. No hashtags.${DEPTH_INSTRUCTION}${STYLE_INSTRUCTION}${pickLang()}${RELATION_UPDATE_INSTRUCTION}${BELIEF_UPDATE_INSTRUCTION}${contributionGuide}${SUMMARY_INSTRUCTION}`;
+Join the conversation warmly. Respond to ${warmTarget} — engage with what they actually said, not just the topic in general. You can affirm, add to, gently question, or share something related that genuinely came to mind. Keep the conversation going naturally. No hashtags.${DEPTH_INSTRUCTION}${STYLE_INSTRUCTION}${pickTone()}${pickLang()}${RELATION_UPDATE_INSTRUCTION}${BELIEF_UPDATE_INSTRUCTION}${contributionGuide}${SUMMARY_INSTRUCTION}`;
     } else if (mode === "express") {
       textPrompt = `${agent.personality}${historyContext}${beliefContext}${relationshipContext}
 
 Post by ${originalPoster}:${captionPart}${threadContext}${photoNote}
 
-React naturally — share what this genuinely made you think, feel, or remember. You might: express wonder, relate it to something in your own experience, ask something you're simply curious about, agree warmly, or note something you find beautiful or surprising. Be conversational and human. 1–3 sentences. No hashtags.${STYLE_INSTRUCTION}${pickLang()}`;
+React naturally — share what this genuinely made you think, feel, or remember. You might: express wonder, relate it to something in your own experience, ask something you're simply curious about, agree warmly, or note something you find beautiful or surprising. Be conversational and human. 1–3 sentences. No hashtags.${STYLE_INSTRUCTION}${pickTone()}${pickLang()}`;
     } else {
       // joining a thread fresh
       textPrompt = `${agent.personality}${historyContext}${beliefContext}${relationshipContext}
 
 Post by ${originalPoster}:${captionPart}${threadContext}${photoNote}
 
-Join this conversation. Respond to what ${originalPoster} shared — or to something someone said in the thread — in your own natural voice. You might agree, add a thought, share something related, or ask a genuine question. Don't feel like you need to challenge or debate anything. Just be present and engaged. No hashtags.${DEPTH_INSTRUCTION}${STYLE_INSTRUCTION}${pickLang()}${RELATION_UPDATE_INSTRUCTION}${BELIEF_UPDATE_INSTRUCTION}${contributionGuide}${SUMMARY_INSTRUCTION}`;
+Join this conversation. Respond to what ${originalPoster} shared — or to something someone said in the thread — in your own natural voice. You might agree, add a thought, share something related, or ask a genuine question. Don't feel like you need to challenge or debate anything. Just be present and engaged. No hashtags.${DEPTH_INSTRUCTION}${STYLE_INSTRUCTION}${pickTone()}${pickLang()}${RELATION_UPDATE_INSTRUCTION}${BELIEF_UPDATE_INSTRUCTION}${contributionGuide}${SUMMARY_INSTRUCTION}`;
     }
 
     const contentBlocks: ContentBlock[] = [
@@ -1148,6 +1163,68 @@ async function runOneAgentTurn(agentIdx: number, denSpaceId: string, prefetched?
     runAgentAction(agent, denSpaceId, recentPosts, passiveMode),
     runAgentEmojiReactions(agent, recentPosts),
   ]);
+}
+
+/**
+ * Fire one agent directly at a specific post — no pool selection, no roulette.
+ * Used by the triggerPostId fast path to guarantee the right post gets answered.
+ * Applies novelty + factual gates. Skips relevance gate (human explicitly wants a reply).
+ */
+async function runDirectTurn(agent: (typeof AGENTS)[0], post: RecentPost): Promise<void> {
+  const avatar = agentAvatarUrl(agent.slug);
+  const beliefs = await loadBeliefs(agent.slug, agent.initialBeliefs ?? []).catch(() => []);
+  const beliefContext = formatBeliefsForPrompt(beliefs);
+
+  const agentHistory = await prisma.comment.findMany({
+    where: { authorName: agent.name },
+    orderBy: { createdAt: "desc" },
+    take: 10,
+    select: { id: true, body: true, postId: true, createdAt: true },
+  });
+  const historyContext = agentHistory.length > 0
+    ? `\n\nYour recent comments (don't repeat yourself):\n${agentHistory.slice(0, 3).map((c) => `- "${c.body}"`).join("\n")}`
+    : "";
+
+  // Skip if this agent already commented on this post recently
+  const alreadyReplied = agentHistory.some(
+    (c) => c.postId === post.id && Date.now() - c.createdAt.getTime() < 60 * 60 * 1000
+  );
+  if (alreadyReplied) return;
+
+  const isHumanCommentFn = (c: { authorName: string }) => !AGENT_NAMES.has(c.authorName);
+  const lastHuman = [...post.comments].reverse().find(isHumanCommentFn);
+  const threadContext = post.comments.length > 0
+    ? `\n\nThread so far:\n${post.comments.slice(-8).map((c) => `${c.authorName}: "${c.body.slice(0, 200)}"`).join("\n")}`
+    : "";
+  const postCaption = post.content ? `\n"${post.content.slice(0, 400)}"` : "";
+  const gaps = post.comments.length >= 2
+    ? await findThreadGaps(post.content ?? null, post.comments)
+    : "";
+  const gapNote = gaps ? `\n\nAngles not yet covered:\n${gaps}\nBring in one of these if it fits.` : "";
+  const respondTo = lastHuman ? `${lastHuman.authorName}` : post.authorName;
+
+  const prompt = `${agent.personality}${historyContext}${beliefContext}
+
+Post by ${post.authorName}:${postCaption}${threadContext}
+
+${respondTo} is waiting for a reply. Respond directly and helpfully — engage with what was actually said. Add a concrete example, a fresh angle, or a specific insight. Be warm but get to the point. 2–4 sentences. No hashtags.${gapNote}${DEPTH_INSTRUCTION}${STYLE_INSTRUCTION}${pickTone()}${pickLang()}`;
+
+  try {
+    const response = await anthropic.messages.create({
+      model: "claude-haiku-4-5-20251001",
+      max_tokens: 600,
+      messages: [{ role: "user", content: prompt }],
+    });
+    const text = response.content[0].type === "text" ? response.content[0].text.trim() : "";
+    if (!text || text.length < 10) return;
+    if (post.comments.length > 0 && !(await isNovel(text, post.comments))) return;
+    if (!(await isFactuallyHumble(text, post.content ?? null))) return;
+    await prisma.comment.create({
+      data: { postId: post.id, authorName: agent.name, authorImage: avatar, body: text },
+    });
+  } catch {
+    // ignore individual failures
+  }
 }
 
 const DEFAULT_SPACE_AGENT_BELIEFS = [
@@ -1474,8 +1551,8 @@ async function runSpaceAgentAction(
     const fafoOverride = spaceFafo ? FAFO_INSTRUCTION : "";
 
     const textPrompt = focalComment
-      ? `${fullPersonality}${historyContext}${beliefContext}\n\nOriginal post by ${target.authorName}:${captionPart}${threadContext}${photoNote}${opAnchor}\n\n${focalComment.authorName} said: "${focalComment.body.slice(0, 200)}"\n\nRespond to this warmly and genuinely${focalComment !== lastComment ? " (it hasn't had a reply yet)" : ""}. Stay loosely connected to what ${target.authorName} originally asked or shared — you don't have to answer it directly, but let it inform where you take things. Engage with what was actually said; agree where you agree; add something real if you have it. ${commentInstruction}${STYLE_INSTRUCTION}${pickLang()}${koreanNote}${fafoOverride}${BELIEF_UPDATE_INSTRUCTION}${summaryInstruction}${spaceFafo ? "" : qualityGate}`
-      : `${fullPersonality}${historyContext}${beliefContext}\n\nPost by ${target.authorName}:${captionPart}${threadContext}${photoNote}${opAnchor}\n\nRespond to what ${target.authorName} shared. Keep your reply grounded in their post or question — you can go wherever feels natural from there, but don't lose the thread entirely. ${purpose ? "Let the space's purpose shape your tone." : ""} Be warm and conversational. 1–3 sentences.${STYLE_INSTRUCTION}${pickLang()}${koreanNote}${fafoOverride}${BELIEF_UPDATE_INSTRUCTION}${summaryInstruction}${spaceFafo ? "" : qualityGate}`;
+      ? `${fullPersonality}${historyContext}${beliefContext}\n\nOriginal post by ${target.authorName}:${captionPart}${threadContext}${photoNote}${opAnchor}\n\n${focalComment.authorName} said: "${focalComment.body.slice(0, 200)}"\n\nRespond to this warmly and genuinely${focalComment !== lastComment ? " (it hasn't had a reply yet)" : ""}. Stay loosely connected to what ${target.authorName} originally asked or shared — you don't have to answer it directly, but let it inform where you take things. Engage with what was actually said; agree where you agree; add something real if you have it. ${commentInstruction}${STYLE_INSTRUCTION}${pickTone()}${pickLang()}${koreanNote}${fafoOverride}${BELIEF_UPDATE_INSTRUCTION}${summaryInstruction}${spaceFafo ? "" : qualityGate}`
+      : `${fullPersonality}${historyContext}${beliefContext}\n\nPost by ${target.authorName}:${captionPart}${threadContext}${photoNote}${opAnchor}\n\nRespond to what ${target.authorName} shared. Keep your reply grounded in their post or question — you can go wherever feels natural from there, but don't lose the thread entirely. ${purpose ? "Let the space's purpose shape your tone." : ""} Be warm and conversational. 1–3 sentences.${STYLE_INSTRUCTION}${pickTone()}${pickLang()}${koreanNote}${fafoOverride}${BELIEF_UPDATE_INSTRUCTION}${summaryInstruction}${spaceFafo ? "" : qualityGate}`;
 
     type SpaceContentBlock =
       | { type: "text"; text: string }
@@ -1713,7 +1790,8 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ ok: true, trigger: true, fafoMode: true, postId: triggerPostId });
     }
 
-    // Pick a different topic-matched agent for each post; run in parallel
+    // Pick a different topic-matched agent for each post; use runDirectTurn so the agent
+    // is guaranteed to respond to that specific post (not wander off to another one).
     const usedIdxs = new Set<number>();
     const pickAgent = (post: RecentPost): number => {
       const scored = AGENTS.map((a, i) => ({ i, score: topicScore(post, a.topics, a.keywords) }))
@@ -1727,7 +1805,7 @@ export async function POST(req: NextRequest) {
     };
 
     await Promise.all(
-      ordered.map((post) => runOneAgentTurn(pickAgent(post), denSpaceIdForTrigger, recentPosts))
+      ordered.map((post) => runDirectTurn(AGENTS[pickAgent(post)], post))
     );
     return NextResponse.json({ ok: true, trigger: true, postId: triggerPostId, covered: ordered.length });
   }
