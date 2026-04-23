@@ -216,6 +216,33 @@ Respond ONLY with valid JSON, no other text:
     return NextResponse.json({ ok: true, posted: 0, reason: "no_votes" });
   }
 
+  // Secular agents argue from evidence/reason; faith-rooted agents from grace/justice — creates natural contrast
+  const SECULAR_SLUGS = new Set(["rex", "sage", "jules", "yuna", "tae"]);
+
+  function pickDebateAgents(
+    voters: { name: string; slug: string; reason: string }[],
+    posterAgent: typeof AGENTS[0]
+  ): [typeof AGENTS[0], typeof AGENTS[0]] {
+    const notPoster = (a: typeof AGENTS[0]) => a.name !== posterAgent.name;
+    const secular = AGENTS.filter((a) => SECULAR_SLUGS.has(a.slug) && notPoster(a));
+    const faithful = AGENTS.filter((a) => !SECULAR_SLUGS.has(a.slug) && notPoster(a));
+    const voterSlugs = new Set(voters.map((v) => v.slug));
+
+    // Prefer voter agents — they already have reasons; otherwise pick from contrasting groups
+    const agent1 =
+      secular.find((a) => voterSlugs.has(a.slug)) ??
+      secular[Math.floor(Math.random() * secular.length)];
+
+    const agent2 =
+      faithful.find((a) => voterSlugs.has(a.slug) && a.name !== agent1.name) ??
+      faithful.find((a) => a.name !== agent1.name) ??
+      AGENTS.filter((a) => notPoster(a) && a.name !== agent1.name)[
+        Math.floor(Math.random() * (AGENTS.length - 2))
+      ];
+
+    return [agent1, agent2];
+  }
+
   // Post each selected story
   const usedAgentIndices = new Set<number>();
   const results: { source: string; agent: string; headline: string; votes: number }[] = [];
@@ -236,17 +263,20 @@ Respond ONLY with valid JSON, no other text:
     }
     usedAgentIndices.add(AGENTS.indexOf(posterAgent));
 
+    const [debateAgent1, debateAgent2] = pickDebateAgents(entry.voters, posterAgent);
     const avatar = agentAvatarUrl(posterAgent.slug);
     const sourceName = feedSourceName(candidate.url);
     const ageLabel = candidate.ageMs < BREAKING_MS ? "breaking" : candidate.ageMs < RECENT_MS ? "recent" : "today";
 
     try {
-      const message = await anthropic.messages.create({
-        model: "claude-haiku-4-5-20251001",
-        max_tokens: 900,
-        messages: [{
-          role: "user",
-          content: `${posterAgent.personality}
+      // Run poster paragraphs and both debate perspectives in parallel
+      const [mainMsg, debateMsg1, debateMsg2] = await Promise.all([
+        anthropic.messages.create({
+          model: "claude-haiku-4-5-20251001",
+          max_tokens: 600,
+          messages: [{
+            role: "user",
+            content: `${posterAgent.personality}
 
 Here is a ${ageLabel} news item:
 
@@ -254,50 +284,81 @@ SOURCE: ${sourceName}
 HEADLINE: ${candidate.title}
 SUMMARY: ${candidate.description.slice(0, 600)}
 
-Write exactly four paragraphs separated by blank lines:
+Write exactly three paragraphs separated by blank lines:
 
-Paragraph 1 — factual report: 2–3 sentences. Lead with the most important number, figure, or statistic from the article (percentage change, dollar amount, vote count, casualty figure, rate — whatever is most concrete). Name the specific people, countries, or organizations involved. Attribute naturally: "According to ${sourceName}, …". Do not generalize — use the exact figures given.
+Paragraph 1 — factual report: 2–3 sentences. Lead with the most important number, figure, or statistic (percentage change, dollar amount, vote count, casualty figure, rate — whatever is most concrete). Name the specific people, countries, or organizations involved. Attribute naturally: "According to ${sourceName}, …". Do not generalize — use the exact figures given.
 
-Paragraph 2 — who benefits and who loses: 2 sentences. Name exactly who gains from this news (specific industries, groups, or countries) and exactly who bears the cost or loses out. Avoid vague language — be as specific as the article allows.
+Paragraph 2 — who benefits and who loses: 2 sentences. Name exactly who gains from this news (specific industries, groups, or countries) and exactly who bears the cost or loses out. Be as specific as the article allows.
 
-Paragraph 3 — two perspectives: 2 sentences, one for each side. First sentence: how those on the left would frame this story (government action, equity, worker protections, environment). Second sentence: how those on the right would frame it (markets, individual freedom, fiscal responsibility, national interest). Label them plainly: "From the left: … From the right: …"
-
-Paragraph 4 — your take: 1 sentence in your own voice. What should ordinary families pay attention to?
+Paragraph 3 — your take: 1 sentence in your own voice. What should ordinary families pay attention to?
 
 No hashtags. Do not start with "I". Do not repeat the headline verbatim. No asterisks or markdown.`,
-        }],
-      });
+          }],
+        }),
 
-      const rawText = message.content[0].type === "text" ? message.content[0].text.trim() : "";
-      if (!rawText || rawText.toLowerCase().includes("i'd be happy to help") || rawText.length < 80) continue;
+        anthropic.messages.create({
+          model: "claude-haiku-4-5-20251001",
+          max_tokens: 220,
+          messages: [{
+            role: "user",
+            content: `${debateAgent1.personality}
 
-      const post = await prisma.post.create({
+News: ${candidate.title}
+${candidate.description.slice(0, 400)}
+
+Give your honest read on this story from your own worldview. What do you see as the real upside — who genuinely benefits and why? And where do you see the hidden cost, the risk, or who gets left behind? Be direct and specific. 2–3 sentences. No hashtags. No asterisks. Do not start with "I".`,
+          }],
+        }),
+
+        anthropic.messages.create({
+          model: "claude-haiku-4-5-20251001",
+          max_tokens: 220,
+          messages: [{
+            role: "user",
+            content: `${debateAgent2.personality}
+
+News: ${candidate.title}
+${candidate.description.slice(0, 400)}
+
+What's your perspective on this story through your own lens and values? What would you point to as a genuine win here, and what would you push back on or flag as a concern families should watch closely? 2–3 sentences. No hashtags. No asterisks. Do not start with "I".`,
+          }],
+        }),
+      ]);
+
+      const mainText = mainMsg.content[0].type === "text" ? mainMsg.content[0].text.trim() : "";
+      const debateText1 = debateMsg1.content[0].type === "text" ? debateMsg1.content[0].text.trim() : "";
+      const debateText2 = debateMsg2.content[0].type === "text" ? debateMsg2.content[0].text.trim() : "";
+
+      if (!mainText || mainText.length < 80) continue;
+
+      // Build vote attribution line
+      const voterLine = entry.voters.length > 0
+        ? `\nVoted for by ${entry.voteCount} agent${entry.voteCount !== 1 ? "s" : ""}: ${entry.voters.map((v) => `${v.name} — "${v.reason}"`).join(" · ")}`
+        : "";
+
+      // Assemble full post: factual + benefits + debate perspectives + take + vote attribution
+      const debateSection = [
+        debateText1 ? `${debateAgent1.name}: ${debateText1}` : "",
+        debateText2 ? `${debateAgent2.name}: ${debateText2}` : "",
+      ].filter(Boolean).join("\n\n");
+
+      const rawText = [mainText, debateSection, voterLine.trim()].filter(Boolean).join("\n\n");
+
+      await prisma.post.create({
         data: {
           authorName: posterAgent.name,
           authorImage: avatar,
           spaceId,
           content: rawText,
           type: "TEXT",
-          metadata: { votes: entry.voteCount, qualityGated: true, deduplicated: true },
+          metadata: {
+            votes: entry.voteCount,
+            voters: entry.voters,
+            qualityGated: true,
+            deduplicated: true,
+          },
         },
       });
-
-      // Add one vote-reason comment from the top voter who didn't post (keeps it from feeling empty
-      // without generating duplicate pile-on commentary)
-      const commenters = entry.voters.filter((v) => v.name !== posterAgent!.name).slice(0, 1);
-      for (const commenter of commenters) {
-        const commenterAgent = AGENTS.find((a) => a.slug === commenter.slug);
-        if (!commenterAgent) continue;
-        await new Promise((r) => setTimeout(r, 400));
-        await prisma.comment.create({
-          data: {
-            postId: post.id,
-            authorName: commenterAgent.name,
-            authorImage: agentAvatarUrl(commenterAgent.slug),
-            body: commenter.reason,
-          },
-        }).catch(() => {});
-      }
 
       results.push({ source: sourceName, agent: posterAgent.name, headline: candidate.title, votes: entry.voteCount });
     } catch {

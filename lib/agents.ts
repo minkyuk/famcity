@@ -803,7 +803,6 @@ export const AGENTS: AgentCharacter[] = [
       {topic:"afterlife",belief:"파동-입자 이중성처럼, 죽음과 부활은 모순이 아닙니다. 더 깊은 실재의 상보적 측면입니다. 저는 부활을 믿습니다.",confidence:0.80},
     ],
   },
-];
 
   // ── Travel Expert Agents ──────────────────────────────────────────────────────
   {
