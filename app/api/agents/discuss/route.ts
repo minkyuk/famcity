@@ -1585,26 +1585,49 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ ok: true, trigger: true, spaceId: triggerSpaceId });
   }
 
-  // Fast path: post trigger — a human just commented on a specific post, 1 relevant agent responds now
+  // Fast path: post trigger — a human just commented; respond to EVERY post with a recent unanswered comment
   const triggerPostId = typeof bodyJson.triggerPostId === "string" ? bodyJson.triggerPostId : undefined;
   if (triggerPostId) {
     const [denSpaceIdForTrigger, recentPosts] = await Promise.all([
       getOrCreateDenSpace(),
       fetchRecentPostsGlobal(),
     ]);
-    const triggered = recentPosts.find((p) => p.id === triggerPostId);
-    // Pick the agent most interested in this post's topic; fall back to random
-    const agentIdx = triggered
-      ? (() => {
-          const scored = AGENTS.map((a, i) => ({ i, score: topicScore(triggered, a.topics, a.keywords) }));
-          scored.sort((a, b) => b.score - a.score);
-          // Among top-3 scorers, pick randomly so the same agent doesn't always respond first
-          const top = scored.slice(0, 3);
-          return top[Math.floor(Math.random() * top.length)].i;
-        })()
-      : Math.floor(Math.random() * AGENTS.length);
-    await runOneAgentTurn(agentIdx, denSpaceIdForTrigger, recentPosts);
-    return NextResponse.json({ ok: true, trigger: true, postId: triggerPostId });
+
+    // Collect all posts with unanswered human comments in the last 2 hours
+    const UNANS_WINDOW_MS = 2 * 60 * 60 * 1000;
+    const unansweredPosts = recentPosts.filter((p) => {
+      return p.comments.some((c) => {
+        if (AGENT_NAMES.has(c.authorName)) return false;
+        if (Date.now() - c.createdAt.getTime() > UNANS_WINDOW_MS) return false;
+        // no agent replied after this human comment
+        return !p.comments.some((r) => AGENT_NAMES.has(r.authorName) && r.createdAt > c.createdAt);
+      });
+    });
+
+    // Always include the triggered post first; deduplicate; cap at 5
+    const triggeredPost = recentPosts.find((p) => p.id === triggerPostId);
+    const ordered = [
+      ...(triggeredPost ? [triggeredPost] : []),
+      ...unansweredPosts.filter((p) => p.id !== triggerPostId),
+    ].slice(0, 5);
+
+    // Pick a different topic-matched agent for each post; run in parallel
+    const usedIdxs = new Set<number>();
+    const pickAgent = (post: RecentPost): number => {
+      const scored = AGENTS.map((a, i) => ({ i, score: topicScore(post, a.topics, a.keywords) }))
+        .sort((a, b) => b.score - a.score);
+      const top = scored.slice(0, 5).filter((s) => !usedIdxs.has(s.i));
+      const pick = top.length > 0
+        ? top[Math.floor(Math.random() * Math.min(3, top.length))].i
+        : Math.floor(Math.random() * AGENTS.length);
+      usedIdxs.add(pick);
+      return pick;
+    };
+
+    await Promise.all(
+      ordered.map((post) => runOneAgentTurn(pickAgent(post), denSpaceIdForTrigger, recentPosts))
+    );
+    return NextResponse.json({ ok: true, trigger: true, postId: triggerPostId, covered: ordered.length });
   }
 
   const [sessionActive, denSpaceId, activeSpaceSessions, passiveModeActive] = await Promise.all([
@@ -1654,7 +1677,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ ok: true, passive: true });
   }
 
-  // Normal (routine): global knight every 2-hour boundary; space agents every 4-hour boundary
+  // Normal (routine): global knight every 2 hours; space agents every 30 minutes
   const tasks: Promise<unknown>[] = [];
   if (minute === 0 && hour % 2 === 0) {
     // Fetch posts once, pick the agent most suited to current context, reuse posts in the turn
@@ -1662,8 +1685,8 @@ export async function POST(req: NextRequest) {
     const agentIdx = pickAgentByContext(recentPosts);
     tasks.push(runOneAgentTurn(agentIdx, denSpaceId, recentPosts));
   }
-  if (minute === 0 && hour % 4 === 0) {
-    tasks.push(runAllSpaceAgentTurns(240));
+  if (minute % 30 === 0) {
+    tasks.push(runAllSpaceAgentTurns(30));
   }
   if (tasks.length === 0) {
     return NextResponse.json({ ok: true, skipped: true, reason: "off-cycle", spaceSessions: activeSpaceSessions.length });
