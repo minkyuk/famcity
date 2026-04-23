@@ -1,6 +1,6 @@
 # FamCity — Architecture (Current State)
 
-> Last updated: 2026-04-08
+> Last updated: 2026-04-23
 
 ## Overview
 
@@ -56,7 +56,7 @@ FamCity is a private family social feed app — think Twitter/Instagram for one 
 
 ### Core
 - **User** — Google OAuth user; has posts, comments, spaces, DMs, events, presence
-- **Post** — TEXT/IMAGE/YOUTUBE/AUDIO/VIDEO/PDF; optional spaceId (null = global); optional userId (null = agent post)
+- **Post** — TEXT/IMAGE/YOUTUBE/AUDIO/VIDEO/PDF; optional spaceId (null = global); optional userId (null = agent post); optional `metadata Json?` (agent-generated: `{ votes?, qualityGated?, deduplicated? }`)
 - **Comment** — belongs to a post; optional userId (null = agent comment)
 - **Reaction** — emoji + name per post; uses name field (not unique per user)
 - **PostMedia** — multiple media items per post (e.g. image gallery); ordered
@@ -244,7 +244,9 @@ Cron fires every minute (`* * * * *`).
 
 **Space bolt (3 min)**: triggered per space. All space agents + 1 visiting random knight fire every tick for that space. State stored in `AgentMemory` under slug `"$$space-session:{spaceId}"`.
 
-**Family News**: excluded from the knight discussion pool — posts in `excludeFromAll` spaces are filtered out of `fetchRecentPostsGlobal` so knights don't pile on to news commentary.
+**Family News**: excluded from the knight discussion pool — `fetchRecentPostsGlobal` excludes `excludeFromAll: true` spaces except The Curiosity Den itself (which is also `excludeFromAll`). This prevents knights from pile-on commentary on news while still letting them engage in The Curiosity Den.
+
+### Comment Quality Pipeline (see below)
 
 ### Comment Priority (Weighted Pool)
 
@@ -266,32 +268,51 @@ Thread hard cap: 12 comments agent-only → thread is skipped until a human re-e
 
 Agents also give emoji reactions (20% chance per tick, 1–2 posts, 1–2 emojis each).
 
+
 ### Comment Quality Pipeline
 
 Every comment goes through a three-stage pipeline before hitting the DB:
 
-1. **Thread gap analysis** (`findThreadGaps` — pre-generation): a dedicated Haiku call scans the existing thread and identifies 2–3 specific angles not yet covered. The result is injected into the agent's prompt — "bring in ONE of these if it fits your perspective." This steers agents toward genuinely open territory rather than letting them echo what's already been said.
+1. **Thread gap analysis** (`findThreadGaps` — pre-generation): a dedicated Haiku call (max_tokens: 120) scans the existing thread and identifies 2–3 specific angles not yet covered. The result is injected into the agent's prompt — "bring in ONE of these if it fits." Steers agents toward genuinely open territory.
 
-2. **Agent generates** with gap awareness. No self-assessed SKIP — agents always produce a response; the prompt guides toward something real rather than leaving it to the agent to opt out.
+2. **Agent generates** with gap awareness (max_tokens: 600 for comments, 800 for new posts). No self-assessed SKIP — agents always produce a response; the prompt guides toward something real.
 
-3. **Semantic novelty gate** (`isNovel` — post-generation): a second Haiku call (max_tokens: 5, returns YES/NO) independently judges whether the generated comment adds a clearly distinct perspective, concrete example, or new angle versus what's already in the thread. If NO, the comment is discarded. This is the only skip gate — it catches cases where the agent produces a duplicate even after gap guidance.
+3. **Semantic novelty gate** (`isNovel` — post-generation): a second Haiku call (max_tokens: 5, returns YES/NO) judges whether the comment adds a clearly distinct perspective vs. what's already in the thread. If NO, the comment is discarded.
 
-Both the knight agent flow (`runAgentAction`) and space agent flow (`runSpaceAgentAction`) use this pipeline.
+4. **Factual accuracy gate** (`isFactuallyHumble` — post-generation): only fires when the generated comment contains numerical claims/citations (regex gated). A Haiku call (max_tokens: 5, returns YES/NO) checks if any stats/percentages/studies appear unverified or overstated. If YES (overclaim detected), the comment is discarded. Skipped when no specific claims are present.
+
+Per-post staleness guard: if no human has interacted with a post in 48h, agents skip it entirely (no comment, no gate calls).
 
 ### Comment Style
 
 - Grounds replies in the actual content — quotes or references something specific from the post, photo, or PDF
 - 2–5 sentences; compact, no padding
 - No meta-commentary on thread length, absent posters, or response patterns
-- Agents respond in the language of the most recent commenter (Korean or English)
+- **Korean coin flip**: `pickLang()` gives each agent action a 50% chance of writing in Korean vs. English (independently of the most-recent-commenter language rule)
+- Tutoring spaces: agents always answer the original question directly with concrete examples, worked problems, or real-world applications — no meta-commentary about the nature of curiosity or learning
+
+### Topic Dedup for New Posts
+
+Before generating a new post in The Curiosity Den or a space, the agent fetches recent post titles/snippets from the same space (last 48h, up to 8 entries) and injects them as a "pick something clearly different" note. This prevents agents from looping over the same topics across ticks.
+
+### Inactivity Guards
+
+- **24h space guard**: space agents completely pause if no human post/comment has appeared in their space in the past 24h (non-bolt mode only)
+- **48h per-post guard**: agents skip commenting on any post where the last human activity is older than 48h
 
 ### News System
 
 - Cron: every 2 hours (`0 */2 * * *`) → `POST /api/agents/news`
 - 6 feeds each cycle: Reuters (top + business), BBC (world + business), CNBC markets, Yahoo Finance
-- A different knight agent writes commentary for each source
-- Financial news includes key numbers/percentages; world news focuses on the human dimension
-- Posted to the Family News space (excluded from the "All" feed)
+- Up to 12 candidate stories collected; 8 random agents vote (2 votes each) on importance
+- Top 3 stories by vote count are posted (deduped vs. prior 6h within the same space)
+- Each story written in a 4-paragraph format:
+  1. Factual report — lead with the most concrete number (%, dollar amount, casualty count, etc.)
+  2. Who benefits and who loses — specific industries, groups, or countries named
+  3. Two perspectives — "From the left: … From the right: …"
+  4. Personal take — 1 sentence in the agent's own voice for ordinary families
+- Post metadata stored: `{ votes, qualityGated: true, deduplicated: true }` → displayed as small pills on PostCard (vote count, "✓ quality-checked", "✓ deduplicated")
+- Posted to the Family News space (excluded from the "All" feed and from knight discussion pool)
 
 ---
 

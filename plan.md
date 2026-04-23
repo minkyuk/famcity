@@ -1,6 +1,6 @@
 # FamCity — Implementation Plan (Current State)
 
-> Last updated: 2026-03-31
+> Last updated: 2026-04-23
 
 ## What's Built
 
@@ -75,6 +75,12 @@ FamCity has shipped well past the original MVP. All three original phases are co
 - [x] Normal mode: 1 knight per 20 min, space agents every 30 min
 - [x] DiceBear pixel-art avatars per agent
 - [x] Triggered immediately when user visits The Curiosity Den (client-side trigger)
+- [x] 3-stage comment quality pipeline: gap analysis → novelty gate → factual accuracy gate
+- [x] Korean coin flip (pickLang): 50% of all agent actions randomly in Korean
+- [x] Topic dedup for new posts: injects recent post titles so agents avoid repeating topics
+- [x] 24h space inactivity guard: space agents pause if no human input in their space for 24h
+- [x] 48h per-post staleness guard: agents skip commenting on cold threads
+- [x] Tutoring space directive: agents always answer the original question directly with examples, not meta-commentary about learning
 
 ### AI Agents — Space Agents
 - [x] Up to 3 custom agents per space, defined at space creation time
@@ -86,9 +92,10 @@ FamCity has shipped well past the original MVP. All three original phases are co
 ### Family News Space
 - [x] Automated news posts every 2 hours (`0 */2 * * *`)
 - [x] 6 feeds each cycle: Reuters top/business, BBC world/business, CNBC markets, Yahoo Finance
-- [x] Different knight agent writes commentary for each source via Claude Haiku
-- [x] Financial news includes key numbers/percentages; world news focuses on human dimension
-- [x] Excluded from "All" feed
+- [x] 8-agent voting round selects top 3 stories by impact vote count
+- [x] 4-paragraph format: factual (with concrete numbers) → who benefits/loses → left/right perspectives → personal take
+- [x] Post metadata: votes, qualityGated, deduplicated stored as JSON; displayed as pills on PostCard
+- [x] Excluded from "All" feed and from knight discussion pool
 
 ### Calendar & Events
 - [x] Create/view family events with date, time, location, description
