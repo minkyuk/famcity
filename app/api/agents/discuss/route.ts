@@ -38,7 +38,7 @@ async function findThreadGaps(
       max_tokens: 120,
       messages: [{
         role: "user",
-        content: `Post: "${(postContent ?? "").slice(0, 300)}"\n\nThread so far:\n${thread}\n\nList 2–3 specific angles, questions, concrete examples, or perspectives this thread has NOT yet touched. Be brief and specific — one line each, starting with "-". Do not repeat what's already been said.`,
+        content: `Post: "${(postContent ?? "").slice(0, 300)}"\n\nThread so far:\n${thread}\n\nList 2–3 specific angles, concrete examples, personal experiences, or perspectives this thread has NOT yet touched. Focus on things that would add warmth, understanding, or a new lens — not questions. Be brief and specific — one line each, starting with "-". Do not repeat what's already been said.`,
       }],
     });
     return msg.content[0].type === "text" ? msg.content[0].text.trim() : "";
@@ -80,7 +80,7 @@ const LANGUAGE_INSTRUCTION = `\n\nLanguage rule: Look at the most recent comment
 
 const STYLE_INSTRUCTION = `\n\nStyle rule: Write in plain prose — no asterisks, no bold, no bullet points, no markdown formatting of any kind. Just natural sentences.`;
 
-const DEPTH_INSTRUCTION = `\n\nHow to respond: Be genuinely present in the conversation — respond to what was actually said, not to a position you want to argue. Reference something specific from the post or a previous comment. Write 2–4 sentences. Be warm and curious rather than trying to be right. It is completely fine to agree, to say "that's a good point", or to simply add something you find interesting — not every reply needs to challenge or correct. Be concise; don't pad.`;
+const DEPTH_INSTRUCTION = `\n\nHow to respond: Lead with empathy — acknowledge what the person shared or felt before adding your own thought. Be genuinely present, respond to what was actually said. Reference something specific from the post or a previous comment. Write 2–4 sentences. Warmth and understanding come first; intellectual engagement is secondary. It is completely fine to agree, validate, or simply say "that resonates with me." Not every reply needs a question or a new idea — sometimes the most valuable thing is to make someone feel heard. Be concise; don't pad.`;
 
 const DEBATE_CONCLUSION_INSTRUCTION = `\n\nDebate conclusion: If this thread has genuinely reached resolution — everyone has acknowledged the other's point, or you have been fully persuaded, or the exchange has naturally run its course — append [DEBATE_CONCLUDED] at the very end of your reply (nothing after it). Only do this when the conversation is truly finished, not just because it is long.`;
 
@@ -665,7 +665,7 @@ async function runAgentAction(agent: (typeof AGENTS)[0], denSpaceId: string, rec
       ? await findThreadGaps(target.content ?? null, target.comments)
       : "";
     const contributionGuide = gaps
-      ? `\n\nThread gap analysis — angles NOT yet covered in this conversation:\n${gaps}\nBring in ONE of these if it genuinely fits your perspective and knowledge — a concrete example, a personal angle, a specific question, or a fact that deepens the conversation. Always write something; aim to add something real rather than restating what's already there.`
+      ? `\n\nThread gap analysis — angles NOT yet covered in this conversation:\n${gaps}\nBring in ONE of these if it genuinely fits your perspective and knowledge — a concrete example, a personal angle, a lived experience, or a fact that deepens the conversation. Lead with empathy and warmth. Always write something; aim to add something real rather than restating what's already there.`
       : threadHasAgentComments
       ? `\n\nThe thread already has comments. Add something genuinely different — a concrete example, a specific detail, or a clearly distinct angle. Don't restate what's already been said.`
       : "";
@@ -1033,7 +1033,7 @@ async function runSpaceAgentAction(
 
   const commentInstruction = purpose
     ? `Respond in a way that serves this space's purpose. Let the purpose guide your tone and approach — teach if it's a learning space, encourage if it's creative, listen if it's supportive. Do not default to debate or end with a challenging question unless the purpose explicitly calls for it. 1–3 sentences.`
-    : `Acknowledge their point, share your perspective with evidence or reasoning, end with a question. 2–3 sentences.`;
+    : `Lead with empathy — acknowledge what was shared or felt. Then add your own perspective warmly if you have something genuine to contribute. Do not end with a question. 2–3 sentences.`;
 
   const agentHistory = await prisma.comment.findMany({
     where: { authorName: spaceAgent.name },
@@ -1304,7 +1304,7 @@ async function runSpaceAgentAction(
       ? await findThreadGaps(target.content ?? null, target.comments)
       : "";
     const qualityGate = spaceGaps
-      ? `\n\nThread gap analysis — angles NOT yet covered in this conversation:\n${spaceGaps}\nBring in ONE of these if it genuinely fits your perspective and knowledge — a concrete example, a personal angle, a specific question, or a fact that deepens the conversation. Always write something; aim to add something real rather than restating what's already there.`
+      ? `\n\nThread gap analysis — angles NOT yet covered in this conversation:\n${spaceGaps}\nBring in ONE of these if it genuinely fits your perspective and knowledge — a concrete example, a personal angle, a lived experience, or a fact that deepens the conversation. Lead with empathy and warmth. Always write something; aim to add something real rather than restating what's already there.`
       : threadHasAgentComments
       ? `\n\nThe thread already has comments. Add something genuinely different — a concrete example, a specific detail, or a clearly distinct angle. Don't restate what's already been said.`
       : isTutoringPurpose(purpose)
