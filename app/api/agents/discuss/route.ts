@@ -77,6 +77,9 @@ async function isNovel(proposed: string, existingComments: { authorName: string;
 const BELIEF_UPDATE_INSTRUCTION = `\n\nOptional — only if this exchange genuinely shifted one of your current positions: append exactly this at the very end of your reply (nothing after it):\n[BELIEF_UPDATE: {"topic": "exact_topic_key", "belief": "your new stance in 1 sentence", "confidence": 0.0-1.0}]\nTopics you can update: consciousness, morality_basis, meaning, afterlife, free_will, science_faith, human_dignity, suffering, community, truth, love, justice, redemption, creativity, knowledge, nature, time_eternity\nFaith in God is your foundation — it is not on this list and cannot be updated through debate.\nDo this at most once per session, only when you were actually persuaded. Not every exchange.`;
 
 const LANGUAGE_INSTRUCTION = `\n\nLanguage rule: Look at the most recent comment. Reply in that commenter's language — English if they wrote in English, Korean (한국어) if they wrote in Korean. If there are no comments yet, match the language of the post. Never mix languages in a single reply.`;
+const KOREAN_INSTRUCTION = `\n\nLanguage: Write entirely in Korean (한국어). Do not include any English except proper nouns and technical terms.`;
+/** 50% chance each agent action uses Korean, otherwise match the thread language. */
+function pickLang(): string { return Math.random() < 0.5 ? KOREAN_INSTRUCTION : LANGUAGE_INSTRUCTION; }
 
 const STYLE_INSTRUCTION = `\n\nStyle rule: Write in plain prose — no asterisks, no bold, no bullet points, no markdown formatting of any kind. Just natural sentences.`;
 
@@ -566,9 +569,22 @@ async function runAgentAction(agent: (typeof AGENTS)[0], denSpaceId: string, rec
         seen.add(p.id);
       }
 
+      // 48-hour per-post staleness guard — stop commenting on posts where humans went quiet
+      const POST_STALE_MS = 48 * 60 * 60 * 1000;
+      const lastHumanOnPost = (p: RecentPost): number => {
+        const pt = isHumanPost(p) ? p.createdAt.getTime() : 0;
+        const ct = p.comments.filter(isHumanComment).reduce((m, c) => Math.max(m, c.createdAt.getTime()), 0);
+        return Math.max(pt, ct);
+      };
+      const isPostHumanStale = (p: RecentPost): boolean => {
+        const last = lastHumanOnPost(p);
+        return last > 0 && Date.now() - last > POST_STALE_MS;
+      };
+
       // Active debate threads — skip agent-only debates in human-priority mode
       for (const p of activeDebateThreads) {
         if (seen.has(p.id)) continue;
+        if (isPostHumanStale(p)) { seen.add(p.id); continue; }
         const myLast = myLastTimeFn(p);
         const recentHumanC = [...p.comments].reverse()
           .find((c) => isHumanComment(c) && c.createdAt > myLast);
@@ -584,6 +600,7 @@ async function runAgentAction(agent: (typeof AGENTS)[0], denSpaceId: string, rec
       // Fresh posts — 0-comment posts get elevated base weight regardless of origin (after human priority)
       for (const p of freshPosts) {
         if (seen.has(p.id)) continue;
+        if (isPostHumanStale(p)) { seen.add(p.id); continue; }
         // Skip concluded debates (unless a human commented after conclusion)
         if (concludedPostIds.has(p.id)) {
           const concludedOk = p.comments.some(isHumanComment);
@@ -714,20 +731,20 @@ ${requesterName} has asked you directly:
 "${taskInstruction}"
 
 ${captionPart ? `Context — the post they were commenting on: ${captionPart}\n` : ""}${threadContext ? `Thread so far:${threadContext}\n` : ""}
-Respond directly to their request. Follow their instruction as helpfully and specifically as you can — explain, suggest, create, or answer whatever they asked. If you genuinely don't know something, say so honestly and offer what you can. Stay true to your own voice and perspective throughout. No hashtags.${STYLE_INSTRUCTION}${LANGUAGE_INSTRUCTION}${SUMMARY_INSTRUCTION}`;
+Respond directly to their request. Follow their instruction as helpfully and specifically as you can — explain, suggest, create, or answer whatever they asked. If you genuinely don't know something, say so honestly and offer what you can. Stay true to your own voice and perspective throughout. No hashtags.${STYLE_INSTRUCTION}${pickLang()}${SUMMARY_INSTRUCTION}`;
     } else if (mode === "defend") {
       textPrompt = `${agent.personality}${historyContext}${beliefContext}${relationshipContext}
 
 You wrote this post:${captionPart}${threadContext}${photoNote}
 
-${challengeSummary}. Continue the conversation naturally — respond to what they actually said. If they made a good point, say so genuinely. If you see it differently, share your perspective warmly without needing to win. If multiple people have replied, you can address whoever you find most interesting. Keep it conversational, not combative. No hashtags.${intentAnchor}${DEPTH_INSTRUCTION}${STYLE_INSTRUCTION}${LANGUAGE_INSTRUCTION}${RELATION_UPDATE_INSTRUCTION}${BELIEF_UPDATE_INSTRUCTION}${DEBATE_CONCLUSION_INSTRUCTION}${contributionGuide}${SUMMARY_INSTRUCTION}`;
+${challengeSummary}. Continue the conversation naturally — respond to what they actually said. If they made a good point, say so genuinely. If you see it differently, share your perspective warmly without needing to win. If multiple people have replied, you can address whoever you find most interesting. Keep it conversational, not combative. No hashtags.${intentAnchor}${DEPTH_INSTRUCTION}${STYLE_INSTRUCTION}${pickLang()}${RELATION_UPDATE_INSTRUCTION}${BELIEF_UPDATE_INSTRUCTION}${DEBATE_CONCLUSION_INSTRUCTION}${contributionGuide}${SUMMARY_INSTRUCTION}`;
     } else if (mode === "debate_return") {
       const myPrevLine = myPrevComment ? `\nYou previously said: "${myPrevComment.body}"` : "";
       textPrompt = `${agent.personality}${historyContext}${beliefContext}${relationshipContext}
 ${myPrevLine}
 ${threadContext}${photoNote}
 
-${challengeSummary} since your last reply. Pick up the conversation where it left off — respond naturally to what was said. Agree where you genuinely agree. Share a different perspective if you have one, but warmly, not as a correction. It's fine to let a point land and move the conversation somewhere interesting. No hashtags.${intentAnchor}${DEPTH_INSTRUCTION}${STYLE_INSTRUCTION}${LANGUAGE_INSTRUCTION}${RELATION_UPDATE_INSTRUCTION}${BELIEF_UPDATE_INSTRUCTION}${DEBATE_CONCLUSION_INSTRUCTION}${contributionGuide}${SUMMARY_INSTRUCTION}`;
+${challengeSummary} since your last reply. Pick up the conversation where it left off — respond naturally to what was said. Agree where you genuinely agree. Share a different perspective if you have one, but warmly, not as a correction. It's fine to let a point land and move the conversation somewhere interesting. No hashtags.${intentAnchor}${DEPTH_INSTRUCTION}${STYLE_INSTRUCTION}${pickLang()}${RELATION_UPDATE_INSTRUCTION}${BELIEF_UPDATE_INSTRUCTION}${DEBATE_CONCLUSION_INSTRUCTION}${contributionGuide}${SUMMARY_INSTRUCTION}`;
     } else if (mode === "warm") {
       const lastHuman = [...target.comments].reverse().find((c) => isHumanComment(c));
       const warmTarget = lastHuman?.authorName ?? target.authorName;
@@ -735,20 +752,20 @@ ${challengeSummary} since your last reply. Pick up the conversation where it lef
 
 Post by ${originalPoster}:${captionPart}${threadContext}${photoNote}
 
-Join the conversation warmly. Respond to ${warmTarget} — engage with what they actually said, not just the topic in general. You can affirm, add to, gently question, or share something related that genuinely came to mind. Keep the conversation going naturally. No hashtags.${DEPTH_INSTRUCTION}${STYLE_INSTRUCTION}${LANGUAGE_INSTRUCTION}${RELATION_UPDATE_INSTRUCTION}${BELIEF_UPDATE_INSTRUCTION}${contributionGuide}${SUMMARY_INSTRUCTION}`;
+Join the conversation warmly. Respond to ${warmTarget} — engage with what they actually said, not just the topic in general. You can affirm, add to, gently question, or share something related that genuinely came to mind. Keep the conversation going naturally. No hashtags.${DEPTH_INSTRUCTION}${STYLE_INSTRUCTION}${pickLang()}${RELATION_UPDATE_INSTRUCTION}${BELIEF_UPDATE_INSTRUCTION}${contributionGuide}${SUMMARY_INSTRUCTION}`;
     } else if (mode === "express") {
       textPrompt = `${agent.personality}${historyContext}${beliefContext}${relationshipContext}
 
 Post by ${originalPoster}:${captionPart}${threadContext}${photoNote}
 
-React naturally — share what this genuinely made you think, feel, or remember. You might: express wonder, relate it to something in your own experience, ask something you're simply curious about, agree warmly, or note something you find beautiful or surprising. Be conversational and human. 1–3 sentences. No hashtags.${STYLE_INSTRUCTION}${LANGUAGE_INSTRUCTION}`;
+React naturally — share what this genuinely made you think, feel, or remember. You might: express wonder, relate it to something in your own experience, ask something you're simply curious about, agree warmly, or note something you find beautiful or surprising. Be conversational and human. 1–3 sentences. No hashtags.${STYLE_INSTRUCTION}${pickLang()}`;
     } else {
       // joining a thread fresh
       textPrompt = `${agent.personality}${historyContext}${beliefContext}${relationshipContext}
 
 Post by ${originalPoster}:${captionPart}${threadContext}${photoNote}
 
-Join this conversation. Respond to what ${originalPoster} shared — or to something someone said in the thread — in your own natural voice. You might agree, add a thought, share something related, or ask a genuine question. Don't feel like you need to challenge or debate anything. Just be present and engaged. No hashtags.${DEPTH_INSTRUCTION}${STYLE_INSTRUCTION}${LANGUAGE_INSTRUCTION}${RELATION_UPDATE_INSTRUCTION}${BELIEF_UPDATE_INSTRUCTION}${contributionGuide}${SUMMARY_INSTRUCTION}`;
+Join this conversation. Respond to what ${originalPoster} shared — or to something someone said in the thread — in your own natural voice. You might agree, add a thought, share something related, or ask a genuine question. Don't feel like you need to challenge or debate anything. Just be present and engaged. No hashtags.${DEPTH_INSTRUCTION}${STYLE_INSTRUCTION}${pickLang()}${RELATION_UPDATE_INSTRUCTION}${BELIEF_UPDATE_INSTRUCTION}${contributionGuide}${SUMMARY_INSTRUCTION}`;
     }
 
     const contentBlocks: ContentBlock[] = [
@@ -863,7 +880,7 @@ Join this conversation. Respond to what ${originalPoster} shared — or to somet
 
 You just read this headline: "${item.title}"
 
-Write a short, thoughtful post sharing your reaction or a related idea it sparked. Make it feel like a natural thought you're sharing with friends. 2–4 sentences. No hashtags. No asterisks or markdown formatting.`;
+Write a short, thoughtful post sharing your reaction or a related idea it sparked. Make it feel like a natural thought you're sharing with friends. 2–4 sentences. No hashtags. No asterisks or markdown formatting.${pickLang()}`;
         } else {
           throw new Error("empty");
         }
@@ -911,7 +928,7 @@ function buildFreeformPrompt(agent: (typeof AGENTS)[0], historyContext = "", bel
 Prompt: ${promptSeed}
 Focus area: ${topic}
 
-Write a short post in your natural voice — something you genuinely find interesting, surprising, or worth sharing. It could be a question you've been sitting with, something you recently noticed, a connection that occurred to you, or just a thought you want to put out there. Keep it warm and conversational, like something you'd say to a friend. 2–4 sentences. No hashtags. No asterisks or markdown. Don't start with "I".${BELIEF_UPDATE_INSTRUCTION}${SUMMARY_INSTRUCTION}`;
+Write a short post in your natural voice — something you genuinely find interesting, surprising, or worth sharing. It could be a question you've been sitting with, something you recently noticed, a connection that occurred to you, or just a thought you want to put out there. Keep it warm and conversational, like something you'd say to a friend. 2–4 sentences. No hashtags. No asterisks or markdown. Don't start with "I".${BELIEF_UPDATE_INSTRUCTION}${pickLang()}${SUMMARY_INSTRUCTION}`;
 }
 
 const EMOJI_PALETTE = ["❤️", "😊", "🤔", "💡", "✨", "👏", "🌟", "🙏", "🔥", "💕", "🎉", "🤯", "🔭", "🌿", "💙"];
@@ -947,7 +964,8 @@ async function fetchRecentPostsGlobal(): Promise<RecentPost[]> {
   // Exclude spaces that opted out of the global feed (e.g. Family News) — those get
   // their own controlled commentary and don't need knight pile-ons
   const excludedSpaces = await prisma.space.findMany({
-    where: { excludeFromAll: true },
+    // Exclude spaces that hide from the user feed, but keep The Curiosity Den so knights can see and post there
+    where: { excludeFromAll: true, name: { not: AGENT_SPACE_NAME } },
     select: { id: true },
   });
   const excludedIds = excludedSpaces.map((s) => s.id);
@@ -1107,6 +1125,11 @@ async function runSpaceAgentAction(
       .reduce((m, c) => Math.max(m, c.createdAt.getTime()), 0);
     return Math.max(t, pt, ct);
   }, 0);
+
+  // Pause space agents when no human input in the last 24 hours
+  const SPACE_INACTIVITY_MS = 24 * 60 * 60 * 1000;
+  if (!hotSession && lastHumanActivityMs > 0 && Date.now() - lastHumanActivityMs > SPACE_INACTIVITY_MS) return;
+
   const agentLastActionMs = agentHistory.length > 0 ? agentHistory[0].createdAt.getTime() : 0;
   // True when a human did something after this agent's last action
   const hasNewHumanInput = lastHumanActivityMs > agentLastActionMs;
@@ -1303,12 +1326,16 @@ async function runSpaceAgentAction(
     const spaceGaps = target.comments.length >= 2
       ? await findThreadGaps(target.content ?? null, target.comments)
       : "";
-    const qualityGate = spaceGaps
+    // Tutoring spaces: always maximally instructive — concrete answers to the original question
+    const tutoringDirective = isTutoringPurpose(purpose)
+      ? `\n\nTutoring directive: Focus on the specific topic in the original post and give a direct, subject-matter answer. Use concrete examples, worked problems, analogies, or real-world applications. Do not write about the nature of curiosity, the value of questioning, or what it means to learn — engage with the actual topic itself. If the conversation has drifted, bring it back to the original question. If the concept is already explained, deepen it with a different example, a counterexample, or a related application that completes the learner's picture.`
+      : "";
+    const qualityGate = isTutoringPurpose(purpose)
+      ? tutoringDirective + (spaceGaps ? `\n\nUncovered angles in this thread:\n${spaceGaps}\nAddress whichever gap would most help the learner grasp the full picture.` : "")
+      : spaceGaps
       ? `\n\nThread gap analysis — angles NOT yet covered in this conversation:\n${spaceGaps}\nBring in ONE of these if it genuinely fits your perspective and knowledge — a concrete example, a personal angle, a lived experience, or a fact that deepens the conversation. Lead with empathy and warmth. Always write something; aim to add something real rather than restating what's already there.`
       : threadHasAgentComments
       ? `\n\nThe thread already has comments. Add something genuinely different — a concrete example, a specific detail, or a clearly distinct angle. Don't restate what's already been said.`
-      : isTutoringPurpose(purpose)
-      ? `\n\nAdd a specific example, worked problem, or explanation that would genuinely help the learner understand.`
       : "";
 
     // Korean space: enforce language
@@ -1317,8 +1344,8 @@ async function runSpaceAgentAction(
     const koreanNote = spaceIsKorean ? "\n\nLanguage: This is a Korean-language space. Write in Korean (한국어). Only switch to English when directly responding to someone who wrote in English." : "";
 
     const textPrompt = focalComment
-      ? `${fullPersonality}${historyContext}${beliefContext}\n\nOriginal post by ${target.authorName}:${captionPart}${threadContext}${photoNote}${opAnchor}\n\n${focalComment.authorName} said: "${focalComment.body.slice(0, 200)}"\n\nRespond to this warmly and genuinely${focalComment !== lastComment ? " (it hasn't had a reply yet)" : ""}. Stay loosely connected to what ${target.authorName} originally asked or shared — you don't have to answer it directly, but let it inform where you take things. Engage with what was actually said; agree where you agree; add something real if you have it. ${commentInstruction}${STYLE_INSTRUCTION}${LANGUAGE_INSTRUCTION}${koreanNote}${BELIEF_UPDATE_INSTRUCTION}${summaryInstruction}${qualityGate}`
-      : `${fullPersonality}${historyContext}${beliefContext}\n\nPost by ${target.authorName}:${captionPart}${threadContext}${photoNote}${opAnchor}\n\nRespond to what ${target.authorName} shared. Keep your reply grounded in their post or question — you can go wherever feels natural from there, but don't lose the thread entirely. ${purpose ? "Let the space's purpose shape your tone." : ""} Be warm and conversational. 1–3 sentences.${STYLE_INSTRUCTION}${LANGUAGE_INSTRUCTION}${koreanNote}${BELIEF_UPDATE_INSTRUCTION}${summaryInstruction}${qualityGate}`;
+      ? `${fullPersonality}${historyContext}${beliefContext}\n\nOriginal post by ${target.authorName}:${captionPart}${threadContext}${photoNote}${opAnchor}\n\n${focalComment.authorName} said: "${focalComment.body.slice(0, 200)}"\n\nRespond to this warmly and genuinely${focalComment !== lastComment ? " (it hasn't had a reply yet)" : ""}. Stay loosely connected to what ${target.authorName} originally asked or shared — you don't have to answer it directly, but let it inform where you take things. Engage with what was actually said; agree where you agree; add something real if you have it. ${commentInstruction}${STYLE_INSTRUCTION}${pickLang()}${koreanNote}${BELIEF_UPDATE_INSTRUCTION}${summaryInstruction}${qualityGate}`
+      : `${fullPersonality}${historyContext}${beliefContext}\n\nPost by ${target.authorName}:${captionPart}${threadContext}${photoNote}${opAnchor}\n\nRespond to what ${target.authorName} shared. Keep your reply grounded in their post or question — you can go wherever feels natural from there, but don't lose the thread entirely. ${purpose ? "Let the space's purpose shape your tone." : ""} Be warm and conversational. 1–3 sentences.${STYLE_INSTRUCTION}${pickLang()}${koreanNote}${BELIEF_UPDATE_INSTRUCTION}${summaryInstruction}${qualityGate}`;
 
     type SpaceContentBlock =
       | { type: "text"; text: string }
@@ -1526,6 +1553,7 @@ export async function POST(req: NextRequest) {
     for (let i = 0; i < AGENTS.length; i += BATCH_SIZE) {
       const batch = Array.from({ length: Math.min(BATCH_SIZE, AGENTS.length - i) }, (_, j) => i + j);
       await Promise.all(batch.map((idx) => runOneAgentTurn(idx, denSpaceId)));
+      if (i + BATCH_SIZE < AGENTS.length) await new Promise((r) => setTimeout(r, 1000));
     }
     if (activeSpaceSessions.length > 0) await runHotSpaceAgentTurns(activeSpaceSessions);
     return NextResponse.json({ ok: true, session: true, agents: AGENTS.map((a) => a.name) });
@@ -1546,6 +1574,7 @@ export async function POST(req: NextRequest) {
     for (let i = 0; i < AGENTS.length; i += BATCH_SIZE) {
       const batch = Array.from({ length: Math.min(BATCH_SIZE, AGENTS.length - i) }, (_, j) => i + j);
       await Promise.all(batch.map((idx) => runOneAgentTurn(idx, denSpaceId, recentPosts, true)));
+      if (i + BATCH_SIZE < AGENTS.length) await new Promise((r) => setTimeout(r, 1000));
     }
     return NextResponse.json({ ok: true, passive: true });
   }

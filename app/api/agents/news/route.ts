@@ -258,7 +258,9 @@ Write exactly two paragraphs separated by a blank line:
 
 Paragraph 1 — factual report: 2–3 sentences. Lead with the most important number, figure, or statistic from the article (percentage change, dollar amount, vote count, casualty figure, rate — whatever is most concrete). Name the specific people, countries, or organizations involved. Attribute naturally: "According to ${sourceName}, …". Do not generalize — use the exact figures given.
 
-Paragraph 2 — your take: 2–3 sentences in your own voice. What do these specific numbers mean for ordinary families or the wider world? Draw out the human consequence — not just what happened, but what it costs or changes for real people.
+Paragraph 2 — who benefits and who loses: 2–3 sentences. Name the specific groups, industries, or countries that stand to gain from this development, and the specific groups that stand to lose or bear the cost. Be concrete — avoid vague language like "some people." Show both sides even if the story only presents one.
+
+Paragraph 3 — your take: 1–2 sentences in your own voice. What is the most important thing ordinary families should understand about this news?
 
 No hashtags. Do not start with "I". Do not repeat the headline verbatim. No asterisks or markdown.`,
         }],
