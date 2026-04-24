@@ -585,16 +585,13 @@ async function searchFlights(p: FlightParams): Promise<string> {
     const arrTime = fmtTime(segs[segs.length - 1]?.arrival_airport?.time);
     const price = `$${e.offer.price}${showRT ? " RT" : ""}`;
 
-    if (showRT && e.retDate && retSegs.length > 0) {
-      const retDepTime = fmtTime(retSegs[0]?.departure_airport?.time);
-      const retArrTime = fmtTime(retSegs[retSegs.length - 1]?.arrival_airport?.time);
+    if (showRT && e.retDate) {
+      const retDepTime = retSegs.length > 0 ? fmtTime(retSegs[0]?.departure_airport?.time) : "?";
+      const retArrTime = retSegs.length > 0 ? fmtTime(retSegs[retSegs.length - 1]?.arrival_airport?.time) : "?";
       return `  ${airline}  out: ${depTime}→${arrTime} ${fmtShort(e.depDate)}  ret: ${retDepTime}→${retArrTime} ${fmtShort(e.retDate)}  ${price}`;
     }
 
-    const dateInfo = showRT && e.retDate
-      ? `${fmtShort(e.depDate)} dep · ${fmtShort(e.retDate)} ret`
-      : `${fmtShort(e.depDate)} dep`;
-    return `  ${airline}  ${depTime}→${arrTime}  ${dateInfo}  ${price}`;
+    return `  ${airline}  ${depTime}→${arrTime}  ${fmtShort(e.depDate)} dep  ${price}`;
   };
 
   const renderOffers = (deduped: OfferEntry[], showRT: boolean): string[] => {
