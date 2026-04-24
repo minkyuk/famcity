@@ -7,6 +7,26 @@ import Image from "next/image";
 import Link from "next/link";
 import { formatDistanceToNow } from "date-fns";
 
+function linkify(text: string, isOwn: boolean): React.ReactNode {
+  const re = /https?:\/\/[^\s)>\]]+/g;
+  const parts: React.ReactNode[] = [];
+  let last = 0;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(text)) !== null) {
+    if (m.index > last) parts.push(text.slice(last, m.index));
+    const url = m[0];
+    parts.push(
+      <a key={m.index} href={url} target="_blank" rel="noopener noreferrer"
+        className={`underline break-all ${isOwn ? "text-blue-200" : "text-blue-500"}`}>
+        {url}
+      </a>
+    );
+    last = m.index + url.length;
+  }
+  if (last < text.length) parts.push(text.slice(last));
+  return parts.length > 1 ? <>{parts}</> : text;
+}
+
 type Message = {
   id: string;
   userId: string;
@@ -309,7 +329,7 @@ export default function ChatRoomPage() {
                           : "bg-gray-100 text-gray-800 rounded-tl-sm"
                       }`}
                     >
-                      {msg.content}
+                      {linkify(msg.content, isOwn)}
                     </div>
                   </div>
                 </div>
