@@ -122,6 +122,7 @@ interface CommentRowProps {
   allComments: Comment[];
   currentUserId: string;
   isAdmin: boolean;
+  likedIds: Set<string>;
   onReply: (parentId: string, parentAuthor: string) => void;
   onDelete: (id: string) => void;
   onEdit: (id: string, body: string) => void;
@@ -133,13 +134,13 @@ interface CommentRowProps {
 }
 
 function CommentRow({
-  c, depth, replies, allComments, currentUserId, isAdmin,
+  c, depth, replies, allComments, currentUserId, isAdmin, likedIds,
   onReply, onDelete, onEdit, editingId, editBody, setEditBody, saveEdit, cancelEdit,
 }: CommentRowProps) {
   const isOwn = c.userId === currentUserId;
   const canDelete = isOwn || isAdmin;
   const [likeCount, setLikeCount] = useState(c.likes ?? 0);
-  const [liked, setLiked] = useState(false);
+  const [liked, setLiked] = useState(() => likedIds.has(c.id));
 
   const handleLike = async () => {
     try {
@@ -239,6 +240,7 @@ function CommentRow({
               allComments={allComments}
               currentUserId={currentUserId}
               isAdmin={isAdmin}
+              likedIds={likedIds}
               onReply={onReply}
               onDelete={onDelete}
               onEdit={onEdit}
@@ -263,7 +265,17 @@ export function CommentThread({ postId, initialComments, currentUserId, currentU
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editBody, setEditBody] = useState("");
   const [replyTo, setReplyTo] = useState<{ id: string; author: string } | null>(null);
+  const [likedIds, setLikedIds] = useState<Set<string>>(new Set());
   const { showToast } = useToast();
+
+  const fetchLiked = async () => {
+    try {
+      const res = await fetch(`/api/comments/liked?postId=${postId}`);
+      if (!res.ok) return;
+      const data = await res.json() as { likedIds: string[] };
+      setLikedIds(new Set(data.likedIds));
+    } catch { /* ignore */ }
+  };
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -338,7 +350,7 @@ export function CommentThread({ postId, initialComments, currentUserId, currentU
   return (
     <div className="mt-2">
       <button
-        onClick={() => setOpen((o) => !o)}
+        onClick={() => { const next = !open; setOpen(next); if (next) fetchLiked(); }}
         className="text-sm text-gray-400 hover:text-gray-600 transition-colors"
       >
         {open ? "Hide" : `${comments.length} comment${comments.length !== 1 ? "s" : ""}`}
@@ -355,6 +367,7 @@ export function CommentThread({ postId, initialComments, currentUserId, currentU
               allComments={comments}
               currentUserId={currentUserId}
               isAdmin={!!isAdmin}
+              likedIds={likedIds}
               onReply={handleReply}
               onDelete={deleteComment}
               onEdit={(id, body) => { setEditingId(id); setEditBody(body); }}
