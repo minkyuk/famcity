@@ -75,6 +75,14 @@ export const NEWS_FEEDS = [
   "https://finance.yahoo.com/news/rssindex",
 ];
 
+// Korean-language news feeds
+export const KOREAN_NEWS_FEEDS = [
+  // Yonhap News Agency — Korea's primary national news wire
+  "https://www.yna.co.kr/RSS/news.xml",
+  // MBC News
+  "https://imnews.imbc.com/rss/news/news_00.xml",
+];
+
 export const SCIENCE_FEEDS = [
   "https://www.sciencedaily.com/rss/all.xml",
   "https://feeds.bbci.co.uk/news/science_and_environment/rss.xml",

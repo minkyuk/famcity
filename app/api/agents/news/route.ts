@@ -3,7 +3,7 @@ import { getServerSession } from "next-auth";
 import Anthropic from "@anthropic-ai/sdk";
 import { prisma } from "@/lib/prisma";
 import { AGENTS, agentAvatarUrl } from "@/lib/agents";
-import { fetchRss, feedSourceName, NEWS_FEEDS } from "@/lib/rss";
+import { fetchRss, feedSourceName, NEWS_FEEDS, KOREAN_NEWS_FEEDS } from "@/lib/rss";
 import { generateInviteCode } from "@/lib/invite";
 import { isCronAuthorized } from "@/lib/cronAuth";
 import { authOptions } from "@/lib/auth";
@@ -404,6 +404,87 @@ What's your perspective on this story through your own lens and values? What wou
     }
 
     await new Promise((r) => setTimeout(r, 800));
+  }
+
+  // --- Korean news: one story from Korean feeds, posted last (appears at top) ---
+  const KOREAN_SLUGS = new Set([
+    "biscuit", "cosmo", "echo", "fern", "archie", "hana", "sora", "miri", "duri", "narae",
+    "yuna", "tae", "planck", "heisenberg",
+  ]);
+  const koreanAgents = AGENTS.filter((a) => KOREAN_SLUGS.has(a.slug));
+
+  try {
+    const koreanFeedResults = await Promise.allSettled(
+      KOREAN_NEWS_FEEDS.map(async (url) => {
+        const items = await fetchRss(url, 15);
+        return { url, items };
+      })
+    );
+
+    const koreanCandidates: { url: string; title: string; description: string }[] = [];
+    const usedKoreanTitles: string[] = [...recentTitles];
+
+    for (const result of koreanFeedResults) {
+      if (result.status !== "fulfilled") continue;
+      const { url, items } = result.value;
+      for (const item of items) {
+        if (!item.title || !item.description || item.description.trim().length < 30) continue;
+        if (usedKoreanTitles.some((t) => isSameStory(t, item.title))) continue;
+        koreanCandidates.push({ url, title: item.title, description: item.description });
+        usedKoreanTitles.push(item.title);
+        if (koreanCandidates.length >= 5) break;
+      }
+      if (koreanCandidates.length >= 5) break;
+    }
+
+    if (koreanCandidates.length > 0) {
+      const pick = koreanCandidates[0];
+      const krAgent = koreanAgents[Math.floor(Math.random() * koreanAgents.length)];
+      const krAvatar = agentAvatarUrl(krAgent.slug);
+      const krSource = feedSourceName(pick.url);
+
+      const krMsg = await anthropic.messages.create({
+        model: "claude-haiku-4-5-20251001",
+        max_tokens: 500,
+        messages: [{
+          role: "user",
+          content: `${krAgent.personality}
+
+아래 뉴스를 가족에게 전달하는 뉴스 리포터로서 보도하세요.
+
+출처: ${krSource}
+제목: ${pick.title}
+내용: ${pick.description.slice(0, 600)}
+
+세 단락을 빈 줄로 구분하여 작성하세요:
+
+1단락 — 사실 보도: 2~3문장. 가장 중요한 수치나 구체적인 사실로 시작하세요. "${krSource}에 따르면, …" 형식으로 자연스럽게 인용하세요.
+
+2단락 — 이득과 손해: 2문장. 누가 혜택을 받고 누가 손해를 보는지 구체적으로 명시하세요.
+
+3단락 — 한마디: 1문장. 가족이 주목해야 할 핵심은?
+
+해시태그 없음. "저는" 또는 "나는"으로 시작하지 마세요. 별표나 마크다운 사용 금지.`,
+        }],
+      });
+
+      const krText = krMsg.content[0].type === "text" ? krMsg.content[0].text.trim() : "";
+      if (krText && krText.length >= 60) {
+        await prisma.post.create({
+          data: {
+            authorName: krAgent.name,
+            authorImage: krAvatar,
+            spaceId,
+            content: `🇰🇷 한국 뉴스\n\n${krText}`,
+            type: "TEXT",
+            metadata: { koreanNews: true, source: krSource },
+          },
+        });
+        results.push({ source: krSource, agent: krAgent.name, headline: pick.title, votes: 0 });
+      }
+    }
+  } catch {
+    // Korean news is best-effort — don't fail the whole run
   }
 
   return NextResponse.json({ ok: true, posted: results.length, results });
