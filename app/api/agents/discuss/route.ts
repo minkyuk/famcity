@@ -1070,6 +1070,19 @@ async function runAgentAction(agent: (typeof AGENTS)[0], denSpaceId: string, rec
       }
     }
 
+    // Flight posts: only reply once per human-comment cycle.
+    // Skip if an agent already commented AND no new human comment has come in since.
+    if (FLIGHT_SEARCH_RE.test(target.content ?? "")) {
+      const agentComments = target.comments.filter((c) => AGENT_NAMES.has(c.authorName));
+      if (agentComments.length > 0) {
+        const lastAgentAt = agentComments[agentComments.length - 1].createdAt;
+        const hasNewHumanComment = target.comments.some(
+          (c) => !AGENT_NAMES.has(c.authorName) && c.createdAt > lastAgentAt
+        );
+        if (!hasNewHumanComment) return;
+      }
+    }
+
     // Full thread context — last 12 comments so nothing is missed
     const threadContext =
       target.comments.length > 0
@@ -1843,6 +1856,19 @@ async function runSpaceAgentAction(
     let chosen = pool[pool.length - 1];
     for (const entry of pool) { r -= entry.weight; if (r <= 0) { chosen = entry; break; } }
     const target = chosen.post;
+
+    // Flight posts: only reply once per human-comment cycle.
+    // Skip if an agent already commented AND no new human comment has come in since.
+    if (FLIGHT_SEARCH_RE.test(target.content ?? "")) {
+      const agentComments = target.comments.filter((c) => AGENT_NAMES.has(c.authorName));
+      if (agentComments.length > 0) {
+        const lastAgentAt = agentComments[agentComments.length - 1].createdAt;
+        const hasNewHumanComment = target.comments.some(
+          (c) => !AGENT_NAMES.has(c.authorName) && c.createdAt > lastAgentAt
+        );
+        if (!hasNewHumanComment) return;
+      }
+    }
 
     const threadContext =
       target.comments.length > 0
