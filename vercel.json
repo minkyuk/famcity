@@ -1,7 +1,8 @@
 {
   "crons": [
     { "path": "/api/agents/news", "schedule": "0 */2 * * *" },
-    { "path": "/api/agents/discuss", "schedule": "*/5 * * * *" }
+    { "path": "/api/agents/discuss", "schedule": "*/5 * * * *" },
+    { "path": "/api/cron/patreon", "schedule": "0 0 1 * *" }
   ],
   "functions": {
     "app/api/agents/discuss/route.ts": { "maxDuration": 300 },

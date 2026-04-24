@@ -3,12 +3,13 @@
 import { useEffect, useRef, useState } from "react";
 import { useSession } from "next-auth/react";
 import Image from "next/image";
-import { useParams } from "next/navigation";
+import { useParams, useSearchParams } from "next/navigation";
 import { PostCard } from "@/components/Feed/PostCard";
 import { DMModal } from "@/components/shared/DMModal";
 import { useToast } from "@/components/shared/Toast";
 
-type User = { id: string; name: string | null; image: string | null; bio: string | null; email: string | null };
+type PatreonInfo = { patronStatus: string; tierCents: number; lastCreditedAt: string | null } | null;
+type User = { id: string; name: string | null; image: string | null; bio: string | null; email: string | null; patreonAccount?: PatreonInfo };
 
 async function uploadToCloudinary(file: File): Promise<string> {
   const signRes = await fetch("/api/media/sign");
@@ -32,6 +33,7 @@ async function uploadToCloudinary(file: File): Promise<string> {
 
 export default function ProfilePage() {
   const { id } = useParams<{ id: string }>();
+  const searchParams = useSearchParams();
   const { data: session, update: updateSession } = useSession();
   const { showToast } = useToast();
   const [user, setUser] = useState<User | null>(null);
@@ -52,6 +54,7 @@ export default function ProfilePage() {
   const isAdmin = !!(session?.user as { isAdmin?: boolean } | undefined)?.isAdmin;
 
   const [credits, setCredits] = useState<number | null>(null);
+  const [patreon, setPatreon] = useState<PatreonInfo>(null);
   const [grantAmount, setGrantAmount] = useState("100");
   const [granting, setGranting] = useState(false);
 
@@ -63,6 +66,7 @@ export default function ProfilePage() {
         setEditName(d.user?.name ?? "");
         setEditBio(d.user?.bio ?? "");
         setEditImage(d.user?.image ?? null);
+        setPatreon(d.user?.patreonAccount ?? null);
         setPosts(d.posts ?? []);
         setLoading(false);
       });
@@ -76,6 +80,12 @@ export default function ProfilePage() {
       .then((d) => { if (typeof d.credits === "number") setCredits(d.credits); })
       .catch(() => {});
   }, [id, session, isOwn, isAdmin]);
+
+  useEffect(() => {
+    const p = searchParams.get("patreon");
+    if (p === "connected") showToast("Patreon connected! Credits added.");
+    if (p === "error") showToast("Patreon connection failed. Try again.", "error");
+  }, [searchParams]);
 
   const handleGrant = async () => {
     const amount = parseInt(grantAmount, 10);
@@ -241,12 +251,26 @@ export default function ProfilePage() {
               isOwn && <p className="text-sm text-gray-400 italic mt-2">No bio yet.</p>
             )}
             {isOwn && (
-              <button
-                onClick={() => setEditing(true)}
-                className="mt-3 text-xs text-orange-500 hover:text-orange-600 font-medium border border-orange-200 rounded-full px-3 py-1 transition-colors"
-              >
-                ✏️ Edit profile
-              </button>
+              <div className="mt-3 flex flex-wrap justify-center gap-2">
+                <button
+                  onClick={() => setEditing(true)}
+                  className="text-xs text-orange-500 hover:text-orange-600 font-medium border border-orange-200 rounded-full px-3 py-1 transition-colors"
+                >
+                  ✏️ Edit profile
+                </button>
+                {patreon?.patronStatus === "active_patron" ? (
+                  <span className="text-xs text-orange-500 font-medium border border-orange-200 rounded-full px-3 py-1">
+                    Patreon connected ✓
+                  </span>
+                ) : (
+                  <a
+                    href="/api/auth/patreon"
+                    className="text-xs text-white bg-orange-500 hover:bg-orange-600 font-medium rounded-full px-3 py-1 transition-colors"
+                  >
+                    Connect Patreon
+                  </a>
+                )}
+              </div>
             )}
             {!isOwn && session?.user && (
               <button

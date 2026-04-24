@@ -56,6 +56,7 @@ model User {
   spaces          SpaceMember[]
   commentLikes    CommentLike[]
   payments        Payment[]
+  patreonAccount  PatreonAccount?
 }
 
 model VerificationToken {
@@ -287,6 +288,20 @@ model CreditTransaction {
   user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId, createdAt])
+}
+
+model PatreonAccount {
+  id             String    @id @default(cuid())
+  userId         String    @unique
+  user           User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  patreonUserId  String    @unique
+  accessToken    String
+  refreshToken   String?
+  tierCents      Int       @default(0)  // currently_entitled_amount_cents
+  patronStatus   String    @default("active_patron")
+  lastCreditedAt DateTime?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
 }
 
 model Payment {

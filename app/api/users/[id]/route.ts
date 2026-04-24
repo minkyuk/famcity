@@ -15,7 +15,12 @@ export async function GET(
 
   const user = await prisma.user.findUnique({
     where: { id },
-    select: { id: true, name: true, image: true, bio: true, email: true },
+    select: {
+      id: true, name: true, image: true, bio: true, email: true,
+      patreonAccount: session.user.id === id
+        ? { select: { patronStatus: true, tierCents: true, lastCreditedAt: true } }
+        : false,
+    },
   });
   if (!user) return NextResponse.json({ error: "Not found" }, { status: 404 });
 
