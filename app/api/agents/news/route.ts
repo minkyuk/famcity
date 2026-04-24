@@ -163,13 +163,22 @@ export async function POST(req: NextRequest) {
           role: "user",
           content: `${agent.personality}
 
-Review these ${candidates.length} news stories. You have exactly 2 votes. Strongly prefer stories tagged [GLOBAL/FINANCE] or [BREAKING] — these affect the most people. Choose the 2 stories with the greatest real-world impact on global affairs, financial markets, or family finances. For each vote, write one sentence stating the specific impact (name numbers, countries, or affected groups if present).
+Review these ${candidates.length} news stories. You have exactly 2 votes.
+
+Judge each story on all four criteria and vote for the 2 that score best overall:
+
+1. Global significance — Does this affect people, economies, or governments across multiple countries, not just one?
+2. Audience sympathy — Can most ordinary people relate to this, feel the stakes, or be genuinely moved by it?
+3. Critical importance — Is this urgent, high-stakes, or likely to have lasting real-world consequences?
+4. Novelty — Is this genuinely new information, not a story that has been unfolding for weeks already?
+
+Prefer stories tagged [GLOBAL/FINANCE] or [BREAKING]. Skip anything that feels like background noise or a recurring slow-burn story.
 
 Stories:
 ${storyList}
 
 Respond ONLY with valid JSON, no other text:
-{"votes": [{"index": 0, "reason": "one sentence on specific impact"}, {"index": 2, "reason": "one sentence on specific impact"}]}`,
+{"votes": [{"index": 0, "reason": "one sentence on which criteria it meets"}, {"index": 2, "reason": "one sentence on which criteria it meets"}]}`,
         }],
       });
 
