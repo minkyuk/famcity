@@ -1,39 +1,43 @@
-"use client";
+import { Metadata } from "next";
+import { prisma } from "@/lib/prisma";
+import { JoinClient } from "./JoinClient";
 
-import { useEffect, useState } from "react";
-import { useRouter, useParams } from "next/navigation";
-import { useSession, signIn } from "next-auth/react";
+export async function generateMetadata({
+  params,
+}: {
+  params: Promise<{ code: string }>;
+}): Promise<Metadata> {
+  const { code } = await params;
+  const space = await prisma.space.findUnique({
+    where: { inviteCode: code },
+    select: { name: true },
+  });
 
-export default function JoinPage() {
-  const { code } = useParams<{ code: string }>();
-  const { data: session, status } = useSession();
-  const router = useRouter();
-  const [message, setMessage] = useState("Joining…");
+  const spaceName = space?.name ?? "FamCity";
+  const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? "https://famcity.vercel.app";
+  const ogImageUrl = `${appUrl}/api/og?space=${encodeURIComponent(spaceName)}`;
 
-  useEffect(() => {
-    if (status === "loading") return;
-    if (!session) {
-      signIn("google", { callbackUrl: `/join/${code}` });
-      return;
-    }
+  return {
+    title: `Join ${spaceName} on FamCity`,
+    description: `You've been invited to join ${spaceName} — a private family space on FamCity.`,
+    openGraph: {
+      title: `Join ${spaceName} on FamCity`,
+      description: `You've been invited to join ${spaceName} — a private family space on FamCity.`,
+      images: [{ url: ogImageUrl, width: 1200, height: 630 }],
+    },
+    twitter: {
+      card: "summary_large_image",
+      title: `Join ${spaceName} on FamCity`,
+      images: [ogImageUrl],
+    },
+  };
+}
 
-    fetch(`/api/join/${code}`, { method: "POST" })
-      .then((r) => r.json())
-      .then((data) => {
-        if (data.spaceId) {
-          setMessage(`Joined "${data.name}"! Redirecting…`);
-          setTimeout(() => router.push(`/spaces/${data.spaceId}`), 1000);
-        } else {
-          setMessage("Invalid or expired invite link.");
-        }
-      })
-      .catch(() => setMessage("Something went wrong."));
-  }, [session, status, code, router]);
-
-  return (
-    <div className="min-h-[60vh] flex flex-col items-center justify-center gap-4">
-      <span className="text-5xl">🏡</span>
-      <p className="text-gray-600 text-sm font-medium">{message}</p>
-    </div>
-  );
+export default async function JoinPage({
+  params,
+}: {
+  params: Promise<{ code: string }>;
+}) {
+  const { code } = await params;
+  return <JoinClient code={code} />;
 }
