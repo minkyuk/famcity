@@ -423,77 +423,51 @@ function buildFlightLinks(p: FlightParams): string {
   return `Skyscanner: ${sky}\nGoogle Flights: ${goog}`;
 }
 
-// --- Amadeus flight search ---
-let amadeusToken: { token: string; expiresAt: number } | null = null;
+// --- SerpAPI Google Flights search ---
 
-async function getAmadeusToken(): Promise<string | null> {
-  const key = process.env.AMADEUS_API_KEY;
-  const secret = process.env.AMADEUS_API_SECRET;
-  if (!key || !secret) return null;
-  if (amadeusToken && Date.now() < amadeusToken.expiresAt) return amadeusToken.token;
-  try {
-    const res = await fetch("https://test.api.amadeus.com/v1/security/oauth2/token", {
-      method: "POST",
-      headers: { "Content-Type": "application/x-www-form-urlencoded" },
-      body: `grant_type=client_credentials&client_id=${key}&client_secret=${secret}`,
-    });
-    if (!res.ok) return null;
-    const data = await res.json() as { access_token: string; expires_in: number };
-    amadeusToken = { token: data.access_token, expiresAt: Date.now() + (data.expires_in - 60) * 1000 };
-    return amadeusToken.token;
-  } catch { return null; }
-}
+type SerpFlight = {
+  flights?: { airline?: string; departure_airport?: { time?: string }; arrival_airport?: { time?: string } }[];
+  price?: number;
+};
 
-/** Search Amadeus for real fares; fall back to deep links only if unavailable. */
+/** Search Google Flights via SerpAPI; fall back to deep links only if unavailable. */
 async function searchFlights(p: FlightParams): Promise<string> {
   const links = buildFlightLinks(p);
-  const token = await getAmadeusToken().catch(() => null);
-  if (!token) return `\n\n${links}`;
+  const key = process.env.SERPAPI_KEY;
+  if (!key) return `\n\n${links}`;
 
   try {
     const params = new URLSearchParams({
-      originLocationCode: p.origin,
-      destinationLocationCode: p.destination,
-      departureDate: p.departDate,
-      adults: "1",
-      max: "5",
-      currencyCode: "USD",
+      engine: "google_flights",
+      departure_id: p.origin,
+      arrival_id: p.destination,
+      outbound_date: p.departDate,
+      currency: "USD",
+      hl: "en",
+      type: p.returnDate ? "1" : "2", // 1=round trip, 2=one way
+      api_key: key,
     });
-    if (p.returnDate) params.set("returnDate", p.returnDate);
+    if (p.returnDate) params.set("return_date", p.returnDate);
 
-    const res = await fetch(`https://test.api.amadeus.com/v2/shopping/flight-offers?${params}`, {
-      headers: { Authorization: `Bearer ${token}` },
-    });
+    const res = await fetch(`https://serpapi.com/search?${params}`);
     if (!res.ok) return `\n\n${links}`;
 
-    const data = await res.json() as { data?: unknown[] };
-    const offers = (data.data ?? []).slice(0, 5) as Record<string, unknown>[];
+    const data = await res.json() as { best_flights?: SerpFlight[]; other_flights?: SerpFlight[] };
+    const offers = [...(data.best_flights ?? []), ...(data.other_flights ?? [])].slice(0, 5);
     if (offers.length === 0) return `\n\n${links}`;
 
-    const dictionaries = (data as Record<string, unknown>).dictionaries as Record<string, Record<string, string>> | undefined;
-    const carrierNames = dictionaries?.carriers ?? {};
-
-    const formatLeg = (itinerary: Record<string, unknown> | undefined): string => {
-      const segments = (itinerary?.segments as Record<string, unknown>[]) ?? [];
-      if (segments.length === 0) return "?";
-      const stops = segments.length - 1;
-      const depTime = (segments[0]?.departure as Record<string, string>)?.at?.slice(11, 16) ?? "?";
-      const arrTime = (segments[segments.length - 1]?.arrival as Record<string, string>)?.at?.slice(11, 16) ?? "?";
-      const stopLabel = stops === 0 ? "nonstop" : `${stops} stop${stops > 1 ? "s" : ""}`;
-      return `${depTime}→${arrTime} ${stopLabel}`;
-    };
+    const fmtTime = (t?: string) => t?.slice(11, 16) ?? "?";
 
     const lines = offers.map((offer) => {
-      const price = (offer.price as Record<string, string>)?.grandTotal ?? "?";
-      const itineraries = (offer.itineraries as unknown[]) ?? [];
-      const out = itineraries[0] as Record<string, unknown> | undefined;
-      const ret = itineraries[1] as Record<string, unknown> | undefined;
-      const outSegs = (out?.segments as Record<string, unknown>[]) ?? [];
-      const carrierCode = (outSegs[0]?.carrierCode as string) ?? "?";
-      const carrier = carrierNames[carrierCode] ?? carrierCode;
-      const outLabel = formatLeg(out);
-      const retLabel = ret ? ` / ↩ ${formatLeg(ret)}` : "";
-      return `• ${carrier} — ✈ ${outLabel}${retLabel} — $${price}`;
+      const segs = offer.flights ?? [];
+      const airline = segs[0]?.airline ?? "?";
+      const depTime = fmtTime(segs[0]?.departure_airport?.time);
+      const arrTime = fmtTime(segs[segs.length - 1]?.arrival_airport?.time);
+      const stops = Math.max(0, segs.length - 1);
+      const stopLabel = stops === 0 ? "nonstop" : `${stops} stop${stops > 1 ? "s" : ""}`;
+      const price = offer.price ? `$${offer.price}` : "?";
+      const tripNote = p.returnDate ? " (RT total)" : "";
+      return `• ${airline} — ✈ ${depTime}→${arrTime} ${stopLabel} — ${price}${tripNote}`;
     });
 
     const tripType = p.returnDate ? `round trip, return ${p.returnDate}` : "one way";
