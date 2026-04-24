@@ -16,7 +16,12 @@ export async function POST(
 
   const space = await prisma.space.findUnique({ where: { inviteCode: code } });
   if (!space) {
-    return NextResponse.json({ error: "Invalid invite code" }, { status: 404 });
+    return NextResponse.json({ error: "Invalid invite link" }, { status: 404 });
+  }
+
+  // Check expiry (null = legacy code with no expiry, still valid)
+  if (space.inviteCodeExpiresAt && space.inviteCodeExpiresAt < new Date()) {
+    return NextResponse.json({ error: "This invite link has expired. Ask the space owner for a new one." }, { status: 410 });
   }
 
   // Upsert — idempotent if already a member
@@ -24,6 +29,20 @@ export async function POST(
     where: { userId_spaceId: { userId: session.user.id, spaceId: space.id } },
     create: { userId: session.user.id, spaceId: space.id, role: "MEMBER" },
     update: {},
+  });
+
+  // Rotate the invite code so it can't be reused
+  const { generateInviteCode } = await import("@/lib/invite");
+  let newCode = generateInviteCode();
+  while (await prisma.space.findUnique({ where: { inviteCode: newCode } })) {
+    newCode = generateInviteCode();
+  }
+  await prisma.space.update({
+    where: { id: space.id },
+    data: {
+      inviteCode: newCode,
+      inviteCodeExpiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000),
+    },
   });
 
   return NextResponse.json({ spaceId: space.id, name: space.name });

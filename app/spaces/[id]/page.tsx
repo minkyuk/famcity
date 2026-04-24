@@ -109,7 +109,7 @@ export default async function SpacePage({
           <div className="flex items-center gap-2">
             {!space.isSystem && <SpaceAgentsDropdown agents={spaceAgents} />}
             <SpaceHotButton spaceId={id} />
-            {!space.isSystem && <InviteButton inviteCode={space.inviteCode} />}
+            {!space.isSystem && <InviteButton spaceId={id} />}
             {!space.isSystem && <AddAgentButton spaceId={id} />}
             {!space.isSystem && (
               <EditSpaceButton spaceId={id} currentDescription={space.description ?? null} currentPurpose={space.purpose ?? null} />

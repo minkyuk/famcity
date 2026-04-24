@@ -71,8 +71,9 @@ model Space {
   id              String           @id @default(cuid())
   name            String
   description     String?
-  inviteCode      String           @unique
-  createdAt       DateTime         @default(now())
+  inviteCode          String           @unique
+  inviteCodeExpiresAt DateTime?
+  createdAt           DateTime         @default(now())
   excludeFromAll  Boolean          @default(false)
   isSystem        Boolean          @default(false)
   purpose         String?
