@@ -459,6 +459,7 @@ function buildFlightLinks(p: FlightParams): string {
 type SerpFlight = {
   flights?: { airline?: string; departure_airport?: { time?: string }; arrival_airport?: { time?: string } }[];
   price?: number;
+  airline?: string; // top-level carrier (SerpAPI includes this directly on the result)
 };
 
 /** Search Google Flights via SerpAPI: ±3 days on both departure and return, nonstop & 1-stop only.
@@ -525,12 +526,25 @@ async function searchFlights(p: FlightParams): Promise<string> {
         pool.push({ offer, depDate, retDate });
       }
     }
-    pool.sort((a, b) => (a.offer.price ?? 999999) - (b.offer.price ?? 999999));
+
+    // Sort by price with a $10/day penalty for each day away from the requested dates.
+    // This keeps exact-date results first when prices are similar, while still
+    // surfacing meaningfully cheaper flights on alternate dates.
+    const PENALTY_PER_DAY = 10;
+    const msPerDay = 86400000;
+    const daysDiff = (a: string, b: string) =>
+      Math.round(Math.abs(new Date(a + "T12:00:00Z").getTime() - new Date(b + "T12:00:00Z").getTime()) / msPerDay);
+    const score = (e: OfferEntry) => {
+      const depDelta = daysDiff(e.depDate, departDate);
+      const retDelta = returnDate && e.retDate ? daysDiff(e.retDate, returnDate) : 0;
+      return (e.offer.price ?? 999999) + (depDelta + retDelta) * PENALTY_PER_DAY;
+    };
+    pool.sort((a, b) => score(a) - score(b));
 
     const seen = new Set<string>();
     const deduped: OfferEntry[] = [];
     for (const e of pool) {
-      const key = `${e.offer.price}-${e.offer.flights?.[0]?.airline}-${e.depDate}-${e.retDate ?? ""}`;
+      const key = `${e.offer.price}-${e.offer.airline ?? e.offer.flights?.[0]?.airline}-${e.depDate}-${e.retDate ?? ""}`;
       if (seen.has(key)) continue;
       seen.add(key);
       deduped.push(e);
@@ -563,7 +577,8 @@ async function searchFlights(p: FlightParams): Promise<string> {
 
   const formatLine = (e: OfferEntry, showRT: boolean): string => {
     const segs = e.offer.flights ?? [];
-    const airline = segs[0]?.airline ?? "?";
+    // Use top-level airline field first (SerpAPI surfaces it there), fall back to first segment
+    const airline = e.offer.airline ?? segs[0]?.airline ?? "?";
     const depTime = fmtTime(segs[0]?.departure_airport?.time);
     const arrTime = fmtTime(segs[segs.length - 1]?.arrival_airport?.time);
     const price = `$${e.offer.price}${showRT ? " RT" : ""}`;
@@ -574,8 +589,8 @@ async function searchFlights(p: FlightParams): Promise<string> {
   };
 
   const renderOffers = (deduped: OfferEntry[], showRT: boolean): string[] => {
-    const nonstop = deduped.filter(({ offer }) => (offer.flights?.length ?? 1) <= 1).slice(0, 5);
-    const oneStop = deduped.filter(({ offer }) => (offer.flights?.length ?? 1) === 2).slice(0, 5);
+    const nonstop = deduped.filter(({ offer }) => (offer.flights?.length ?? 1) <= 1).slice(0, 10);
+    const oneStop = deduped.filter(({ offer }) => (offer.flights?.length ?? 1) === 2).slice(0, 10);
     const lines: string[] = [];
     if (nonstop.length > 0) { lines.push("Nonstop:"); nonstop.forEach(e => lines.push(formatLine(e, showRT))); }
     if (oneStop.length > 0) { lines.push("1 Stop:"); oneStop.forEach(e => lines.push(formatLine(e, showRT))); }
