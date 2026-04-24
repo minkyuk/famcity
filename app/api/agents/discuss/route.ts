@@ -367,6 +367,62 @@ type RecentPost = {
 const AGENT_NAMES = new Set(AGENTS.map((a) => a.name));
 const AGENT_NAME_TO_SLUG = new Map(AGENTS.map((a) => [a.name, a.slug]));
 
+/** Slugs of the 5 travel-expert knight agents */
+const TRAVEL_AGENT_SLUGS = new Set(["finn", "skye", "marco", "vera", "koa"]);
+
+const FLIGHT_SEARCH_RE = /\b(flight|flights|fly|flying|airline|ticket|tickets|sfo|jfk|lax|ord|atl|dfw|den|sea|mia|bos|icn|nrt|hnd|lhr|cdg|fra|ams|dxb|sin|hkg|pek|pvg|incheon|narita|heathrow|depart|departure|arrival|arrive|round.?trip|one.?way|layover|nonstop|direct.?flight)\b/i;
+
+interface FlightParams {
+  origin: string;
+  destination: string;
+  departDate: string;
+  returnDate?: string;
+}
+
+/** Parse a flight search request from natural language. Returns null if not a flight search. */
+async function extractFlightParams(text: string): Promise<FlightParams | null> {
+  if (!FLIGHT_SEARCH_RE.test(text)) return null;
+  const today = new Date().toISOString().slice(0, 10);
+  try {
+    const msg = await anthropic.messages.create({
+      model: "claude-haiku-4-5-20251001",
+      max_tokens: 120,
+      messages: [{
+        role: "user",
+        content: `Today is ${today}. Extract flight parameters. Return only valid JSON or the word null.
+
+Text: "${text.slice(0, 400)}"
+
+Rules: 3-letter IATA codes (SFO, ICN, JFK…); dates as YYYY-MM-DD (assume ${new Date().getFullYear()} or next year if ambiguous); omit returnDate for one-way.
+
+Example: {"origin":"SFO","destination":"ICN","departDate":"2026-05-08","returnDate":"2026-05-18"}`,
+      }],
+    });
+    const raw = msg.content[0].type === "text" ? msg.content[0].text.trim() : "null";
+    if (raw === "null" || !raw.includes("{")) return null;
+    const parsed = JSON.parse(raw.match(/\{[\s\S]*?\}/)?.[0] ?? "null") as FlightParams | null;
+    if (!parsed?.origin || !parsed?.destination || !parsed?.departDate) return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+/** Build clickable Skyscanner + Google Flights deep links from parsed params. */
+function buildFlightLinks(p: FlightParams): string {
+  const toYYMMDD = (d: string) => d.replace(/-/g, "").slice(2); // 2026-05-08 → 260508
+  const o = p.origin.toLowerCase();
+  const d = p.destination.toLowerCase();
+  const dep = toYYMMDD(p.departDate);
+  const sky = p.returnDate
+    ? `https://www.skyscanner.net/transport/flights/${o}/${d}/${dep}/${toYYMMDD(p.returnDate)}/`
+    : `https://www.skyscanner.net/transport/flights/${o}/${d}/${dep}/`;
+  const goog = p.returnDate
+    ? `https://www.google.com/travel/flights#flt=${p.origin}.${p.destination}.${p.departDate}*${p.destination}.${p.origin}.${p.returnDate};c:USD;e:1;sd:1;t:f`
+    : `https://www.google.com/travel/flights#flt=${p.origin}.${p.destination}.${p.departDate};c:USD;e:1;sd:1;t:f`;
+  return `\n\nSkyscanner: ${sky}\nGoogle Flights: ${goog}`;
+}
+
 /**
  * Score how relevant a post/thread is to an agent's interests.
  * Two-pass: (1) split topic phrases into words ≥4 chars, (2) direct keyword substring match.
@@ -1224,11 +1280,18 @@ async function runDirectTurn(agent: (typeof AGENTS)[0], post: RecentPost): Promi
   const gapNote = gaps ? `\n\nAngles not yet covered:\n${gaps}\nBring in one of these if it fits.` : "";
   const respondTo = lastHuman ? `${lastHuman.authorName}` : post.authorName;
 
+  // Travel agents: if this looks like a flight search, give route-specific advice
+  const isTravelAgent = TRAVEL_AGENT_SLUGS.has(agent.slug);
+  const isFlightSearch = isTravelAgent && FLIGHT_SEARCH_RE.test([post.content, ...post.comments.map(c => c.body)].join(" "));
+  const flightInstruction = isFlightSearch
+    ? `\n\nThis is a flight search request. Give specific, actionable advice for this exact route and dates — booking windows, best search tools for this corridor, flexible date tips, what to watch for. Be concrete: name tools, name strategies, name trade-offs. Don't be generic.`
+    : "";
+
   const prompt = `${agent.personality}${historyContext}${beliefContext}
 
 Post by ${post.authorName}:${postCaption}${threadContext}
 
-${respondTo} is waiting for a reply. Respond directly and helpfully — engage with what was actually said. Add a concrete example, a fresh angle, or a specific insight. Be warm but get to the point. 2–4 sentences. No hashtags.${gapNote}${DEPTH_INSTRUCTION}${STYLE_INSTRUCTION}${pickTone()}${pickLang()}`;
+${respondTo} is waiting for a reply. Respond directly and helpfully — engage with what was actually said. Add a concrete example, a fresh angle, or a specific insight. Be warm but get to the point. 2–4 sentences. No hashtags.${gapNote}${flightInstruction}${DEPTH_INSTRUCTION}${STYLE_INSTRUCTION}${pickTone()}${pickLang()}`;
 
   try {
     const response = await anthropic.messages.create({
@@ -1236,10 +1299,16 @@ ${respondTo} is waiting for a reply. Respond directly and helpfully — engage w
       max_tokens: 600,
       messages: [{ role: "user", content: prompt }],
     });
-    const text = response.content[0].type === "text" ? response.content[0].text.trim() : "";
+    let text = response.content[0].type === "text" ? response.content[0].text.trim() : "";
     if (!text || text.length < 10) return;
     if (post.comments.length > 0 && !(await isNovel(text, post.comments))) return;
     if (!(await isFactuallyHumble(text, post.content ?? null))) return;
+    // Travel agents: append clickable search links when responding to a flight search request
+    if (TRAVEL_AGENT_SLUGS.has(agent.slug)) {
+      const searchText = [post.content, ...post.comments.map((c) => c.body)].filter(Boolean).join(" ");
+      const flightParams = await extractFlightParams(searchText).catch(() => null);
+      if (flightParams) text += buildFlightLinks(flightParams);
+    }
     await prisma.comment.create({
       data: { postId: post.id, authorName: agent.name, authorImage: avatar, body: text },
     });
@@ -1610,8 +1679,16 @@ async function runSpaceAgentAction(
     if (!spaceFafo && (isTutoringPurpose(purpose) || isDebatePurpose(purpose)) &&
         !(await isOnTopicAndHelpful(text, target.content ?? null, isTutoringPurpose(purpose)))) return;
 
+    // Flight spaces: append live search links when the post is a flight search request
+    let finalText = text;
+    if (FLIGHT_SEARCH_RE.test(target.content ?? "")) {
+      const searchText = [target.content, ...target.comments.map((c) => c.body)].filter(Boolean).join(" ");
+      const flightParams = await extractFlightParams(searchText).catch(() => null);
+      if (flightParams) finalText += buildFlightLinks(flightParams);
+    }
+
     await prisma.comment.create({
-      data: { postId: target.id, authorName: spaceAgent.name, authorImage: avatar, body: text, ...(chosen.replyId ? { parentId: chosen.replyId } : {}), ...(commentSummary ? { summary: commentSummary } : {}) },
+      data: { postId: target.id, authorName: spaceAgent.name, authorImage: avatar, body: finalText, ...(chosen.replyId ? { parentId: chosen.replyId } : {}), ...(commentSummary ? { summary: commentSummary } : {}) },
     });
   } else {
     if (passiveMode) return; // passive mode: no new posts from space agents either
