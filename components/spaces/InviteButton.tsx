@@ -11,14 +11,22 @@ export function InviteButton({ spaceId }: { spaceId: string }) {
     setLoading(true);
     try {
       const res = await fetch(`/api/spaces/${spaceId}/invite`);
-      if (!res.ok) throw new Error();
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({})) as { error?: string };
+        throw new Error(err.error ?? `HTTP ${res.status}`);
+      }
       const { code, expiresAt } = await res.json() as { code: string; expiresAt: string };
       const url = `${window.location.origin}/join/${code}`;
-      await navigator.clipboard.writeText(url);
       const hours = Math.round((new Date(expiresAt).getTime() - Date.now()) / 3_600_000);
-      showToast(`Invite link copied! Expires in ~${hours}h`);
-    } catch {
-      showToast("Failed to get invite link", "error");
+      try {
+        await navigator.clipboard.writeText(url);
+        showToast(`Invite link copied! Expires in ~${hours}h`);
+      } catch {
+        // Clipboard blocked — show the URL instead so user can copy manually
+        showToast(`Invite: ${url}`, "error");
+      }
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : "Failed to get invite link", "error");
     } finally {
       setLoading(false);
     }
