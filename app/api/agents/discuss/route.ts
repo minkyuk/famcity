@@ -420,7 +420,77 @@ function buildFlightLinks(p: FlightParams): string {
   const goog = p.returnDate
     ? `https://www.google.com/travel/flights#flt=${p.origin}.${p.destination}.${p.departDate}*${p.destination}.${p.origin}.${p.returnDate};c:USD;e:1;sd:1;t:f`
     : `https://www.google.com/travel/flights#flt=${p.origin}.${p.destination}.${p.departDate};c:USD;e:1;sd:1;t:f`;
-  return `\n\nSkyscanner: ${sky}\nGoogle Flights: ${goog}`;
+  return `Skyscanner: ${sky}\nGoogle Flights: ${goog}`;
+}
+
+// --- Amadeus flight search ---
+let amadeusToken: { token: string; expiresAt: number } | null = null;
+
+async function getAmadeusToken(): Promise<string | null> {
+  const key = process.env.AMADEUS_API_KEY;
+  const secret = process.env.AMADEUS_API_SECRET;
+  if (!key || !secret) return null;
+  if (amadeusToken && Date.now() < amadeusToken.expiresAt) return amadeusToken.token;
+  try {
+    const res = await fetch("https://test.api.amadeus.com/v1/security/oauth2/token", {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: `grant_type=client_credentials&client_id=${key}&client_secret=${secret}`,
+    });
+    if (!res.ok) return null;
+    const data = await res.json() as { access_token: string; expires_in: number };
+    amadeusToken = { token: data.access_token, expiresAt: Date.now() + (data.expires_in - 60) * 1000 };
+    return amadeusToken.token;
+  } catch { return null; }
+}
+
+/** Search Amadeus for real fares; fall back to deep links only if unavailable. */
+async function searchFlights(p: FlightParams): Promise<string> {
+  const links = buildFlightLinks(p);
+  const token = await getAmadeusToken().catch(() => null);
+  if (!token) return `\n\n${links}`;
+
+  try {
+    const params = new URLSearchParams({
+      originLocationCode: p.origin,
+      destinationLocationCode: p.destination,
+      departureDate: p.departDate,
+      adults: "1",
+      max: "5",
+      currencyCode: "USD",
+    });
+    if (p.returnDate) params.set("returnDate", p.returnDate);
+
+    const res = await fetch(`https://test.api.amadeus.com/v2/shopping/flight-offers?${params}`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (!res.ok) return `\n\n${links}`;
+
+    const data = await res.json() as { data?: unknown[] };
+    const offers = (data.data ?? []).slice(0, 5) as Record<string, unknown>[];
+    if (offers.length === 0) return `\n\n${links}`;
+
+    const dictionaries = (data as Record<string, unknown>).dictionaries as Record<string, Record<string, string>> | undefined;
+    const carrierNames = dictionaries?.carriers ?? {};
+
+    const lines = offers.map((offer) => {
+      const price = (offer.price as Record<string, string>)?.grandTotal ?? "?";
+      const itinerary = ((offer.itineraries as unknown[])?.[0]) as Record<string, unknown> | undefined;
+      const segments = (itinerary?.segments as Record<string, unknown>[]) ?? [];
+      const stops = segments.length - 1;
+      const depTime = (segments[0]?.departure as Record<string, string>)?.at?.slice(11, 16) ?? "?";
+      const arrTime = (segments[segments.length - 1]?.arrival as Record<string, string>)?.at?.slice(11, 16) ?? "?";
+      const carrierCode = (segments[0]?.carrierCode as string) ?? "?";
+      const carrier = carrierNames[carrierCode] ?? carrierCode;
+      const stopLabel = stops === 0 ? "nonstop" : `${stops} stop${stops > 1 ? "s" : ""}`;
+      return `• ${carrier} — ${depTime}→${arrTime} ${stopLabel} — $${price}`;
+    });
+
+    const routeLabel = `${p.origin}→${p.destination}${p.returnDate ? ` (return ${p.returnDate})` : ""}`;
+    return `\n\nFlights found for ${routeLabel} on ${p.departDate}:\n${lines.join("\n")}\n\n${links}`;
+  } catch {
+    return `\n\n${links}`;
+  }
 }
 
 /**
@@ -1307,7 +1377,7 @@ ${respondTo} is waiting for a reply. Respond directly and helpfully — engage w
     if (TRAVEL_AGENT_SLUGS.has(agent.slug)) {
       const searchText = [post.content, ...post.comments.map((c) => c.body)].filter(Boolean).join(" ");
       const flightParams = await extractFlightParams(searchText).catch(() => null);
-      if (flightParams) text += buildFlightLinks(flightParams);
+      if (flightParams) text += await searchFlights(flightParams).catch(() => "");
     }
     await prisma.comment.create({
       data: { postId: post.id, authorName: agent.name, authorImage: avatar, body: text },
@@ -1684,7 +1754,7 @@ async function runSpaceAgentAction(
     if (FLIGHT_SEARCH_RE.test(target.content ?? "")) {
       const searchText = [target.content, ...target.comments.map((c) => c.body)].filter(Boolean).join(" ");
       const flightParams = await extractFlightParams(searchText).catch(() => null);
-      if (flightParams) finalText += buildFlightLinks(flightParams);
+      if (flightParams) finalText += await searchFlights(flightParams).catch(() => "");
     }
 
     await prisma.comment.create({
