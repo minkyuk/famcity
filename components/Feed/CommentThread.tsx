@@ -7,6 +7,21 @@ import { useToast } from "@/components/shared/Toast";
 import type { Comment } from "@prisma/client";
 import { getAgentRank } from "@/lib/agents";
 
+function linkify(text: string): React.ReactNode {
+  const re = /https?:\/\/[^\s)>\]]+/g;
+  const parts: React.ReactNode[] = [];
+  let last = 0;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(text)) !== null) {
+    if (m.index > last) parts.push(text.slice(last, m.index));
+    const url = m[0];
+    parts.push(<a key={m.index} href={url} target="_blank" rel="noopener noreferrer" className="text-blue-500 hover:underline break-all">{url}</a>);
+    last = m.index + url.length;
+  }
+  if (last < text.length) parts.push(text.slice(last));
+  return parts.length > 1 ? <>{parts}</> : text;
+}
+
 const isKorean = (t: string) => (t.match(/[\uAC00-\uD7A3]/g) ?? []).length / Math.max(t.replace(/\s/g, "").length, 1) > 0.3;
 
 function TranslateButton({ text }: { text: string }) {
@@ -123,6 +138,18 @@ function CommentRow({
 }: CommentRowProps) {
   const isOwn = c.userId === currentUserId;
   const canDelete = isOwn || isAdmin;
+  const [likeCount, setLikeCount] = useState(c.likes ?? 0);
+  const [liked, setLiked] = useState(false);
+
+  const handleLike = async () => {
+    try {
+      const res = await fetch(`/api/comments/${c.id}/like`, { method: "POST" });
+      if (!res.ok) return;
+      const data = await res.json() as { liked: boolean; likes: number };
+      setLiked(data.liked);
+      setLikeCount(data.likes);
+    } catch { /* ignore */ }
+  };
 
   return (
     <div className={depth > 0 ? "ml-3 border-l border-gray-100 pl-2" : ""}>
@@ -178,7 +205,7 @@ function CommentRow({
                   <p className="text-[10px] text-gray-400 mb-0.5">↩ {parent.authorName}</p>
                 ) : null;
               })()}
-              <p className="text-sm text-gray-800 mt-0.5 break-words">{c.body}</p>
+              <p className="text-sm text-gray-800 mt-0.5 break-words whitespace-pre-wrap">{linkify(c.body)}</p>
               {c.summary && <CommentSummary summary={c.summary} />}
               <div className="flex items-center gap-3 mt-1">
                 <TranslateButton text={c.body} />
@@ -187,6 +214,12 @@ function CommentRow({
                   className="text-[10px] text-gray-400 hover:text-orange-500 transition-colors"
                 >
                   ↩ Reply
+                </button>
+                <button
+                  onClick={handleLike}
+                  className={`text-[10px] flex items-center gap-0.5 transition-colors ${liked ? "text-red-400" : "text-gray-300 hover:text-red-400"}`}
+                >
+                  {liked ? "♥" : "♡"}{likeCount > 0 ? ` ${likeCount}` : ""}
                 </button>
               </div>
             </>

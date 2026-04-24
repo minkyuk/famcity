@@ -7,20 +7,18 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-// --- NextAuth models ---
-
 model Account {
   id                String  @id @default(cuid())
   userId            String
   type              String
   provider          String
   providerAccountId String
-  refresh_token     String? @db.Text
-  access_token      String? @db.Text
+  refresh_token     String?
+  access_token      String?
   expires_at        Int?
   token_type        String?
   scope             String?
-  id_token          String? @db.Text
+  id_token          String?
   session_state     String?
   user              User    @relation(fields: [userId], references: [id], onDelete: Cascade)
 
@@ -36,26 +34,27 @@ model Session {
 }
 
 model User {
-  id            String         @id @default(cuid())
-  name          String?
-  email         String?        @unique
-  emailVerified DateTime?
-  image         String?
-  bio           String?        @db.Text
-  accounts      Account[]
-  sessions      Session[]
-  posts         Post[]
-  comments      Comment[]
-  spaces        SpaceMember[]
-  chatMessages  ChatMessage[]
-  presence      OnlinePresence?
-  sentDMs          DirectMessage[]  @relation("DMSent")
-  receivedDMs      DirectMessage[]  @relation("DMReceived")
-  createdEvents Event[]
-  eventRsvps    EventRSVP[]
-  credits         Int              @default(100)
-  creditTxns      CreditTransaction[]
+  id              String              @id @default(cuid())
+  name            String?
+  email           String?             @unique
+  emailVerified   DateTime?
+  image           String?
+  bio             String?
+  credits         Int                 @default(100)
+  accounts        Account[]
   aiConversations AiConversation[]
+  chatMessages    ChatMessage[]
+  comments        Comment[]
+  creditTxns      CreditTransaction[]
+  sentDMs         DirectMessage[]     @relation("DMSent")
+  receivedDMs     DirectMessage[]     @relation("DMReceived")
+  createdEvents   Event[]
+  eventRsvps      EventRSVP[]
+  presence        OnlinePresence?
+  posts           Post[]
+  sessions        Session[]
+  spaces          SpaceMember[]
+  commentLikes    CommentLike[]
 }
 
 model VerificationToken {
@@ -66,33 +65,31 @@ model VerificationToken {
   @@unique([identifier, token])
 }
 
-// --- Spaces ---
-
 model Space {
-  id             String        @id @default(cuid())
-  name           String
-  description    String?
-  purpose        String?       @db.Text  // optional agent orientation (e.g. "math tutoring space")
-  inviteCode     String        @unique
-  createdAt      DateTime      @default(now())
-  isSystem       Boolean       @default(false)  // created by the system, not a user
-  excludeFromAll Boolean       @default(false)  // posts don't appear in the "All" feed
-  members        SpaceMember[]
-  posts          Post[]
-  chatChannels   ChatChannel[]
-  events         Event[]
-  spaceAgents    SpaceAgent[]
+  id              String           @id @default(cuid())
+  name            String
+  description     String?
+  inviteCode      String           @unique
+  createdAt       DateTime         @default(now())
+  excludeFromAll  Boolean          @default(false)
+  isSystem        Boolean          @default(false)
+  purpose         String?
+  chatChannels    ChatChannel[]
+  events          Event[]
   onlinePresences OnlinePresence[]
+  posts           Post[]
+  spaceAgents     SpaceAgent[]
+  members         SpaceMember[]
 }
 
 model SpaceAgent {
   id          String   @id @default(cuid())
   spaceId     String
-  space       Space    @relation(fields: [spaceId], references: [id], onDelete: Cascade)
   name        String
-  personality String   @db.Text  // occupation + additional traits (layered on top of biblical foundation)
-  slug        String   @unique   // used as AgentMemory key
+  personality String
+  slug        String   @unique
   createdAt   DateTime @default(now())
+  space       Space    @relation(fields: [spaceId], references: [id], onDelete: Cascade)
 
   @@unique([spaceId, name])
 }
@@ -103,97 +100,94 @@ model SpaceMember {
   spaceId  String
   role     SpaceRole @default(MEMBER)
   joinedAt DateTime  @default(now())
-  user     User      @relation(fields: [userId], references: [id], onDelete: Cascade)
   space    Space     @relation(fields: [spaceId], references: [id], onDelete: Cascade)
+  user     User      @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([userId, spaceId])
 }
 
-enum SpaceRole {
-  OWNER
-  MEMBER
-}
-
-// --- App models ---
-
 model Post {
   id          String        @id @default(cuid())
   authorName  String
+  content     String?
+  type        PostType
+  mediaUrl    String?
+  createdAt   DateTime      @default(now())
   authorImage String?
   userId      String?
-  user        User?         @relation(fields: [userId], references: [id], onDelete: SetNull)
   spaceId     String?
-  space       Space?        @relation(fields: [spaceId], references: [id], onDelete: Cascade)
-  content     String?
-  summary     String?       @db.Text  // 2-3 bullet key-points for tutoring/education spaces
-  metadata    Json?         // agent-generated metadata: { votes?, qualityGated?, deduplicated? }
-  type        PostType
   isPrivate   Boolean       @default(false)
-  mediaUrl    String?       // used for YOUTUBE and AUDIO
-  media       PostMedia[]   // used for IMAGE (multiple photos)
-  hashtags    PostHashtag[]
-  createdAt   DateTime      @default(now())
-  reactions   Reaction[]
+  summary     String?
+  metadata    Json?
   comments    Comment[]
+  space       Space?        @relation(fields: [spaceId], references: [id], onDelete: Cascade)
+  user        User?         @relation(fields: [userId], references: [id])
+  hashtags    PostHashtag[]
+  media       PostMedia[]
+  reactions   Reaction[]
 }
 
 model PostMedia {
   id     String @id @default(cuid())
   postId String
-  post   Post   @relation(fields: [postId], references: [id], onDelete: Cascade)
   url    String
   order  Int    @default(0)
+  post   Post   @relation(fields: [postId], references: [id], onDelete: Cascade)
 }
 
 model Hashtag {
   id    String        @id @default(cuid())
-  tag   String        @unique // lowercase, no #
+  tag   String        @unique
   posts PostHashtag[]
 }
 
 model PostHashtag {
   postId    String
   hashtagId String
-  post      Post    @relation(fields: [postId], references: [id], onDelete: Cascade)
   hashtag   Hashtag @relation(fields: [hashtagId], references: [id], onDelete: Cascade)
+  post      Post    @relation(fields: [postId], references: [id], onDelete: Cascade)
 
   @@id([postId, hashtagId])
-}
-
-enum PostType {
-  TEXT
-  IMAGE
-  YOUTUBE
-  AUDIO
-  VIDEO
-  PDF
 }
 
 model Reaction {
   id        String   @id @default(cuid())
   postId    String
-  post      Post     @relation(fields: [postId], references: [id], onDelete: Cascade)
   emoji     String
   name      String
   createdAt DateTime @default(now())
+  post      Post     @relation(fields: [postId], references: [id], onDelete: Cascade)
 
   @@unique([postId, emoji, name])
 }
 
 model Comment {
-  id          String    @id @default(cuid())
+  id          String        @id @default(cuid())
   postId      String
-  post        Post      @relation(fields: [postId], references: [id], onDelete: Cascade)
-  parentId    String?   // if set, this is a reply to another comment
-  parent      Comment?  @relation("CommentReplies", fields: [parentId], references: [id], onDelete: SetNull)
-  replies     Comment[] @relation("CommentReplies")
   authorName  String
+  body        String
+  createdAt   DateTime      @default(now())
   authorImage String?
   userId      String?
-  user        User?     @relation(fields: [userId], references: [id], onDelete: SetNull)
-  body        String
-  summary     String?   @db.Text  // 2-3 bullet key-points for tutoring/education spaces
-  createdAt   DateTime  @default(now())
+  parentId    String?
+  summary     String?
+  likes       Int           @default(0)
+  parent      Comment?      @relation("CommentReplies", fields: [parentId], references: [id])
+  replies     Comment[]     @relation("CommentReplies")
+  post        Post          @relation(fields: [postId], references: [id], onDelete: Cascade)
+  user        User?         @relation(fields: [userId], references: [id])
+  commentLikes CommentLike[]
+}
+
+model CommentLike {
+  id        String   @id @default(cuid())
+  commentId String
+  comment   Comment  @relation(fields: [commentId], references: [id], onDelete: Cascade)
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+
+  @@unique([commentId, userId])
 }
 
 model PushSubscription {
@@ -205,18 +199,16 @@ model PushSubscription {
   createdAt DateTime @default(now())
 }
 
-// --- Chat ---
-
 model ChatChannel {
-  id           String        @id @default(cuid())
+  id           String           @id @default(cuid())
   name         String
   description  String?
-  isGlobal     Boolean       @default(false)
-  spaceId      String?       // null = global, set = space-only
-  space        Space?        @relation(fields: [spaceId], references: [id], onDelete: Cascade)
-  passwordHash String?       // null = open channel
+  isGlobal     Boolean          @default(false)
+  passwordHash String?
   createdById  String?
-  createdAt    DateTime      @default(now())
+  createdAt    DateTime         @default(now())
+  spaceId      String?
+  space        Space?           @relation(fields: [spaceId], references: [id], onDelete: Cascade)
   messages     ChatMessage[]
   presence     OnlinePresence[]
 }
@@ -224,82 +216,74 @@ model ChatChannel {
 model ChatMessage {
   id        String      @id @default(cuid())
   channelId String
-  channel   ChatChannel @relation(fields: [channelId], references: [id], onDelete: Cascade)
   userId    String
-  user      User        @relation(fields: [userId], references: [id], onDelete: Cascade)
   userName  String
   userImage String?
-  content   String      // AES-256-GCM encrypted at rest
+  content   String
   createdAt DateTime    @default(now())
+  channel   ChatChannel @relation(fields: [channelId], references: [id], onDelete: Cascade)
+  user      User        @relation(fields: [userId], references: [id], onDelete: Cascade)
 }
 
 model OnlinePresence {
-  userId    String      @id
-  user      User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId    String       @id
   name      String
   image     String?
   channelId String?
-  channel   ChatChannel? @relation(fields: [channelId], references: [id], onDelete: SetNull)
+  lastSeen  DateTime     @default(now())
   spaceId   String?
-  space     Space?      @relation(fields: [spaceId], references: [id], onDelete: SetNull)
-  lastSeen  DateTime    @default(now())
+  channel   ChatChannel? @relation(fields: [channelId], references: [id])
+  space     Space?       @relation(fields: [spaceId], references: [id])
+  user      User         @relation(fields: [userId], references: [id], onDelete: Cascade)
 }
 
 model DirectMessage {
   id         String   @id @default(cuid())
   fromUserId String
   toUserId   String
-  fromUser   User     @relation("DMSent", fields: [fromUserId], references: [id], onDelete: Cascade)
-  toUser     User     @relation("DMReceived", fields: [toUserId], references: [id], onDelete: Cascade)
   content    String
   createdAt  DateTime @default(now())
   read       Boolean  @default(false)
+  fromUser   User     @relation("DMSent", fields: [fromUserId], references: [id], onDelete: Cascade)
+  toUser     User     @relation("DMReceived", fields: [toUserId], references: [id], onDelete: Cascade)
 }
-
-// --- Events / Calendar ---
 
 model Event {
   id          String      @id @default(cuid())
   title       String
-  description String?     @db.Text
+  description String?
   location    String?
   startAt     DateTime
   endAt       DateTime?
   allDay      Boolean     @default(false)
   spaceId     String?
-  space       Space?      @relation(fields: [spaceId], references: [id], onDelete: Cascade)
   createdById String
-  createdBy   User        @relation(fields: [createdById], references: [id], onDelete: Cascade)
   createdAt   DateTime    @default(now())
+  createdBy   User        @relation(fields: [createdById], references: [id], onDelete: Cascade)
+  space       Space?      @relation(fields: [spaceId], references: [id], onDelete: Cascade)
   rsvps       EventRSVP[]
 }
 
 model EventRSVP {
-  id      String     @id @default(cuid())
-  eventId String
-  event   Event      @relation(fields: [eventId], references: [id], onDelete: Cascade)
-  userId  String
-  user    User       @relation(fields: [userId], references: [id], onDelete: Cascade)
-  status  RSVPStatus
-  createdAt DateTime @default(now())
+  id        String     @id @default(cuid())
+  eventId   String
+  userId    String
+  status    RSVPStatus
+  createdAt DateTime   @default(now())
+  event     Event      @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  user      User       @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([eventId, userId])
-}
-
-enum RSVPStatus {
-  YES
-  NO
-  MAYBE
 }
 
 model CreditTransaction {
   id        String   @id @default(cuid())
   userId    String
-  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  amount    Int      // positive = earned/granted, negative = spent
-  reason    String   // "bolt" | "fire" | "admin_grant" | "purchase" | "refund"
-  spaceId   String?  // set when reason = "bolt"
+  amount    Int
+  reason    String
+  spaceId   String?
   createdAt DateTime @default(now())
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId, createdAt])
 }
@@ -307,27 +291,47 @@ model CreditTransaction {
 model AiConversation {
   id        String                  @id @default(cuid())
   userId    String
-  user      User                    @relation(fields: [userId], references: [id], onDelete: Cascade)
   title     String
   model     String                  @default("claude-sonnet-4-6")
   createdAt DateTime                @default(now())
   updatedAt DateTime                @updatedAt
+  user      User                    @relation(fields: [userId], references: [id], onDelete: Cascade)
   messages  AiConversationMessage[]
 }
 
 model AiConversationMessage {
   id             String         @id @default(cuid())
   conversationId String
-  conversation   AiConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
-  role           String         // "user" | "assistant"
-  content        String         @db.Text
+  role           String
+  content        String
   createdAt      DateTime       @default(now())
+  conversation   AiConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
 }
 
 model AgentMemory {
   agentSlug     String   @id
-  beliefs       Json     // BeliefEntry[] stored as JSON array
-  relationships Json?    // RelationshipEntry[] stored as JSON array
-  description   String?  @db.Text // admin-editable public description
+  beliefs       Json
   updatedAt     DateTime @updatedAt
+  relationships Json?
+  description   String?
+}
+
+enum SpaceRole {
+  OWNER
+  MEMBER
+}
+
+enum PostType {
+  TEXT
+  IMAGE
+  YOUTUBE
+  AUDIO
+  VIDEO
+  PDF
+}
+
+enum RSVPStatus {
+  YES
+  NO
+  MAYBE
 }

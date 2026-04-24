@@ -2,6 +2,21 @@
 
 import { Suspense, useEffect, useRef, useState } from "react";
 import { formatDistanceToNow } from "date-fns";
+
+function linkify(text: string): React.ReactNode {
+  const re = /https?:\/\/[^\s)>\]]+/g;
+  const parts: React.ReactNode[] = [];
+  let last = 0;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(text)) !== null) {
+    if (m.index > last) parts.push(text.slice(last, m.index));
+    const url = m[0];
+    parts.push(<a key={m.index} href={url} target="_blank" rel="noopener noreferrer" className="text-blue-500 hover:underline break-all">{url}</a>);
+    last = m.index + url.length;
+  }
+  if (last < text.length) parts.push(text.slice(last));
+  return parts.length > 1 ? <>{parts}</> : text;
+}
 import Image from "next/image";
 import { YoutubeEmbed } from "./YoutubeEmbed";
 import { ImageGallery } from "./ImageGallery";
@@ -309,7 +324,7 @@ export function PostCard({ post, currentUserId, currentUserName, isAdmin, onDele
         </div>
       ) : (
         localPost.content && (
-          <p className="text-gray-800 text-sm leading-relaxed whitespace-pre-wrap">{localPost.content}</p>
+          <p className="text-gray-800 text-sm leading-relaxed whitespace-pre-wrap">{linkify(localPost.content)}</p>
         )
       )}
 

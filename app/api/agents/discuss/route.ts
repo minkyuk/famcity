@@ -430,74 +430,101 @@ type SerpFlight = {
   price?: number;
 };
 
-/** Search Google Flights via SerpAPI across ±3 departure days; fall back to deep links only if unavailable. */
+/** Search Google Flights via SerpAPI: ±3 days on both departure and return, nonstop & 1-stop only. */
 async function searchFlights(p: FlightParams): Promise<string> {
   const links = buildFlightLinks(p);
-  const key = process.env.SERPAPI_KEY;
-  if (!key) return `\n\n${links}`;
+  const serpKey = process.env.SERPAPI_KEY;
+  if (!serpKey) return `\n\n${links}`;
+
+  const addDays = (dateStr: string, n: number): string => {
+    const d = new Date(dateStr + "T12:00:00Z");
+    d.setUTCDate(d.getUTCDate() + n);
+    return d.toISOString().slice(0, 10);
+  };
+
+  // Build unique search specs: ±3 on departure + ±3 on return (if round trip)
+  type SearchSpec = { depDate: string; retDate: string | undefined };
+  const seen = new Set<string>();
+  const specs: SearchSpec[] = [];
+  const addSpec = (dep: string, ret: string | undefined) => {
+    const k = `${dep}|${ret ?? ""}`;
+    if (seen.has(k)) return;
+    seen.add(k);
+    specs.push({ depDate: dep, retDate: ret });
+  };
+  for (let i = -3; i <= 3; i++) addSpec(addDays(p.departDate, i), p.returnDate);
+  if (p.returnDate) {
+    for (let i = -3; i <= 3; i++) addSpec(p.departDate, addDays(p.returnDate, i));
+  }
 
   try {
-    // Build ±3 day window around requested departure date
-    const base = new Date(p.departDate + "T12:00:00Z");
-    const departureDates: string[] = [];
-    for (let offset = -3; offset <= 3; offset++) {
-      const d = new Date(base);
-      d.setUTCDate(d.getUTCDate() + offset);
-      departureDates.push(d.toISOString().slice(0, 10));
-    }
+    const results = await Promise.allSettled(
+      specs.map(async ({ depDate, retDate }) => {
+        const params = new URLSearchParams({
+          engine: "google_flights",
+          departure_id: p.origin,
+          arrival_id: p.destination,
+          outbound_date: depDate,
+          currency: "USD",
+          hl: "en",
+          type: retDate ? "1" : "2",
+          api_key: serpKey,
+        });
+        if (retDate) params.set("return_date", retDate);
+        const res = await fetch(`https://serpapi.com/search?${params}`);
+        if (!res.ok) return { depDate, retDate, offers: [] as SerpFlight[] };
+        const data = await res.json() as { best_flights?: SerpFlight[]; other_flights?: SerpFlight[] };
+        return { depDate, retDate, offers: [...(data.best_flights ?? []), ...(data.other_flights ?? [])] };
+      })
+    );
 
-    // Search all 7 dates in parallel
-    const searches = departureDates.map(async (depDate) => {
-      const params = new URLSearchParams({
-        engine: "google_flights",
-        departure_id: p.origin,
-        arrival_id: p.destination,
-        outbound_date: depDate,
-        currency: "USD",
-        hl: "en",
-        type: p.returnDate ? "1" : "2",
-        api_key: key,
-      });
-      if (p.returnDate) params.set("return_date", p.returnDate);
-      const res = await fetch(`https://serpapi.com/search?${params}`);
-      if (!res.ok) return { depDate, offers: [] as SerpFlight[] };
-      const data = await res.json() as { best_flights?: SerpFlight[]; other_flights?: SerpFlight[] };
-      return { depDate, offers: [...(data.best_flights ?? []), ...(data.other_flights ?? [])] };
-    });
-
-    const results = await Promise.allSettled(searches);
-
-    // Pool all offers with their date, sort cheapest first
-    const pool: { offer: SerpFlight; depDate: string }[] = [];
+    // Pool results, filter to nonstop + 1-stop only, sort by price
+    type OfferEntry = { offer: SerpFlight; depDate: string; retDate: string | undefined };
+    const pool: OfferEntry[] = [];
     for (const r of results) {
       if (r.status !== "fulfilled") continue;
       for (const offer of r.value.offers) {
-        if (offer.price) pool.push({ offer, depDate: r.value.depDate });
+        if (!offer.price) continue;
+        const stops = Math.max(0, (offer.flights?.length ?? 1) - 1);
+        if (stops > 1) continue;
+        pool.push({ offer, depDate: r.value.depDate, retDate: r.value.retDate });
       }
     }
     pool.sort((a, b) => (a.offer.price ?? 999999) - (b.offer.price ?? 999999));
-    const top = pool.slice(0, 5);
 
-    if (top.length === 0) return `\n\n${links}`;
+    const nonstop = pool.filter(({ offer }) => (offer.flights?.length ?? 1) <= 1).slice(0, 3);
+    const oneStop = pool.filter(({ offer }) => (offer.flights?.length ?? 1) === 2).slice(0, 3);
+
+    if (nonstop.length === 0 && oneStop.length === 0) return `\n\n${links}`;
 
     const fmtTime = (t?: string) => t?.slice(11, 16) ?? "?";
+    const fmtShort = (d: string) =>
+      new Date(d + "T12:00:00Z").toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: "UTC" });
 
-    const lines = top.map(({ offer, depDate }) => {
+    const formatLine = ({ offer, depDate, retDate }: OfferEntry): string => {
       const segs = offer.flights ?? [];
       const airline = segs[0]?.airline ?? "?";
       const depTime = fmtTime(segs[0]?.departure_airport?.time);
       const arrTime = fmtTime(segs[segs.length - 1]?.arrival_airport?.time);
-      const stops = Math.max(0, segs.length - 1);
-      const stopLabel = stops === 0 ? "nonstop" : `${stops} stop${stops > 1 ? "s" : ""}`;
-      const price = offer.price ? `$${offer.price}` : "?";
-      const dateTag = depDate !== p.departDate ? ` [${depDate}]` : "";
-      const tripNote = p.returnDate ? " RT" : "";
-      return `• ${airline} — ✈ ${depTime}→${arrTime} ${stopLabel}${dateTag} — ${price}${tripNote}`;
-    });
+      const price = `$${offer.price}${p.returnDate ? " RT" : ""}`;
+      const dateNote =
+        depDate !== p.departDate ? `depart ${fmtShort(depDate)}` :
+        retDate && retDate !== p.returnDate ? `return ${fmtShort(retDate)}` : "";
+      return `  ${airline}  ${depTime}→${arrTime}${dateNote ? `  (${dateNote})` : ""}  ${price}`;
+    };
 
-    const tripType = p.returnDate ? `round trip, return ${p.returnDate}` : "one way";
-    const routeLabel = `${p.origin}→${p.destination} (${tripType}), best fares ±3 days around ${p.departDate}`;
-    return `\n\nCheapest fares found for ${routeLabel}:\n${lines.join("\n")}\n\n${links}`;
+    const header = `${p.origin} → ${p.destination}`;
+    const window = p.returnDate
+      ? `Depart ~${fmtShort(p.departDate)}  ·  Return ~${fmtShort(p.returnDate)}  ·  ±3 days flexible`
+      : `Depart ~${fmtShort(p.departDate)}  ·  ±3 days flexible`;
+
+    const out: string[] = [header, window];
+    if (nonstop.length > 0) { out.push(""); out.push("Nonstop:"); nonstop.forEach(e => out.push(formatLine(e))); }
+    if (oneStop.length > 0) { out.push(""); out.push("1 Stop:");  oneStop.forEach(e => out.push(formatLine(e))); }
+    out.push("");
+    out.push(links);
+
+    return `\n\n${out.join("\n")}`;
   } catch {
     return `\n\n${links}`;
   }
@@ -1364,7 +1391,7 @@ async function runDirectTurn(agent: (typeof AGENTS)[0], post: RecentPost): Promi
   const isTravelAgent = TRAVEL_AGENT_SLUGS.has(agent.slug);
   const isFlightSearch = isTravelAgent && FLIGHT_SEARCH_RE.test([post.content, ...post.comments.map(c => c.body)].join(" "));
   const flightInstruction = isFlightSearch
-    ? `\n\nThis is a flight search request. Give specific, actionable advice for this exact route and dates — booking windows, best search tools for this corridor, flexible date tips, what to watch for. Be concrete: name tools, name strategies, name trade-offs. Don't be generic.`
+    ? `\n\nThis is a flight search request. Write only 1 short sentence introducing the route (e.g. "Here's what I found for [route]:"). Do NOT describe flights or give travel advice — the actual search results will be appended automatically after your reply.`
     : "";
 
   const prompt = `${agent.personality}${historyContext}${beliefContext}
