@@ -47,7 +47,10 @@ export async function POST(req: NextRequest) {
   const url = new URL(req.url);
   const durationMinutes = Math.min(parseInt(url.searchParams.get("minutes") ?? "25", 10) || 25, 180);
 
-  // Atomic: check credits, deduct, and log in a single transaction (admins/cron pay nothing)
+  const startedAt = new Date().toISOString();
+  const sessionPayload = { startedAt, durationMinutes };
+
+  // Non-admin: deduct credits and activate session in a single atomic transaction
   if (authSession?.user && !admin) {
     const userId = authSession.user.id;
     try {
@@ -55,28 +58,33 @@ export async function POST(req: NextRequest) {
         const user = await tx.user.findUnique({ where: { id: userId }, select: { credits: true } });
         if (!user || user.credits < FIRE_COST) throw new Error("insufficient_credits");
         await tx.user.update({ where: { id: userId }, data: { credits: { decrement: FIRE_COST } } });
-        await tx.creditTransaction.create({
-          data: { userId, amount: -FIRE_COST, reason: "fire" },
+        await tx.creditTransaction.create({ data: { userId, amount: -FIRE_COST, reason: "fire" } });
+        await tx.agentMemory.upsert({
+          where: { agentSlug: SESSION_SLUG },
+          update: { beliefs: sessionPayload },
+          create: { agentSlug: SESSION_SLUG, beliefs: sessionPayload },
         });
       });
     } catch (e) {
       if ((e as Error).message === "insufficient_credits") {
         return NextResponse.json({ error: `Not enough credits (need ${FIRE_COST})` }, { status: 402 });
       }
-      throw e;
+      return NextResponse.json({ error: "Failed to start session" }, { status: 500 });
+    }
+  } else {
+    // Admin / cron — no credit charge, but still activate the session
+    try {
+      await prisma.agentMemory.upsert({
+        where: { agentSlug: SESSION_SLUG },
+        update: { beliefs: sessionPayload },
+        create: { agentSlug: SESSION_SLUG, beliefs: sessionPayload },
+      });
+    } catch {
+      return NextResponse.json({ error: "Failed to start session — run Prisma migration first" }, { status: 500 });
     }
   }
 
-  try {
-    await prisma.agentMemory.upsert({
-      where: { agentSlug: SESSION_SLUG },
-      update: { beliefs: { startedAt: new Date().toISOString(), durationMinutes } },
-      create: { agentSlug: SESSION_SLUG, beliefs: { startedAt: new Date().toISOString(), durationMinutes } },
-    });
-    return NextResponse.json({ ok: true, durationMinutes });
-  } catch {
-    return NextResponse.json({ error: "Failed to start session — run Prisma migration first" }, { status: 500 });
-  }
+  return NextResponse.json({ ok: true, durationMinutes });
 }
 
 /** DELETE — end the session early */

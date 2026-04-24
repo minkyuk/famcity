@@ -63,30 +63,37 @@ export async function POST(_req: NextRequest, { params }: { params: Promise<{ id
     } catch {}
   }
 
-  // Atomic: check credits, deduct, and log in a single transaction
+  const startedAt = new Date().toISOString();
+  const sessionPayload = { startedAt, durationMinutes: DURATION_MINUTES };
+
+  // Non-admin: deduct credits and activate session in a single atomic transaction
   if (!admin) {
     try {
       await prisma.$transaction(async (tx) => {
         const user = await tx.user.findUnique({ where: { id: userId }, select: { credits: true } });
         if (!user || user.credits < BOLT_COST) throw new Error("insufficient_credits");
         await tx.user.update({ where: { id: userId }, data: { credits: { decrement: BOLT_COST } } });
-        await tx.creditTransaction.create({
-          data: { userId, amount: -BOLT_COST, reason: "bolt", spaceId },
+        await tx.creditTransaction.create({ data: { userId, amount: -BOLT_COST, reason: "bolt", spaceId } });
+        await tx.agentMemory.upsert({
+          where: { agentSlug: slug(spaceId) },
+          update: { beliefs: sessionPayload },
+          create: { agentSlug: slug(spaceId), beliefs: sessionPayload },
         });
       });
     } catch (e) {
       if ((e as Error).message === "insufficient_credits") {
         return NextResponse.json({ error: `Not enough credits (need ${BOLT_COST})` }, { status: 402 });
       }
-      throw e;
+      return NextResponse.json({ error: "Failed to start session" }, { status: 500 });
     }
+  } else {
+    // Admin — no credit charge
+    await prisma.agentMemory.upsert({
+      where: { agentSlug: slug(spaceId) },
+      update: { beliefs: sessionPayload },
+      create: { agentSlug: slug(spaceId), beliefs: sessionPayload },
+    });
   }
-
-  await prisma.agentMemory.upsert({
-    where: { agentSlug: slug(spaceId) },
-    update: { beliefs: { startedAt: new Date().toISOString(), durationMinutes: DURATION_MINUTES } },
-    create: { agentSlug: slug(spaceId), beliefs: { startedAt: new Date().toISOString(), durationMinutes: DURATION_MINUTES } },
-  });
 
   return NextResponse.json({ ok: true });
 }
