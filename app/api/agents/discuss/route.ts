@@ -456,10 +456,12 @@ function buildFlightLinks(p: FlightParams): string {
 
 // --- SerpAPI Google Flights search ---
 
+type SerpFlightSeg = { airline?: string; departure_airport?: { time?: string }; arrival_airport?: { time?: string } };
 type SerpFlight = {
-  flights?: { airline?: string; departure_airport?: { time?: string }; arrival_airport?: { time?: string } }[];
+  flights?: SerpFlightSeg[];
+  return_flights?: SerpFlightSeg[]; // return leg segments (round trips only)
   price?: number;
-  airline?: string; // top-level carrier (SerpAPI includes this directly on the result)
+  airline?: string; // top-level carrier
 };
 
 /** Search Google Flights via SerpAPI: ±3 days on both departure and return, nonstop & 1-stop only.
@@ -577,11 +579,18 @@ async function searchFlights(p: FlightParams): Promise<string> {
 
   const formatLine = (e: OfferEntry, showRT: boolean): string => {
     const segs = e.offer.flights ?? [];
-    // Use top-level airline field first (SerpAPI surfaces it there), fall back to first segment
+    const retSegs = e.offer.return_flights ?? [];
     const airline = e.offer.airline ?? segs[0]?.airline ?? "?";
     const depTime = fmtTime(segs[0]?.departure_airport?.time);
     const arrTime = fmtTime(segs[segs.length - 1]?.arrival_airport?.time);
     const price = `$${e.offer.price}${showRT ? " RT" : ""}`;
+
+    if (showRT && e.retDate && retSegs.length > 0) {
+      const retDepTime = fmtTime(retSegs[0]?.departure_airport?.time);
+      const retArrTime = fmtTime(retSegs[retSegs.length - 1]?.arrival_airport?.time);
+      return `  ${airline}  out: ${depTime}→${arrTime} ${fmtShort(e.depDate)}  ret: ${retDepTime}→${retArrTime} ${fmtShort(e.retDate)}  ${price}`;
+    }
+
     const dateInfo = showRT && e.retDate
       ? `${fmtShort(e.depDate)} dep · ${fmtShort(e.retDate)} ret`
       : `${fmtShort(e.depDate)} dep`;
