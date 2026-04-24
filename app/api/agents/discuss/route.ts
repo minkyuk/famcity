@@ -430,7 +430,10 @@ type SerpFlight = {
   price?: number;
 };
 
-/** Search Google Flights via SerpAPI: ±3 days on both departure and return, nonstop & 1-stop only. */
+/** Search Google Flights via SerpAPI: ±3 days on both departure and return, nonstop & 1-stop only.
+ *  Special case: if origin or destination is ICN, also searches NRT and KIX as hub alternatives
+ *  and finds cheapest NRT/KIX ↔ CJJ connecting leg within a 24-72h window.
+ */
 async function searchFlights(p: FlightParams): Promise<string> {
   const links = buildFlightLinks(p);
   const serpKey = process.env.SERPAPI_KEY;
@@ -442,35 +445,35 @@ async function searchFlights(p: FlightParams): Promise<string> {
     return d.toISOString().slice(0, 10);
   };
 
-  // Build all date combinations: every dep ±3 paired with every ret ±3 (7×7=49 for RT, 7 for OW)
-  type SearchSpec = { depDate: string; retDate: string | undefined };
-  const specs: SearchSpec[] = [];
-  const depDates = Array.from({ length: 7 }, (_, i) => addDays(p.departDate, i - 3));
-  if (p.returnDate) {
-    const retDates = Array.from({ length: 7 }, (_, i) => addDays(p.returnDate!, i - 3));
-    for (const depDate of depDates) {
-      for (const retDate of retDates) {
-        // Skip if return is on or before departure
-        if (retDate <= depDate) continue;
-        specs.push({ depDate, retDate });
-      }
-    }
-  } else {
-    for (const depDate of depDates) specs.push({ depDate, retDate: undefined });
-  }
+  type OfferEntry = { offer: SerpFlight; depDate: string; retDate: string | undefined };
 
-  try {
+  const fmtTime = (t?: string) => t?.slice(11, 16) ?? "?";
+  const fmtShort = (d: string) =>
+    new Date(d + "T12:00:00Z").toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: "UTC" });
+
+  /** Run the full ±3×±3 date grid for one O&D, returning sorted deduped entries (nonstop + 1-stop only). */
+  const gridSearch = async (
+    origin: string, destination: string,
+    departDate: string, returnDate: string | undefined
+  ): Promise<OfferEntry[]> => {
+    const specs: { depDate: string; retDate: string | undefined }[] = [];
+    const depDates = Array.from({ length: 7 }, (_, i) => addDays(departDate, i - 3));
+    if (returnDate) {
+      const retDates = Array.from({ length: 7 }, (_, i) => addDays(returnDate, i - 3));
+      for (const dep of depDates)
+        for (const ret of retDates)
+          if (ret > dep) specs.push({ depDate: dep, retDate: ret });
+    } else {
+      for (const dep of depDates) specs.push({ depDate: dep, retDate: undefined });
+    }
+
     const results = await Promise.allSettled(
       specs.map(async ({ depDate, retDate }) => {
         const params = new URLSearchParams({
           engine: "google_flights",
-          departure_id: p.origin,
-          arrival_id: p.destination,
-          outbound_date: depDate,
-          currency: "USD",
-          hl: "en",
-          type: retDate ? "1" : "2",
-          api_key: serpKey,
+          departure_id: origin, arrival_id: destination,
+          outbound_date: depDate, currency: "USD", hl: "en",
+          type: retDate ? "1" : "2", api_key: serpKey!,
         });
         if (retDate) params.set("return_date", retDate);
         const res = await fetch(`https://serpapi.com/search?${params}`);
@@ -480,10 +483,7 @@ async function searchFlights(p: FlightParams): Promise<string> {
       })
     );
 
-    // Pool ALL grid results, filter to nonstop + 1-stop only
-    type OfferEntry = { offer: SerpFlight; depDate: string; retDate: string | undefined };
     const pool: OfferEntry[] = [];
-
     for (const r of results) {
       if (r.status !== "fulfilled") continue;
       const { depDate, retDate, offers } = r.value;
@@ -494,10 +494,7 @@ async function searchFlights(p: FlightParams): Promise<string> {
         pool.push({ offer, depDate, retDate });
       }
     }
-
-    // Sort by price, dedupe by price+airline+dates, then split into nonstop/1-stop — top 5 each
-    const sortByPrice = (a: OfferEntry, b: OfferEntry) => (a.offer.price ?? 999999) - (b.offer.price ?? 999999);
-    pool.sort(sortByPrice);
+    pool.sort((a, b) => (a.offer.price ?? 999999) - (b.offer.price ?? 999999));
 
     const seen = new Set<string>();
     const deduped: OfferEntry[] = [];
@@ -507,40 +504,125 @@ async function searchFlights(p: FlightParams): Promise<string> {
       seen.add(key);
       deduped.push(e);
     }
+    return deduped;
+  };
 
+  /** Search a single one-way date, return cheapest nonstop or 1-stop offer. */
+  const cheapestOneWay = async (
+    origin: string, destination: string, date: string
+  ): Promise<{ offer: SerpFlight; date: string } | null> => {
+    try {
+      const params = new URLSearchParams({
+        engine: "google_flights",
+        departure_id: origin, arrival_id: destination,
+        outbound_date: date, currency: "USD", hl: "en",
+        type: "2", api_key: serpKey!,
+      });
+      const res = await fetch(`https://serpapi.com/search?${params}`);
+      if (!res.ok) return null;
+      const data = await res.json() as { best_flights?: SerpFlight[]; other_flights?: SerpFlight[] };
+      const offers = [...(data.best_flights ?? []), ...(data.other_flights ?? [])];
+      const filtered = offers.filter(o => o.price && Math.max(0, (o.flights?.length ?? 1) - 1) <= 1);
+      filtered.sort((a, b) => (a.price ?? 999999) - (b.price ?? 999999));
+      return filtered[0] ? { offer: filtered[0], date } : null;
+    } catch {
+      return null;
+    }
+  };
+
+  const formatLine = (e: OfferEntry, showRT: boolean): string => {
+    const segs = e.offer.flights ?? [];
+    const airline = segs[0]?.airline ?? "?";
+    const depTime = fmtTime(segs[0]?.departure_airport?.time);
+    const arrTime = fmtTime(segs[segs.length - 1]?.arrival_airport?.time);
+    const price = `$${e.offer.price}${showRT ? " RT" : ""}`;
+    const dateInfo = showRT && e.retDate
+      ? `${fmtShort(e.depDate)} dep · ${fmtShort(e.retDate)} ret`
+      : `${fmtShort(e.depDate)} dep`;
+    return `  ${airline}  ${depTime}→${arrTime}  ${dateInfo}  ${price}`;
+  };
+
+  const renderOffers = (deduped: OfferEntry[], showRT: boolean): string[] => {
     const nonstop = deduped.filter(({ offer }) => (offer.flights?.length ?? 1) <= 1).slice(0, 5);
     const oneStop = deduped.filter(({ offer }) => (offer.flights?.length ?? 1) === 2).slice(0, 5);
+    const lines: string[] = [];
+    if (nonstop.length > 0) { lines.push("Nonstop:"); nonstop.forEach(e => lines.push(formatLine(e, showRT))); }
+    if (oneStop.length > 0) { lines.push("1 Stop:"); oneStop.forEach(e => lines.push(formatLine(e, showRT))); }
+    return lines;
+  };
 
-    if (nonstop.length === 0 && oneStop.length === 0) return `\n\n${links}`;
-
-    const fmtTime = (t?: string) => t?.slice(11, 16) ?? "?";
-    const fmtShort = (d: string) =>
-      new Date(d + "T12:00:00Z").toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: "UTC" });
-
-    const formatLine = ({ offer, depDate, retDate }: OfferEntry): string => {
-      const segs = offer.flights ?? [];
-      const airline = segs[0]?.airline ?? "?";
-      const depTime = fmtTime(segs[0]?.departure_airport?.time);
-      const arrTime = fmtTime(segs[segs.length - 1]?.arrival_airport?.time);
-      const price = `$${offer.price}${p.returnDate ? " RT" : ""}`;
-      // Always show both actual dates so user knows exactly what combination this is
-      const dateInfo = p.returnDate && retDate
-        ? `${fmtShort(depDate)} dep · ${fmtShort(retDate)} ret`
-        : `${fmtShort(depDate)} dep`;
-      return `  ${airline}  ${depTime}→${arrTime}  ${dateInfo}  ${price}`;
-    };
-
+  try {
+    const showRT = !!p.returnDate;
     const header = `${p.origin} → ${p.destination}`;
-    const window = p.returnDate
+    const dateWindow = p.returnDate
       ? `Depart ~${fmtShort(p.departDate)}  ·  Return ~${fmtShort(p.returnDate)}  ·  ±3 days flexible`
       : `Depart ~${fmtShort(p.departDate)}  ·  ±3 days flexible`;
 
-    const out: string[] = [header, window];
-    if (nonstop.length > 0) { out.push(""); out.push("Nonstop:"); nonstop.forEach(e => out.push(formatLine(e))); }
-    if (oneStop.length > 0) { out.push(""); out.push("1 Stop:");  oneStop.forEach(e => out.push(formatLine(e))); }
-    out.push("");
-    out.push(links);
+    const out: string[] = [header, dateWindow];
 
+    // Main route
+    const mainDeduped = await gridSearch(p.origin, p.destination, p.departDate, p.returnDate);
+    const mainOfferLines = renderOffers(mainDeduped, showRT);
+    if (mainOfferLines.length > 0) { out.push(""); out.push(...mainOfferLines); }
+
+    // ICN special case: also search via NRT and KIX as hub alternatives + CJJ connecting leg
+    const icnIsDest = p.destination === "ICN";
+    const icnIsOrigin = p.origin === "ICN";
+    if (icnIsDest || icnIsOrigin) {
+      const hubs: { code: string; name: string }[] = [
+        { code: "NRT", name: "Tokyo (NRT)" },
+        { code: "KIX", name: "Osaka (KIX)" },
+      ];
+
+      for (const hub of hubs) {
+        // International leg with hub substituted for ICN
+        const altOrigin = icnIsDest ? p.origin : hub.code;
+        const altDest = icnIsDest ? hub.code : p.destination;
+        const altDeduped = await gridSearch(altOrigin, altDest, p.departDate, p.returnDate);
+        const altOfferLines = renderOffers(altDeduped, showRT);
+
+        out.push("", `── Via ${hub.name} ──`);
+        out.push(`${altOrigin} → ${altDest}:`);
+        if (altOfferLines.length > 0) {
+          out.push(...altOfferLines);
+        } else {
+          out.push("  (no results)");
+        }
+
+        // Connecting leg: hub ↔ CJJ within 24-72h of the hub arrival/departure
+        // Inbound (ICN as dest): fly to hub, then hub→CJJ (+1, +2, +3 days after dep from origin)
+        // Outbound (ICN as origin): fly CJJ→hub (-3, -2, -1 days before dep from hub)
+        const connOrigin = icnIsDest ? hub.code : "CJJ";
+        const connDest = icnIsDest ? "CJJ" : hub.code;
+        const baseDate = icnIsDest ? p.departDate : p.departDate;
+        const offsets = icnIsDest ? [1, 2, 3] : [-3, -2, -1];
+
+        const connResults = await Promise.allSettled(
+          offsets.map(n => cheapestOneWay(connOrigin, connDest, addDays(baseDate, n)))
+        );
+
+        const connOffers = connResults
+          .filter((r): r is PromiseFulfilledResult<{ offer: SerpFlight; date: string }> =>
+            r.status === "fulfilled" && r.value !== null
+          )
+          .map(r => r.value);
+
+        if (connOffers.length > 0) {
+          connOffers.sort((a, b) => (a.offer.price ?? 999999) - (b.offer.price ?? 999999));
+          const best = connOffers[0];
+          const segs = best.offer.flights ?? [];
+          const airline = segs[0]?.airline ?? "?";
+          const depT = fmtTime(segs[0]?.departure_airport?.time);
+          const arrT = fmtTime(segs[segs.length - 1]?.arrival_airport?.time);
+          out.push(`Connecting leg ${connOrigin}→${connDest} (24-72h lag):`);
+          out.push(`  ${airline}  ${depT}→${arrT}  ${fmtShort(best.date)}  $${best.offer.price} OW`);
+        }
+      }
+    }
+
+    if (mainDeduped.length === 0 && !icnIsDest && !icnIsOrigin) return `\n\n${links}`;
+
+    out.push("", links);
     return `\n\n${out.join("\n")}`;
   } catch {
     return `\n\n${links}`;
