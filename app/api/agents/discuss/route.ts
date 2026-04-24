@@ -478,22 +478,41 @@ async function searchFlights(p: FlightParams): Promise<string> {
       })
     );
 
-    // Pool results, filter to nonstop + 1-stop only, sort by price
+    // Pool results, filter to nonstop + 1-stop only
     type OfferEntry = { offer: SerpFlight; depDate: string; retDate: string | undefined };
-    const pool: OfferEntry[] = [];
+    const depPool: OfferEntry[] = []; // results where departure varies
+    const retPool: OfferEntry[] = []; // results where return varies (round trip only)
+
     for (const r of results) {
       if (r.status !== "fulfilled") continue;
-      for (const offer of r.value.offers) {
+      const { depDate, retDate, offers } = r.value;
+      for (const offer of offers) {
         if (!offer.price) continue;
         const stops = Math.max(0, (offer.flights?.length ?? 1) - 1);
         if (stops > 1) continue;
-        pool.push({ offer, depDate: r.value.depDate, retDate: r.value.retDate });
+        const entry = { offer, depDate, retDate };
+        if (depDate !== p.departDate) depPool.push(entry);
+        else retPool.push(entry);
       }
     }
-    pool.sort((a, b) => (a.offer.price ?? 999999) - (b.offer.price ?? 999999));
 
-    const nonstop = pool.filter(({ offer }) => (offer.flights?.length ?? 1) <= 1).slice(0, 3);
-    const oneStop = pool.filter(({ offer }) => (offer.flights?.length ?? 1) === 2).slice(0, 3);
+    // Sort each pool by price, take top 3 from each, merge and dedupe by price+airline, top 5
+    const sortByPrice = (a: OfferEntry, b: OfferEntry) => (a.offer.price ?? 999999) - (b.offer.price ?? 999999);
+    depPool.sort(sortByPrice);
+    retPool.sort(sortByPrice);
+
+    const seen = new Set<string>();
+    const merged: OfferEntry[] = [];
+    for (const e of [...depPool.slice(0, 4), ...retPool.slice(0, 4)]) {
+      const key = `${e.offer.price}-${e.offer.flights?.[0]?.airline}-${e.depDate}-${e.retDate ?? ""}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      merged.push(e);
+    }
+    merged.sort(sortByPrice);
+
+    const nonstop = merged.filter(({ offer }) => (offer.flights?.length ?? 1) <= 1).slice(0, 3);
+    const oneStop = merged.filter(({ offer }) => (offer.flights?.length ?? 1) === 2).slice(0, 3);
 
     if (nonstop.length === 0 && oneStop.length === 0) return `\n\n${links}`;
 
@@ -507,10 +526,11 @@ async function searchFlights(p: FlightParams): Promise<string> {
       const depTime = fmtTime(segs[0]?.departure_airport?.time);
       const arrTime = fmtTime(segs[segs.length - 1]?.arrival_airport?.time);
       const price = `$${offer.price}${p.returnDate ? " RT" : ""}`;
-      const dateNote =
-        depDate !== p.departDate ? `depart ${fmtShort(depDate)}` :
-        retDate && retDate !== p.returnDate ? `return ${fmtShort(retDate)}` : "";
-      return `  ${airline}  ${depTime}→${arrTime}${dateNote ? `  (${dateNote})` : ""}  ${price}`;
+      // Always show both actual dates so user knows exactly what combination this is
+      const dateInfo = p.returnDate && retDate
+        ? `${fmtShort(depDate)} dep · ${fmtShort(retDate)} ret`
+        : `${fmtShort(depDate)} dep`;
+      return `  ${airline}  ${depTime}→${arrTime}  ${dateInfo}  ${price}`;
     };
 
     const header = `${p.origin} → ${p.destination}`;
