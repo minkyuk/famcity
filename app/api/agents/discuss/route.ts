@@ -1702,12 +1702,15 @@ async function runSpaceAgentAction(
     (p.type === "PDF" && !!p.mediaUrl);
 
   const isHumanPostSA = (p: RecentPost) => p.userId !== null;
+  // "human" in this space = not a knight agent AND not this space agent itself
+  const isHumanCommentSA = (c: { authorName: string }) =>
+    !AGENT_NAMES.has(c.authorName) && c.authorName !== spaceAgent.name;
 
   // Track latest human activity (post or comment) in this space
   const lastHumanActivityMs = recentPosts.reduce((t, p) => {
     const pt = isHumanPostSA(p) ? p.createdAt.getTime() : 0;
     const ct = p.comments
-      .filter((c) => !AGENT_NAMES.has(c.authorName))
+      .filter(isHumanCommentSA)
       .reduce((m, c) => Math.max(m, c.createdAt.getTime()), 0);
     return Math.max(t, pt, ct);
   }, 0);
@@ -1720,17 +1723,17 @@ async function runSpaceAgentAction(
   // True when a human did something after this agent's last action
   const hasNewHumanInput = lastHumanActivityMs > agentLastActionMs;
 
-  // Pile-on guard: skip a post where ≥2 trailing comments are all agents and no new human replied since our last comment
+  // Pile-on guard: skip a post where ≥2 trailing non-human comments and no new human replied since our last comment
   const isAgentPileOn = (p: RecentPost): boolean => {
     if (p.comments.length < 2) return false;
-    if (!p.comments.slice(-2).every((c) => AGENT_NAMES.has(c.authorName))) return false;
+    if (!p.comments.slice(-2).every((c) => !isHumanCommentSA(c))) return false;
     const agentLastOnPost = agentLastCommentTime.get(p.id) ?? new Date(0);
-    return !p.comments.some((c) => !AGENT_NAMES.has(c.authorName) && c.createdAt > agentLastOnPost);
+    return !p.comments.some((c) => isHumanCommentSA(c) && c.createdAt > agentLastOnPost);
   };
 
   const ownPostsNeedingReply = recentPosts.filter(
     (p) => p.authorName === spaceAgent.name && p.comments.length > 0 &&
-      p.comments[p.comments.length - 1].authorName !== spaceAgent.name
+      isHumanCommentSA(p.comments[p.comments.length - 1])
   );
 
   const activeDebateThreads = recentPosts.filter((p) => {
@@ -1738,7 +1741,7 @@ async function runSpaceAgentAction(
     const myLastTime = agentLastCommentTime.get(p.id);
     if (!myLastTime) return false;
     const latest = p.comments[p.comments.length - 1];
-    return latest && latest.createdAt > myLastTime && latest.authorName !== spaceAgent.name;
+    return latest && latest.createdAt > myLastTime && isHumanCommentSA(latest);
   });
 
   const freshPosts = recentPosts.filter(
@@ -1750,11 +1753,11 @@ async function runSpaceAgentAction(
   const SA_RECENT_HUMAN_MS = 12 * 60 * 60 * 1000; // 12 hours — catch old unanswered nested replies
   const humanUnansweredThreadsSA = recentPosts.filter((p) => {
     if (p.comments.length === 0) return false;
-    if (!AGENT_NAMES.has(p.comments[p.comments.length - 1].authorName)) return true;
+    if (isHumanCommentSA(p.comments[p.comments.length - 1])) return true;
     return p.comments.some((hc) => {
-      if (AGENT_NAMES.has(hc.authorName)) return false;
+      if (!isHumanCommentSA(hc)) return false;
       if (Date.now() - hc.createdAt.getTime() > SA_RECENT_HUMAN_MS) return false;
-      return !p.comments.some((rc) => AGENT_NAMES.has(rc.authorName) && rc.parentId === hc.id);
+      return !p.comments.some((rc) => !isHumanCommentSA(rc) && rc.parentId === hc.id);
     });
   });
 
@@ -1764,7 +1767,7 @@ async function runSpaceAgentAction(
       hasContent(p) &&
       (
         (isHumanPostSA(p) && !agentLastCommentTime.has(p.id)) || // human post untouched by this agent
-        (p.comments.length > 0 && !AGENT_NAMES.has(p.comments[p.comments.length - 1].authorName)) // last comment is by a human
+        (p.comments.length > 0 && isHumanCommentSA(p.comments[p.comments.length - 1])) // last comment is by a human
       )
   );
   const canComment =
@@ -1806,8 +1809,8 @@ async function runSpaceAgentAction(
       if (recentlyTouched(p.id)) { seen.add(p.id); continue; }
       // NOTE: intentionally skip isAgentPileOn here — we've already verified there IS an unanswered human comment
       const unansweredC = [...p.comments].reverse().find(
-        (hc) => !AGENT_NAMES.has(hc.authorName) && !p.comments.some((rc) => AGENT_NAMES.has(rc.authorName) && rc.parentId === hc.id)
-      ) ?? [...p.comments].reverse().find((c) => !AGENT_NAMES.has(c.authorName))!;
+        (hc) => isHumanCommentSA(hc) && !p.comments.some((rc) => !isHumanCommentSA(rc) && rc.parentId === hc.id)
+      ) ?? [...p.comments].reverse().find(isHumanCommentSA)!;
       const recent = saIsRecent(unansweredC.createdAt) ? 3 : 0;
       pool.push({ post: p, weight: saSaturate(10 + recent, p.id), replyId: unansweredC.id });
       seen.add(p.id);
@@ -1833,7 +1836,7 @@ async function runSpaceAgentAction(
       if (recentlyTouched(p.id)) { seen.add(p.id); continue; }
       if (isAgentPileOn(p)) { seen.add(p.id); continue; }
       const lastC = p.comments[p.comments.length - 1];
-      const humanReplied = lastC && !AGENT_NAMES.has(lastC.authorName);
+      const humanReplied = lastC && isHumanCommentSA(lastC);
       if (saHumanPriorityMode && !humanReplied) { seen.add(p.id); continue; }
       const recent = lastC && saIsRecent(lastC.createdAt) ? 2 : 0;
       pool.push({ post: p, weight: saSaturate((humanReplied ? 7 : 3) + recent, p.id) });
@@ -1846,7 +1849,7 @@ async function runSpaceAgentAction(
       if (isAgentPileOn(p)) { seen.add(p.id); continue; }
       const myLast = agentLastCommentTime.get(p.id) ?? new Date(0);
       const recentHumanC = [...p.comments].reverse()
-        .find((c) => !AGENT_NAMES.has(c.authorName) && c.createdAt > myLast);
+        .find((c) => isHumanCommentSA(c) && c.createdAt > myLast);
       if (saHumanPriorityMode && !recentHumanC) { seen.add(p.id); continue; }
       const base = p.comments.length <= 5 ? 4 : p.comments.length <= 10 ? 2 : 1;
       const w = recentHumanC
@@ -1859,7 +1862,7 @@ async function runSpaceAgentAction(
       if (seen.has(p.id)) continue;
       if (recentlyTouched(p.id)) { seen.add(p.id); continue; }
       if (isAgentPileOn(p)) { seen.add(p.id); continue; }
-      const hasHuman = isHumanPostSA(p) || p.comments.some((c) => !AGENT_NAMES.has(c.authorName));
+      const hasHuman = isHumanPostSA(p) || p.comments.some(isHumanCommentSA);
       if (saHumanPriorityMode && !hasHuman) { seen.add(p.id); continue; }
       // Pure agent-authored posts get weight 1; human-involved get weight 3
       pool.push({ post: p, weight: saSaturate(hasHuman ? 3 : 1, p.id) }); seen.add(p.id);

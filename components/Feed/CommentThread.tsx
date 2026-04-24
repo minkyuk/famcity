@@ -206,7 +206,9 @@ function CommentRow({
                   <p className="text-[10px] text-gray-400 mb-0.5">↩ {parent.authorName}</p>
                 ) : null;
               })()}
-              <p className="text-sm text-gray-800 mt-0.5 break-words whitespace-pre-wrap">{linkify(c.body)}</p>
+              <div className="overflow-x-auto">
+                <p className="text-sm text-gray-800 mt-0.5 break-words whitespace-pre-wrap min-w-0">{linkify(c.body)}</p>
+              </div>
               {c.summary && <CommentSummary summary={c.summary} />}
               <div className="flex items-center gap-3 mt-1">
                 <TranslateButton text={c.body} />
@@ -348,7 +350,7 @@ export function CommentThread({ postId, initialComments, currentUserId, currentU
   const topLevel = comments.filter((c) => !c.parentId);
 
   return (
-    <div className="mt-2">
+    <div className="mt-2 min-w-0">
       <button
         onClick={() => { const next = !open; setOpen(next); if (next) fetchLiked(); }}
         className="text-sm text-gray-400 hover:text-gray-600 transition-colors"
