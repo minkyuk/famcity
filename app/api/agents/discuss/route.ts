@@ -14,8 +14,39 @@ import {
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
-// Toggle: set to true to re-enable image inference (costs significantly more tokens)
-const VLM_ENABLED = false;
+// Vision: agents can look at photos. Each photo URL is capped at 3 total VLM queries.
+const VLM_ENABLED = true;
+const PHOTO_QUERIES_SLUG = "$$photo-queries";
+const MAX_PHOTO_QUERIES = 3;
+
+function photoKey(url: string): string {
+  // Extract Cloudinary public_id (after /v\d+/) as the stable key
+  const m = url.match(/\/v\d+\/(.+?)(?:\.\w+)?$/);
+  return m ? m[1] : url.slice(-32).replace(/[^a-zA-Z0-9_-]/g, "");
+}
+
+async function getPhotoQueryCounts(): Promise<Record<string, number>> {
+  try {
+    const rec = await prisma.agentMemory.findUnique({ where: { agentSlug: PHOTO_QUERIES_SLUG } });
+    return (rec?.beliefs as Record<string, number>) ?? {};
+  } catch { return {}; }
+}
+
+async function incrementPhotoQueries(urls: string[]): Promise<void> {
+  if (urls.length === 0) return;
+  try {
+    const counts = await getPhotoQueryCounts();
+    for (const url of urls) {
+      const k = photoKey(url);
+      counts[k] = (counts[k] ?? 0) + 1;
+    }
+    await prisma.agentMemory.upsert({
+      where: { agentSlug: PHOTO_QUERIES_SLUG },
+      update: { beliefs: counts },
+      create: { agentSlug: PHOTO_QUERIES_SLUG, beliefs: counts },
+    });
+  } catch {}
+}
 
 /**
  * Pre-generation thread gap analysis — identifies angles NOT yet covered in a thread
@@ -1029,16 +1060,19 @@ async function runAgentAction(agent: (typeof AGENTS)[0], denSpaceId: string, rec
 
     const hasPdf = target.type === "PDF" && !!target.mediaUrl;
     // Collect image URLs: prefer media[] array, fall back to mediaUrl for single-image posts
+    // Each photo is capped at MAX_PHOTO_QUERIES total VLM uses across all agents.
     const sampledMedia = target.media.length > 3
       ? [...target.media].sort(() => Math.random() - 0.5).slice(0, 3)
       : target.media;
-    const imageUrls = VLM_ENABLED
+    const photoQueryCounts = VLM_ENABLED ? await getPhotoQueryCounts() : {};
+    const candidateUrls = VLM_ENABLED
       ? (sampledMedia.length > 0
           ? sampledMedia.map((m) => m.url)
           : target.type === "IMAGE" && target.mediaUrl
           ? [target.mediaUrl]
           : [])
       : [];
+    const imageUrls = candidateUrls.filter((url) => (photoQueryCounts[photoKey(url)] ?? 0) < MAX_PHOTO_QUERIES);
     const hasImages = imageUrls.length > 0;
     const photoNote = hasImages
       ? `\n\n[${imageUrls.length} photo${imageUrls.length > 1 ? "s" : ""} shown above — describe what you actually see in at least one of them]`
@@ -1165,6 +1199,9 @@ Join this conversation. Respond to what ${originalPoster} shared — or to somet
       max_tokens: 600,
       messages: [{ role: "user", content: contentBlocks }],
     });
+
+    // Track photo queries consumed so each photo is capped at MAX_PHOTO_QUERIES total
+    if (imageUrls.length > 0) await incrementPhotoQueries(imageUrls).catch(() => {});
 
     const rawText =
       response.content[0].type === "text" ? response.content[0].text.trim() : "Interesting...";
@@ -1798,15 +1835,17 @@ async function runSpaceAgentAction(
       ? (target.comments.find((c) => c.id === chosen.replyId) ?? lastComment)
       : lastComment;
 
-    // Build image URL list (media array first, fall back to mediaUrl for single-image posts)
+    // Build image URL list, capped at MAX_PHOTO_QUERIES per photo across all agents
     const tMediaUrl: string | null = (target as unknown as { mediaUrl: string | null }).mediaUrl ?? null;
-    const spaceImageUrls = VLM_ENABLED
+    const spacePhotoCounts = VLM_ENABLED ? await getPhotoQueryCounts() : {};
+    const spaceCandidateUrls = VLM_ENABLED
       ? (target.media.length > 0
           ? target.media.slice(0, 3).map((m) => m.url)
           : target.type === "IMAGE" && tMediaUrl
           ? [tMediaUrl]
           : [])
       : [];
+    const spaceImageUrls = spaceCandidateUrls.filter((url) => (spacePhotoCounts[photoKey(url)] ?? 0) < MAX_PHOTO_QUERIES);
     const spaceHasPdf = target.type === "PDF" && !!tMediaUrl;
     const photoNote = spaceImageUrls.length > 0
       ? `\n\n[${spaceImageUrls.length} photo${spaceImageUrls.length > 1 ? "s" : ""} shown above — describe what you actually see in at least one of them]`
@@ -1868,6 +1907,8 @@ async function runSpaceAgentAction(
       max_tokens: 600,
       messages: [{ role: "user", content: spaceContentBlocks }],
     });
+
+    if (spaceImageUrls.length > 0) await incrementPhotoQueries(spaceImageUrls).catch(() => {});
 
     const rawText = response.content[0].type === "text" ? response.content[0].text.trim() : "Interesting...";
     if (/^SKIP\b/i.test(rawText)) return; // quality gate: agent decided nothing new to add
