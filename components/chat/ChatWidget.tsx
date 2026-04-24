@@ -43,6 +43,8 @@ function Avatar({ name, image, size = 24 }: { name: string; image?: string | nul
   );
 }
 
+const LS_KEY = "chat_last_seen";
+
 export function ChatWidget() {
   const { data: session } = useSession();
   const [mounted, setMounted] = useState(false);
@@ -63,12 +65,41 @@ export function ChatWidget() {
   const [password, setPassword] = useState("");
   const [pwError, setPwError] = useState("");
 
+  // Unread notification count
+  const [unread, setUnread] = useState(0);
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
   const bottomRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const sseRef = useRef<EventSource | null>(null);
   const lastSeenRef = useRef<string | null>(null);
 
   useEffect(() => { setMounted(true); }, []);
+
+  // Poll for unread count when widget is closed
+  const fetchUnread = () => {
+    const since = localStorage.getItem(LS_KEY) ?? new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+    fetch(`/api/chat/unread?since=${encodeURIComponent(since)}`)
+      .then((r) => r.json())
+      .then((d: { count?: number }) => { if (typeof d.count === "number") setUnread(d.count); })
+      .catch(() => {});
+  };
+
+  useEffect(() => {
+    if (!session) return;
+    if (open) {
+      // Widget opened — clear badge and save current time as last-seen
+      setUnread(0);
+      localStorage.setItem(LS_KEY, new Date().toISOString());
+      if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; }
+    } else {
+      // Widget closed — start polling every 30s
+      fetchUnread();
+      pollRef.current = setInterval(fetchUnread, 30_000);
+      return () => { if (pollRef.current) clearInterval(pollRef.current); };
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, session]);
 
   // Load channels when opened
   useEffect(() => {
@@ -341,12 +372,19 @@ export function ChatWidget() {
       )}
 
       {/* Toggle button */}
-      <button
-        onClick={() => setOpen((o) => !o)}
-        className="w-12 h-12 bg-accent hover:bg-orange-600 text-white rounded-full shadow-lg flex items-center justify-center text-xl transition-colors"
-      >
-        {open ? "✕" : "💬"}
-      </button>
+      <div className="relative">
+        <button
+          onClick={() => setOpen((o) => !o)}
+          className="w-12 h-12 bg-accent hover:bg-orange-600 text-white rounded-full shadow-lg flex items-center justify-center text-xl transition-colors"
+        >
+          {open ? "✕" : "💬"}
+        </button>
+        {!open && unread > 0 && (
+          <span className="absolute -top-1 -right-1 min-w-[18px] h-[18px] bg-red-500 text-white text-[10px] font-bold rounded-full flex items-center justify-center px-1 pointer-events-none">
+            {unread > 99 ? "99+" : unread}
+          </span>
+        )}
+      </div>
     </div>
   );
 
