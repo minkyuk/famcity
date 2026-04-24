@@ -473,21 +473,32 @@ async function searchFlights(p: FlightParams): Promise<string> {
     const dictionaries = (data as Record<string, unknown>).dictionaries as Record<string, Record<string, string>> | undefined;
     const carrierNames = dictionaries?.carriers ?? {};
 
-    const lines = offers.map((offer) => {
-      const price = (offer.price as Record<string, string>)?.grandTotal ?? "?";
-      const itinerary = ((offer.itineraries as unknown[])?.[0]) as Record<string, unknown> | undefined;
+    const formatLeg = (itinerary: Record<string, unknown> | undefined): string => {
       const segments = (itinerary?.segments as Record<string, unknown>[]) ?? [];
+      if (segments.length === 0) return "?";
       const stops = segments.length - 1;
       const depTime = (segments[0]?.departure as Record<string, string>)?.at?.slice(11, 16) ?? "?";
       const arrTime = (segments[segments.length - 1]?.arrival as Record<string, string>)?.at?.slice(11, 16) ?? "?";
-      const carrierCode = (segments[0]?.carrierCode as string) ?? "?";
-      const carrier = carrierNames[carrierCode] ?? carrierCode;
       const stopLabel = stops === 0 ? "nonstop" : `${stops} stop${stops > 1 ? "s" : ""}`;
-      return `• ${carrier} — ${depTime}→${arrTime} ${stopLabel} — $${price}`;
+      return `${depTime}→${arrTime} ${stopLabel}`;
+    };
+
+    const lines = offers.map((offer) => {
+      const price = (offer.price as Record<string, string>)?.grandTotal ?? "?";
+      const itineraries = (offer.itineraries as unknown[]) ?? [];
+      const out = itineraries[0] as Record<string, unknown> | undefined;
+      const ret = itineraries[1] as Record<string, unknown> | undefined;
+      const outSegs = (out?.segments as Record<string, unknown>[]) ?? [];
+      const carrierCode = (outSegs[0]?.carrierCode as string) ?? "?";
+      const carrier = carrierNames[carrierCode] ?? carrierCode;
+      const outLabel = formatLeg(out);
+      const retLabel = ret ? ` / ↩ ${formatLeg(ret)}` : "";
+      return `• ${carrier} — ✈ ${outLabel}${retLabel} — $${price}`;
     });
 
-    const routeLabel = `${p.origin}→${p.destination}${p.returnDate ? ` (return ${p.returnDate})` : ""}`;
-    return `\n\nFlights found for ${routeLabel} on ${p.departDate}:\n${lines.join("\n")}\n\n${links}`;
+    const tripType = p.returnDate ? `round trip, return ${p.returnDate}` : "one way";
+    const routeLabel = `${p.origin}→${p.destination} (${tripType}) on ${p.departDate}`;
+    return `\n\nFlights found for ${routeLabel}:\n${lines.join("\n")}\n\n${links}`;
   } catch {
     return `\n\n${links}`;
   }
