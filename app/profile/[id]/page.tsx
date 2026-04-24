@@ -258,6 +258,12 @@ export default function ProfilePage() {
                 >
                   ✏️ Edit profile
                 </button>
+                <a
+                  href="/shop"
+                  className="text-xs text-orange-500 hover:text-orange-600 font-medium border border-orange-200 rounded-full px-3 py-1 transition-colors"
+                >
+                  ⚡ Buy credits
+                </a>
                 {patreon?.patronStatus === "active_patron" ? (
                   <span className="text-xs text-orange-500 font-medium border border-orange-200 rounded-full px-3 py-1">
                     Patreon connected ✓
