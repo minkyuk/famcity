@@ -268,9 +268,13 @@ Respond ONLY with valid JSON, no other text:
     const sourceName = feedSourceName(candidate.url);
     const ageLabel = candidate.ageMs < BREAKING_MS ? "breaking" : candidate.ageMs < RECENT_MS ? "recent" : "today";
 
+    // Build non-voter list for this story
+    const voterNameSet = new Set(entry.voters.map(v => v.name));
+    const nonVotersForStory = voters.filter(v => !voterNameSet.has(v.name));
+
     try {
-      // Run poster paragraphs and both debate perspectives in parallel
-      const [mainMsg, debateMsg1, debateMsg2] = await Promise.all([
+      // Run poster paragraphs, both debate perspectives, and Korean version in parallel
+      const [mainMsg, debateMsg1, debateMsg2, koreanMsg] = await Promise.all([
         anthropic.messages.create({
           model: "claude-haiku-4-5-20251001",
           max_tokens: 600,
@@ -323,26 +327,60 @@ ${candidate.description.slice(0, 400)}
 What's your perspective on this story through your own lens and values? What would you point to as a genuine win here, and what would you push back on or flag as a concern families should watch closely? 2–3 sentences. No hashtags. No asterisks. Do not start with "I".`,
           }],
         }),
+
+        // Korean version — same agent, same source, written fresh in Korean
+        anthropic.messages.create({
+          model: "claude-haiku-4-5-20251001",
+          max_tokens: 500,
+          messages: [{
+            role: "user",
+            content: `${posterAgent.personality}
+
+한국어를 사용하는 가족을 위해 아래 ${ageLabel === "breaking" ? "속보" : ageLabel === "recent" ? "최근" : "오늘의"} 뉴스를 보도하세요.
+
+출처: ${sourceName}
+제목: ${candidate.title}
+요약: ${candidate.description.slice(0, 600)}
+
+정확히 세 단락을 빈 줄로 구분하여 작성하세요:
+
+1단락 — 사실 보도: 2~3문장. 가장 중요한 수치, 금액, 통계로 시작하세요. 관련 인물, 국가, 기관을 구체적으로 명시하세요. "${sourceName}에 따르면, …"처럼 자연스럽게 출처를 인용하세요.
+
+2단락 — 이득과 손해: 2문장. 이 뉴스로 혜택을 받는 측(특정 산업, 집단, 국가)과 손해를 보는 측을 구체적으로 명시하세요.
+
+3단락 — 한마디: 1문장. 일반 가정에서 주목해야 할 점은 무엇인가요?
+
+해시태그 없음. "저는" 또는 "나는"으로 시작하지 마세요. 별표나 마크다운 사용 금지.`,
+          }],
+        }),
       ]);
 
       const mainText = mainMsg.content[0].type === "text" ? mainMsg.content[0].text.trim() : "";
       const debateText1 = debateMsg1.content[0].type === "text" ? debateMsg1.content[0].text.trim() : "";
       const debateText2 = debateMsg2.content[0].type === "text" ? debateMsg2.content[0].text.trim() : "";
+      const koreanText = koreanMsg.content[0].type === "text" ? koreanMsg.content[0].text.trim() : "";
 
       if (!mainText || mainText.length < 80) continue;
 
-      // Build vote attribution line
+      // Build vote attribution (summarized reason + who voted vs passed)
+      const reasonSummary = entry.voters[0]?.reason ?? "";
       const voterLine = entry.voters.length > 0
-        ? `\nVoted for by ${entry.voteCount} agent${entry.voteCount !== 1 ? "s" : ""}: ${entry.voters.map((v) => `${v.name} — "${v.reason}"`).join(" · ")}`
+        ? [
+            `Selected by: ${entry.voters.map(v => v.name).join(", ")} (${entry.voteCount} of ${VOTER_COUNT} votes)`,
+            reasonSummary ? `Why: ${reasonSummary}` : "",
+            nonVotersForStory.length > 0 ? `Passed on: ${nonVotersForStory.map(v => v.name).join(", ")}` : "",
+          ].filter(Boolean).join("\n")
         : "";
 
-      // Assemble full post: factual + benefits + debate perspectives + take + vote attribution
+      // Assemble full post: English content → Korean section → vote attribution
       const debateSection = [
         debateText1 ? `${debateAgent1.name}: ${debateText1}` : "",
         debateText2 ? `${debateAgent2.name}: ${debateText2}` : "",
       ].filter(Boolean).join("\n\n");
 
-      const rawText = [mainText, debateSection, voterLine.trim()].filter(Boolean).join("\n\n");
+      const koreanSection = koreanText ? `---\n🇰🇷 한국어\n\n${koreanText}` : "";
+
+      const rawText = [mainText, debateSection, koreanSection, voterLine].filter(Boolean).join("\n\n");
 
       await prisma.post.create({
         data: {
