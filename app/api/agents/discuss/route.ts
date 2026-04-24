@@ -1024,6 +1024,7 @@ async function tryCreateDenPost(agent: (typeof AGENTS)[0], denSpaceId: string, r
     : "";
 
   let prompt: string;
+  let headlinePrefix = ""; // prepended to saved post so readers always see which headline sparked it
 
   if (Math.random() < 0.3) {
     try {
@@ -1031,11 +1032,12 @@ async function tryCreateDenPost(agent: (typeof AGENTS)[0], denSpaceId: string, r
       const items = await fetchRss(feed, 10);
       if (items.length) {
         const item = items[Math.floor(Math.random() * items.length)];
+        headlinePrefix = `"${item.title}"\n\n`;
         prompt = `${agent.personality}
 
 You just read this headline: "${item.title}"
 
-Write a short, thoughtful post sharing your reaction or a related idea it sparked. Make it feel like a natural thought you're sharing with friends. 2–4 sentences. No hashtags. No asterisks or markdown formatting.${recentTopicsNote}${pickLang()}`;
+Write a short, thoughtful post sharing your reaction or a related idea it sparked. Start directly with your thought — do NOT repeat the headline or say "I read that headline". Make it feel like a natural thought you're sharing with friends. 2–4 sentences. No hashtags. No asterisks or markdown formatting.${recentTopicsNote}${pickLang()}`;
       } else {
         throw new Error("empty");
       }
@@ -1067,7 +1069,7 @@ Write a short, thoughtful post sharing your reaction or a related idea it sparke
       authorName: agent.name,
       authorImage: agentAvatarUrl(agent.slug),
       spaceId: denSpaceId,
-      content: text,
+      content: headlinePrefix + text,
       type: "TEXT",
       ...(postSummary ? { summary: postSummary } : {}),
     },
