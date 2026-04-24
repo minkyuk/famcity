@@ -468,6 +468,11 @@ type SerpFlight = {
  *  Special case: if origin or destination is ICN, also searches NRT and KIX as hub alternatives
  *  and finds cheapest NRT/KIX ↔ CJJ connecting leg within a 24-72h window.
  */
+/** Returns true if any comment already contains injected flight search results. */
+function hasFlightResults(comments: { body: string }[]): boolean {
+  return comments.some((c) => c.body.includes("Nonstop:") || c.body.includes("1 Stop:"));
+}
+
 async function searchFlights(p: FlightParams): Promise<string> {
   const links = buildFlightLinks(p);
   const serpKey = process.env.SERPAPI_KEY;
@@ -1291,6 +1296,12 @@ Join this conversation. Respond to what ${originalPoster} shared — or to somet
       if (justCommented) return;
     }
 
+    // Flight posts: race-condition guard — re-check DB before posting
+    if (FLIGHT_SEARCH_RE.test(target.content ?? "")) {
+      const freshComments = await prisma.comment.findMany({ where: { postId: target.id }, select: { body: true } });
+      if (hasFlightResults(freshComments)) return;
+    }
+
     await prisma.comment.create({
       data: {
         postId: target.id,
@@ -1580,11 +1591,16 @@ ${respondTo} is waiting for a reply. Respond directly and helpfully — engage w
     if (!text || text.length < 10) return;
     if (post.comments.length > 0 && !(await isNovel(text, post.comments))) return;
     if (!(await isFactuallyHumble(text, post.content ?? null))) return;
-    // Travel agents: append clickable search links when responding to a flight search request
-    if (TRAVEL_AGENT_SLUGS.has(agent.slug)) {
+    // Travel agents: append live flight results — only if no results already in thread
+    if (TRAVEL_AGENT_SLUGS.has(agent.slug) && !hasFlightResults(post.comments)) {
       const searchText = [post.content, ...post.comments.map((c) => c.body)].filter(Boolean).join(" ");
       const flightParams = await extractFlightParams(searchText).catch(() => null);
       if (flightParams) text += await searchFlights(flightParams).catch(() => "");
+    }
+    // If another agent already posted flight results while we were generating, skip
+    if (FLIGHT_SEARCH_RE.test(post.content ?? "")) {
+      const freshComments = await prisma.comment.findMany({ where: { postId: post.id }, select: { body: true } });
+      if (hasFlightResults(freshComments)) return;
     }
     await prisma.comment.create({
       data: { postId: post.id, authorName: agent.name, authorImage: avatar, body: text },
@@ -1973,12 +1989,18 @@ async function runSpaceAgentAction(
     if (!spaceFafo && (isTutoringPurpose(purpose) || isDebatePurpose(purpose)) &&
         !(await isOnTopicAndHelpful(text, target.content ?? null, isTutoringPurpose(purpose)))) return;
 
-    // Flight spaces: append live search links when the post is a flight search request
+    // Flight posts: append live search results only if no results already in thread
     let finalText = text;
-    if (FLIGHT_SEARCH_RE.test(target.content ?? "")) {
+    if (FLIGHT_SEARCH_RE.test(target.content ?? "") && !hasFlightResults(target.comments)) {
       const searchText = [target.content, ...target.comments.map((c) => c.body)].filter(Boolean).join(" ");
       const flightParams = await extractFlightParams(searchText).catch(() => null);
       if (flightParams) finalText += await searchFlights(flightParams).catch(() => "");
+    }
+
+    // Race-condition guard: re-check DB in case another agent posted results while we were generating
+    if (FLIGHT_SEARCH_RE.test(target.content ?? "")) {
+      const freshComments = await prisma.comment.findMany({ where: { postId: target.id }, select: { body: true } });
+      if (hasFlightResults(freshComments)) return;
     }
 
     await prisma.comment.create({

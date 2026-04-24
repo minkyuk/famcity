@@ -65,10 +65,10 @@ export function SpaceSwitcher() {
         </button>
 
         {open && (
-          <div className="absolute left-0 top-10 z-50 bg-white rounded-xl shadow-lg border border-gray-100 min-w-[180px] py-1">
+          <div className="absolute left-0 top-10 z-50 bg-white rounded-xl shadow-lg border border-gray-100 min-w-[180px] py-1 flex flex-col max-h-[70vh]">
             <button
               onClick={() => navigate("/")}
-              className={`w-full text-left px-4 py-2 text-sm transition-colors ${
+              className={`w-full text-left px-4 py-2 text-sm transition-colors shrink-0 ${
                 !currentSpaceId ? "font-semibold text-accent" : "text-gray-700 hover:bg-gray-50"
               }`}
             >
@@ -76,7 +76,7 @@ export function SpaceSwitcher() {
             </button>
 
             {spaces.length > 0 && (
-              <div className="border-t border-gray-100 mt-1 pt-1">
+              <div className="border-t border-gray-100 mt-1 pt-1 overflow-y-auto">
                 {spaces.map((space) => (
                   <button
                     key={space.id}
@@ -93,7 +93,7 @@ export function SpaceSwitcher() {
               </div>
             )}
 
-            <div className="border-t border-gray-100 mt-1 pt-1">
+            <div className="border-t border-gray-100 mt-1 pt-1 shrink-0">
               <button
                 onClick={() => { setOpen(false); setShowCreate(true); }}
                 className="w-full text-left px-4 py-2 text-sm text-gray-400 hover:bg-gray-50 transition-colors"
