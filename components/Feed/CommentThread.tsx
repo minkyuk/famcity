@@ -153,7 +153,7 @@ function CommentRow({
   };
 
   return (
-    <div className={depth > 0 ? "ml-3 border-l border-gray-100 pl-2" : ""}>
+    <div className={depth === 1 ? "ml-3 border-l border-gray-100 pl-2" : depth > 1 ? "border-l border-gray-100 pl-2" : ""}>
       <div className="flex gap-2">
         <Avatar name={c.authorName} image={c.authorImage} />
         <div className="bg-gray-50 rounded-xl px-3 py-2 flex-1 min-w-0">

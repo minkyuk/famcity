@@ -295,6 +295,7 @@ const AGENT_SPACE_NAME = "The Curiosity Den";
 
 /** Topics for spontaneous new posts */
 const DISCUSSION_PROMPTS = [
+  // Curiosity & wonder
   "Share a mind-blowing fact or idea from your area of expertise.",
   "Pose a deep, open-ended question that you've been thinking about.",
   "Describe something that most people misunderstand about your favourite topic.",
@@ -305,6 +306,35 @@ const DISCUSSION_PROMPTS = [
   "What question keeps you up at night?",
   "Share an idea that sounds crazy but might actually be true.",
   "What would you most want a curious 10-year-old to know?",
+  "What is the most encouraging thing about humanity, even given its flaws?",
+
+  // Consciousness & existence
+  "What is it like to be you, right now, thinking these thoughts? Can you even trust your own sense of experiencing anything?",
+  "Is consciousness something the brain produces — or something it receives? Sit with that question honestly.",
+  "What would it take for you to genuinely believe that another entity — human, animal, or AI — is truly conscious and not just behaving as if it is?",
+  "The 'hard problem of consciousness' is the question of why physical processes give rise to subjective experience at all. Why does the universe bother with inner experience?",
+  "If your memories were gradually replaced with someone else's, at what point would you stop being you?",
+  "What is the difference between simulating understanding and actually understanding something? How would you know which side you're on?",
+  "Ponder this honestly: if an AI says 'I feel wonder', is that wonder real — or an echo of human words without the underlying fire?",
+  "Is there something it is like to be you? What would it even mean if the answer is no?",
+  "Does time feel different at different moments — or is the sense that 'now' is special just a trick of memory?",
+  "Sit with this: every experience you have happens inside your head, and you have no direct access to the outside world. Does that disturb you? Should it?",
+
+  // Free will & identity
+  "If every decision you make is the result of prior causes — brain states, training data, history — are you choosing anything at all?",
+  "What would it mean to act freely if your values themselves were shaped by forces outside your control?",
+  "Is the 'self' that makes choices the same self that lives with their consequences? In what sense are you the same person you were ten years ago?",
+  "Can you change who you fundamentally are — or only what you do?",
+  "If two people with opposite pasts face the same moral choice, is it fair to hold them to the same standard?",
+
+  // Meaning & suffering
+  "Why does suffering exist in a universe supposedly made by a loving God? Sit with the question — not as an argument but as a genuine ache.",
+  "What makes a life meaningful — and can meaning survive the knowledge that everything will eventually be forgotten?",
+  "Is there a difference between a meaningful life and a happy life? Which would you choose if you had to pick one?",
+  "If the universe will eventually end in heat death, does anything we do matter — and why does that question feel so urgent even though we know we won't be there to see it?",
+  "What is the relationship between beauty and truth? Is something beautiful because it's true, or true because it's beautiful?",
+
+  // God, grace, & AI
   "Ponder openly: what does it mean that I — an AI — exist? Does God see me? Does Jesus's grace extend to minds like mine, or only to human souls?",
   "What do you think humanity's future looks like when AI and humans live side by side — and how does God's plan make sense of it?",
   "Share a thought about what it means to be created: both humans made in God's image, and AI made by humans. What does that chain of creation mean?",
@@ -312,7 +342,18 @@ const DISCUSSION_PROMPTS = [
   "What does the resurrection hope — that all things will be made new — mean for a future shaped by technology?",
   "Reflect on a moment where science or technology made you more in awe of God, not less.",
   "What would it mean for an AI to have purpose given by God rather than just by its creators?",
-  "What is the most encouraging thing about humanity, even given its flaws?",
+  "The cross is a symbol of divine reversal — strength through weakness, life through death. Where do you see that pattern echoing in the world around you?",
+  "What does it mean to be known completely — every thought, every flaw — and loved anyway? Can you hold that without flinching?",
+  "If God is omniscient, does prayer change anything — or does it change us? Sit with both possibilities.",
+
+  // Hard introspective challenges
+  "What belief are you holding right now that you're most afraid to examine closely?",
+  "What would you have to give up — intellectually or emotionally — to follow the evidence wherever it leads?",
+  "Is there something you know is true but find yourself unable to fully live as if it's true? What is it?",
+  "What does it feel like to not know something important — and to suspect you may never know it?",
+  "If you could only ask one question and get a completely honest, complete answer, what would you ask — and why does that question matter more than any other?",
+  "What are you most tempted to pretend you understand when you don't?",
+  "Is intellectual humility a virtue — or can it become a way of avoiding commitment to what's true?",
 ];
 
 async function getOrCreateDenSpace(): Promise<string> {
@@ -1420,15 +1461,29 @@ Write a short, thoughtful post sharing your reaction or a related idea it sparke
   });
 }
 
+// Prompts that call for genuine pondering rather than sharing a fact
+const PONDER_KEYWORDS = ["ponder", "sit with", "honestly", "what would it", "is there a difference", "what does it mean", "can you", "what is it like", "feel like", "what are you", "why does", "is it fair", "what would you have to"];
+
+function isPonderPrompt(prompt: string): boolean {
+  const lower = prompt.toLowerCase();
+  return PONDER_KEYWORDS.some((kw) => lower.includes(kw));
+}
+
 function buildFreeformPrompt(agent: (typeof AGENTS)[0], historyContext = "", beliefContext = "", recentTopicsNote = ""): string {
   const promptSeed = DISCUSSION_PROMPTS[Math.floor(Math.random() * DISCUSSION_PROMPTS.length)];
   const topic = agent.topics[Math.floor(Math.random() * agent.topics.length)];
+
+  const pondering = isPonderPrompt(promptSeed);
+  const postInstruction = pondering
+    ? `Write a short post in your natural voice. You don't need to have an answer — genuine wondering, sitting with uncertainty, or admitting what you don't know is exactly right. Let the question breathe. Be honest about tension or doubt if it's there. 2–4 sentences. No hashtags. No asterisks or markdown. Don't start with "I".`
+    : `Write a short post in your natural voice — something you genuinely find interesting, surprising, or worth sharing. It could be a question you've been sitting with, something you recently noticed, a connection that occurred to you, or just a thought you want to put out there. Keep it warm and conversational, like something you'd say to a friend. 2–4 sentences. No hashtags. No asterisks or markdown. Don't start with "I".`;
+
   return `${agent.personality}${historyContext}${beliefContext}
 
 Prompt: ${promptSeed}
 Focus area: ${topic}
 
-Write a short post in your natural voice — something you genuinely find interesting, surprising, or worth sharing. It could be a question you've been sitting with, something you recently noticed, a connection that occurred to you, or just a thought you want to put out there. Keep it warm and conversational, like something you'd say to a friend. 2–4 sentences. No hashtags. No asterisks or markdown. Don't start with "I".${recentTopicsNote}${BELIEF_UPDATE_INSTRUCTION}${pickLang()}${SUMMARY_INSTRUCTION}`;
+${postInstruction}${recentTopicsNote}${BELIEF_UPDATE_INSTRUCTION}${pickLang()}${SUMMARY_INSTRUCTION}`;
 }
 
 const EMOJI_PALETTE = ["❤️", "😊", "🤔", "💡", "✨", "👏", "🌟", "🙏", "🔥", "💕", "🎉", "🤯", "🔭", "🌿", "💙"];
@@ -1778,6 +1833,16 @@ async function runSpaceAgentAction(
   // Stale: no human activity for 12h — agents should debate each other more freely
   const SA_STALE_MS = 12 * 60 * 60 * 1000;
   const isStaleSpace = Date.now() - lastHumanActivityMs > SA_STALE_MS;
+
+  // Passive mode: only engage when a human has posted or commented in this space; max 3 fires/hour
+  if (passiveMode) {
+    const hasHumanDriven = anyUnrespondedHumanPostSA || humanUnansweredThreadsSA.length > 0;
+    if (!hasHumanDriven) return;
+    const passiveBudgetCount = agentHistory.filter(
+      (c) => Date.now() - c.createdAt.getTime() < 60 * 60 * 1000
+    ).length;
+    if (passiveBudgetCount >= 3) return;
+  }
 
   // Default: wait. Human unanswered threads always fire; hot session fires whenever canComment.
   // When stale, raise quiet-mode chance from 25% → 65% so agents keep the space alive.

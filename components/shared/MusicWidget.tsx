@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useReducer, useState } from "react";
 import Image from "next/image";
 import { PLAYLIST } from "@/lib/playlist";
 
@@ -11,76 +11,151 @@ declare global {
   }
 }
 
+// ── Module-level singleton ────────────────────────────────────────────────────
+// The YouTube player iframe is appended directly to document.body and never
+// removed, so music persists across client-side Next.js navigations even if
+// the React component remounts.
+
+let _player: any = null;
+let _progressTimer: ReturnType<typeof setInterval> | null = null;
+const _listeners = new Set<() => void>();
+
+const _s = {
+  currentIndex: 0,
+  playing: false,
+  muted: true,
+  volume: 25,
+  shuffle: false,
+  loop: false,
+  progress: 0,
+  duration: 0,
+  titles: PLAYLIST.map((p) => p.title),
+};
+
+function _notify() { _listeners.forEach((l) => l()); }
+
+function _nextIndex(from: number, doShuffle: boolean) {
+  if (PLAYLIST.length === 1) return 0;
+  if (doShuffle) {
+    let n = from;
+    while (n === from) n = Math.floor(Math.random() * PLAYLIST.length);
+    return n;
+  }
+  return (from + 1) % PLAYLIST.length;
+}
+
+function _prevIndex(from: number) {
+  return (from - 1 + PLAYLIST.length) % PLAYLIST.length;
+}
+
+function _goTo(index: number) {
+  _s.currentIndex = index;
+  _s.progress = 0;
+  _s.duration = 0;
+  _player?.loadVideoById(PLAYLIST[index].id);
+  _notify();
+}
+
+function _initPlayer() {
+  if (_player) return;
+
+  // Create a persistent container outside the React tree
+  let container = document.getElementById("yt-player-root");
+  if (!container) {
+    container = document.createElement("div");
+    container.id = "yt-player-root";
+    Object.assign(container.style, {
+      position: "fixed", width: "1px", height: "1px",
+      overflow: "hidden", opacity: "0", pointerEvents: "none",
+      top: "-9999px", left: "-9999px",
+    });
+    document.body.appendChild(container);
+  }
+
+  const div = document.createElement("div");
+  container.appendChild(div);
+
+  _player = new window.YT.Player(div, {
+    height: "1", width: "1",
+    videoId: PLAYLIST[0].id,
+    playerVars: { autoplay: 1, mute: 1, controls: 0, rel: 0, modestbranding: 1, playsinline: 1 },
+    events: {
+      onReady: (e: any) => {
+        e.target.setVolume(_s.volume);
+        e.target.mute();
+        e.target.playVideo();
+        _notify();
+      },
+      onStateChange: (e: any) => {
+        const S = window.YT?.PlayerState;
+        if (!S) return;
+        if (e.data === S.PLAYING) {
+          _s.playing = true;
+          _s.duration = _player.getDuration();
+          if (_progressTimer) clearInterval(_progressTimer);
+          _progressTimer = setInterval(() => {
+            _s.progress = _player.getCurrentTime();
+            _notify();
+          }, 500);
+          _notify();
+        } else if (e.data === S.PAUSED) {
+          _s.playing = false;
+          if (_progressTimer) { clearInterval(_progressTimer); _progressTimer = null; }
+          _notify();
+        } else if (e.data === S.ENDED) {
+          _s.playing = false;
+          if (_progressTimer) { clearInterval(_progressTimer); _progressTimer = null; }
+          if (_s.loop) {
+            _player.seekTo(0);
+            _player.playVideo();
+          } else {
+            _goTo(_nextIndex(_s.currentIndex, _s.shuffle));
+          }
+          _notify();
+        }
+      },
+    },
+  });
+}
+
+let _titlesFetched = false;
+function _fetchTitles() {
+  if (_titlesFetched) return;
+  _titlesFetched = true;
+  PLAYLIST.forEach((video, i) => {
+    fetch(`https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v=${video.id}&format=json`)
+      .then((r) => r.json())
+      .then((d: { title: string }) => {
+        const next = [..._s.titles];
+        next[i] = d.title;
+        _s.titles = next;
+        _notify();
+      })
+      .catch(() => {});
+  });
+}
+
+// ── React component ───────────────────────────────────────────────────────────
+
 export function MusicWidget() {
   const [mounted, setMounted] = useState(false);
   const [open, setOpen] = useState(false);
-  const [playing, setPlaying] = useState(false);
-  const [currentIndex, setCurrentIndex] = useState(0);
-  const [shuffle, setShuffle] = useState(false);
-  const [loop, setLoop] = useState(false);
-  const [volume, setVolume] = useState(25);
-  const [muted, setMuted] = useState(true);
-  const [progress, setProgress] = useState(0);
-  const [duration, setDuration] = useState(0);
-  const [titles, setTitles] = useState<string[]>(PLAYLIST.map((p) => p.title));
-
-  // Refs so stale closures in YT callbacks always see current values
-  const playerRef = useRef<any>(null);
-  const ytDivRef = useRef<HTMLDivElement>(null);
-  const shuffleRef = useRef(false);
-  const loopRef = useRef(false);
-  const currentIndexRef = useRef(0);
-  const progressTimer = useRef<ReturnType<typeof setInterval> | null>(null);
+  // Stable dispatch reference — used to subscribe to module-level state changes
+  const [, rerender] = useReducer((x: number) => x + 1, 0);
 
   useEffect(() => { setMounted(true); }, []);
 
-  // Fetch titles via YouTube oEmbed (no API key needed)
+  // Subscribe to singleton state changes; survives remounts
   useEffect(() => {
-    PLAYLIST.forEach((video, i) => {
-      fetch(`https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v=${video.id}&format=json`)
-        .then((r) => r.json())
-        .then((d) => setTitles((prev) => { const n = [...prev]; n[i] = d.title; return n; }))
-        .catch(() => {});
-    });
-  }, []);
+    _listeners.add(rerender);
+    return () => { _listeners.delete(rerender); };
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Load YouTube IFrame API once mounted
+  // Initialize player and fetch titles once (guards are inside each fn)
   useEffect(() => {
     if (!mounted) return;
-    const init = () => {
-      if (!ytDivRef.current || playerRef.current) return;
-      playerRef.current = new window.YT.Player(ytDivRef.current, {
-        height: "1", width: "1",
-        videoId: PLAYLIST[0].id,
-        playerVars: { autoplay: 1, mute: 1, controls: 0, rel: 0, modestbranding: 1, playsinline: 1 },
-        events: {
-          onReady: (e: any) => { e.target.setVolume(25); e.target.mute(); e.target.playVideo(); },
-          onStateChange: (e: any) => {
-            const S = window.YT.PlayerState;
-            if (e.data === S.PLAYING) {
-              setPlaying(true);
-              setDuration(playerRef.current.getDuration());
-              progressTimer.current = setInterval(() => {
-                setProgress(playerRef.current.getCurrentTime());
-              }, 500);
-            } else if (e.data === S.PAUSED) {
-              setPlaying(false);
-              if (progressTimer.current) clearInterval(progressTimer.current);
-            } else if (e.data === S.ENDED) {
-              setPlaying(false);
-              if (progressTimer.current) clearInterval(progressTimer.current);
-              if (loopRef.current) {
-                playerRef.current.seekTo(0);
-                playerRef.current.playVideo();
-              } else {
-                goTo(nextIndex(currentIndexRef.current, shuffleRef.current));
-              }
-            }
-          },
-        },
-      });
-    };
-
+    _fetchTitles();
+    const init = () => _initPlayer();
     if (window.YT?.Player) {
       init();
     } else {
@@ -94,59 +169,32 @@ export function MusicWidget() {
     }
   }, [mounted]);
 
-  // Keep refs in sync
-  useEffect(() => { shuffleRef.current = shuffle; }, [shuffle]);
-  useEffect(() => { loopRef.current = loop; }, [loop]);
-  useEffect(() => { currentIndexRef.current = currentIndex; }, [currentIndex]);
-
-  function nextIndex(from: number, doShuffle: boolean) {
-    if (PLAYLIST.length === 1) return 0;
-    if (doShuffle) {
-      let n = from;
-      while (n === from) n = Math.floor(Math.random() * PLAYLIST.length);
-      return n;
-    }
-    return (from + 1) % PLAYLIST.length;
-  }
-
-  function prevIndex(from: number) {
-    return (from - 1 + PLAYLIST.length) % PLAYLIST.length;
-  }
-
-  function goTo(index: number) {
-    setCurrentIndex(index);
-    currentIndexRef.current = index;
-    setProgress(0);
-    setDuration(0);
-    playerRef.current?.loadVideoById(PLAYLIST[index].id);
-  }
-
   const handlePlayPause = () => {
-    if (!playerRef.current) return;
-    playing ? playerRef.current.pauseVideo() : playerRef.current.playVideo();
+    if (!_player) return;
+    _s.playing ? _player.pauseVideo() : _player.playVideo();
   };
 
   const handleVolume = (v: number) => {
-    setVolume(v);
-    if (playerRef.current) {
-      playerRef.current.setVolume(v);
-      if (v > 0 && muted) {
-        playerRef.current.unMute();
-        setMuted(false);
-      }
+    _s.volume = v;
+    if (_player) {
+      _player.setVolume(v);
+      if (v > 0 && _s.muted) { _player.unMute(); _s.muted = false; }
     }
+    _notify();
   };
 
   const handleUnmute = () => {
-    if (!playerRef.current) return;
-    playerRef.current.unMute();
-    playerRef.current.setVolume(volume);
-    setMuted(false);
+    if (!_player) return;
+    _player.unMute();
+    _player.setVolume(_s.volume);
+    _s.muted = false;
+    _notify();
   };
 
   const handleSeek = (t: number) => {
-    playerRef.current?.seekTo(t, true);
-    setProgress(t);
+    _player?.seekTo(t, true);
+    _s.progress = t;
+    _notify();
   };
 
   const fmt = (s: number) => {
@@ -157,13 +205,10 @@ export function MusicWidget() {
 
   if (!mounted) return null;
 
+  const { currentIndex, playing, muted, volume, shuffle, loop, progress, duration, titles } = _s;
+
   return (
     <div className="fixed bottom-4 left-4 z-[88] flex flex-col items-start gap-2">
-      {/* Hidden YouTube player */}
-      <div style={{ position: "absolute", width: 1, height: 1, overflow: "hidden", opacity: 0, pointerEvents: "none" }}>
-        <div ref={ytDivRef} />
-      </div>
-
       {open && (
         <div className="bg-white rounded-2xl shadow-2xl border border-gray-100 w-72">
           {/* Header */}
@@ -212,24 +257,24 @@ export function MusicWidget() {
 
           {/* Transport controls */}
           <div className="px-4 pb-2 flex items-center justify-center gap-5">
-            <button onClick={() => goTo(prevIndex(currentIndex))} className="text-gray-500 hover:text-gray-800 transition-colors text-xl" title="Previous">⏮</button>
+            <button onClick={() => _goTo(_prevIndex(currentIndex))} className="text-gray-500 hover:text-gray-800 transition-colors text-xl" title="Previous">⏮</button>
             <button
               onClick={handlePlayPause}
               className="w-11 h-11 rounded-full bg-orange-500 text-white flex items-center justify-center hover:bg-orange-600 transition-colors text-xl shrink-0"
             >
               {playing ? "⏸" : "▶"}
             </button>
-            <button onClick={() => goTo(nextIndex(currentIndex, shuffle))} className="text-gray-500 hover:text-gray-800 transition-colors text-xl" title="Next">⏭</button>
+            <button onClick={() => _goTo(_nextIndex(currentIndex, shuffle))} className="text-gray-500 hover:text-gray-800 transition-colors text-xl" title="Next">⏭</button>
           </div>
 
           {/* Shuffle + Loop */}
           <div className="px-4 pb-2 flex items-center justify-center gap-3">
             <button
-              onClick={() => setShuffle((s) => !s)}
+              onClick={() => { _s.shuffle = !_s.shuffle; _notify(); }}
               className={`text-sm px-3 py-1 rounded-full font-medium transition-colors ${shuffle ? "bg-orange-100 text-orange-600" : "text-gray-400 hover:text-gray-600"}`}
             >🔀 Shuffle</button>
             <button
-              onClick={() => setLoop((l) => !l)}
+              onClick={() => { _s.loop = !_s.loop; _notify(); }}
               className={`text-sm px-3 py-1 rounded-full font-medium transition-colors ${loop ? "bg-orange-100 text-orange-600" : "text-gray-400 hover:text-gray-600"}`}
             >🔁 Loop</button>
           </div>
