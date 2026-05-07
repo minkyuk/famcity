@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
+import { isAdmin } from "@/lib/admin";
 import { generateInviteCode } from "@/lib/invite";
 
 const EXPIRY_MS = 24 * 60 * 60 * 1000; // 24 hours
@@ -18,11 +19,11 @@ export async function GET(
   const session = await getServerSession(authOptions);
   if (!session?.user?.id) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
-  // Must be a member (owner) of the space
+  // Must be a member of the space or a site admin
   const member = await prisma.spaceMember.findUnique({
     where: { userId_spaceId: { userId: session.user.id, spaceId: id } },
   });
-  if (!member) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  if (!member && !isAdmin(session)) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
 
   let space = await prisma.space.findUnique({
     where: { id },
