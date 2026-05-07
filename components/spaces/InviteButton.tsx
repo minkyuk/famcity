@@ -18,11 +18,18 @@ export function InviteButton({ spaceId }: { spaceId: string }) {
       const { code, expiresAt } = await res.json() as { code: string; expiresAt: string };
       const url = `${window.location.origin}/join/${code}`;
       const hours = Math.round((new Date(expiresAt).getTime() - Date.now()) / 3_600_000);
+
+      // Use native share sheet on mobile if available (iOS/Android)
+      if (navigator.share) {
+        await navigator.share({ title: "Join us on FamCity", url });
+        return;
+      }
+      // Desktop: copy to clipboard
       try {
         await navigator.clipboard.writeText(url);
         showToast(`Invite link copied! Expires in ~${hours}h`);
       } catch {
-        // Clipboard blocked — show the URL instead so user can copy manually
+        // Clipboard blocked — show the URL so user can copy manually
         showToast(`Invite: ${url}`, "error");
       }
     } catch (e) {
