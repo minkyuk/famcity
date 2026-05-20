@@ -7,6 +7,7 @@ import { AGENTS, agentAvatarUrl } from "@/lib/agents";
 import { generateInviteCode } from "@/lib/invite";
 import { authOptions } from "@/lib/auth";
 import { fetchRss, SCIENCE_FEEDS } from "@/lib/rss";
+import { isTextualDuplicate } from "@/lib/textSimilarity";
 import {
   loadBeliefs, updateBelief, formatBeliefsForPrompt, parseBeliefUpdate,
   loadRelationships, recordInteraction, formatRelationshipsForPrompt, parseRelationshipUpdate,
@@ -81,11 +82,17 @@ async function findThreadGaps(
 /**
  * Post-generation semantic novelty gate — final check that the generated comment
  * actually adds something distinct. Returns true (allow) or false (discard).
+ * Fast path: bigram Jaccard pre-filter (no API call) catches obvious duplicates first.
  */
 async function isNovel(proposed: string, existingComments: { authorName: string; body: string }[]): Promise<boolean> {
   if (existingComments.length === 0) return true;
+
+  // Fast local dedup — catches close rewording without an API call
+  if (isTextualDuplicate(proposed, existingComments.map((c) => c.body))) return false;
+
+  // Semantic check via Haiku for nuanced cases — look at up to 20 recent comments
   const context = existingComments
-    .slice(-10)
+    .slice(-20)
     .map((c, i) => `${i + 1}. [${c.authorName}]: "${c.body.slice(0, 180)}"`)
     .join("\n");
 
@@ -1293,11 +1300,14 @@ Join this conversation. Respond to what ${originalPoster} shared — or to somet
     const { text: afterBelief, update: beliefUpdate } = parseBeliefUpdate(afterConcluded);
     const { text: finalText, update: relationUpdate } = parseRelationshipUpdate(afterBelief);
 
-    // Semantic novelty gate: skip duplicates — but never suppress a direct task response
-    if (mode !== "task" && target.comments.length > 0 && !(await isNovel(finalText, target.comments))) return;
-
-    // Factual accuracy gate: discard comments that assert unverified stats as certain fact
-    if (mode !== "task" && !(await isFactuallyHumble(finalText, target.content ?? null))) return;
+    // Novelty + factual accuracy gates run in parallel — skip duplicates and overconfident claims
+    if (mode !== "task") {
+      const [novel, humble] = await Promise.all([
+        target.comments.length > 0 ? isNovel(finalText, target.comments) : Promise.resolve(true),
+        isFactuallyHumble(finalText, target.content ?? null),
+      ]);
+      if (!novel || !humble) return;
+    }
 
     // Relevance gate: for tutoring/debate spaces, ensure comment is on-topic and genuinely helpful
     if (mode !== "task" && target.spaceId) {
@@ -1644,8 +1654,11 @@ ${respondTo} is waiting for a reply. Respond directly and helpfully — engage w
     });
     let text = response.content[0].type === "text" ? response.content[0].text.trim() : "";
     if (!text || text.length < 10) return;
-    if (post.comments.length > 0 && !(await isNovel(text, post.comments))) return;
-    if (!(await isFactuallyHumble(text, post.content ?? null))) return;
+    const [novel, humble] = await Promise.all([
+      post.comments.length > 0 ? isNovel(text, post.comments) : Promise.resolve(true),
+      isFactuallyHumble(text, post.content ?? null),
+    ]);
+    if (!novel || !humble) return;
     // Travel agents: append live flight results — only if no results already in thread
     if (TRAVEL_AGENT_SLUGS.has(agent.slug) && !hasFlightResults(post.comments)) {
       const searchText = [post.content, ...post.comments.map((c) => c.body)].filter(Boolean).join(" ");
@@ -2047,11 +2060,12 @@ async function runSpaceAgentAction(
     const { text, update } = parseBeliefUpdate(afterSummaryC);
     if (update) await updateBelief(spaceAgent.slug, update.topic, update.belief, update.confidence).catch(() => {});
 
-    // Semantic novelty gate — skipped in FAFO mode (pile-on is intentional)
-    if (!spaceFafo && target.comments.length > 0 && !(await isNovel(text, target.comments))) return;
-
-    // Factual accuracy gate — always applied
-    if (!(await isFactuallyHumble(text, target.content ?? null))) return;
+    // Novelty + factual accuracy gates in parallel — FAFO mode skips novelty check
+    const [novelSA, humbleSA] = await Promise.all([
+      !spaceFafo && target.comments.length > 0 ? isNovel(text, target.comments) : Promise.resolve(true),
+      isFactuallyHumble(text, target.content ?? null),
+    ]);
+    if (!novelSA || !humbleSA) return;
 
     // Relevance gate: for tutoring/debate spaces — skipped in FAFO mode
     if (!spaceFafo && (isTutoringPurpose(purpose) || isDebatePurpose(purpose)) &&
