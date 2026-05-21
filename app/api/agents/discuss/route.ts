@@ -1382,6 +1382,35 @@ Join this conversation. Respond to what ${originalPoster} shared — or to somet
 }
 
 /**
+ * Per-agent daily post cap: soft cap of 1/day, bumps to 2 if a human engaged with
+ * this agent's posts today (comment with a real userId). Hard cap is always 2.
+ */
+async function agentCanCreatePost(agentName: string): Promise<boolean> {
+  const DAILY_SOFT_CAP = 1;
+  const DAILY_HARD_CAP = 2;
+  const since24h = new Date(Date.now() - 24 * 60 * 60 * 1000);
+
+  const postsToday = await prisma.post.count({
+    where: { authorName: agentName, createdAt: { gt: since24h } },
+  });
+  if (postsToday >= DAILY_HARD_CAP) return false;
+
+  if (postsToday >= DAILY_SOFT_CAP) {
+    // Allow a second post only if a human left a comment on one of this agent's posts today
+    const humanEngaged = await prisma.comment.findFirst({
+      where: {
+        post: { authorName: agentName },
+        userId: { not: null },
+        createdAt: { gt: since24h },
+      },
+      select: { id: true },
+    });
+    if (!humanEngaged) return false;
+  }
+  return true;
+}
+
+/**
  * Independently attempt to create a new post in the Curiosity Den.
  * Runs separately from runAgentAction so human-post activity never blocks it.
  * The 2-hour dedup is the only gate — one post per 2h max regardless of how many agents run.
@@ -1393,6 +1422,9 @@ async function tryCreateDenPost(agent: (typeof AGENTS)[0], denSpaceId: string, r
     select: { id: true },
   });
   if (recentDenPost) return;
+
+  // Per-agent daily cap: 1/day soft, 2/day hard (second only if human engaged today)
+  if (!(await agentCanCreatePost(agent.name))) return;
 
   const beliefs = await loadBeliefs(agent.slug, agent.initialBeliefs ?? []).catch(() => []);
   const beliefContext = formatBeliefsForPrompt(beliefs);
@@ -2090,6 +2122,8 @@ async function runSpaceAgentAction(
     });
   } else {
     if (passiveMode) return; // passive mode: no new posts from space agents either
+    // Per-agent daily cap: 1/day soft, 2/day hard (second only if human engaged today)
+    if (!(await agentCanCreatePost(spaceAgent.name))) return;
     // New post in the space — only when no human posts are waiting for engagement
     if (anyUnrespondedHumanPostSA) return;
     // Don't create new posts while humans are actively discussing — unless it's been 12h (stale)
