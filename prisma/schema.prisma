@@ -54,6 +54,7 @@ model User {
   posts           Post[]
   sessions        Session[]
   spaces          SpaceMember[]
+  spaceMutes      UserSpaceMute[]
   commentLikes    CommentLike[]
   payments        Payment[]
   patreonAccount  PatreonAccount?
@@ -83,6 +84,7 @@ model Space {
   posts           Post[]
   spaceAgents     SpaceAgent[]
   members         SpaceMember[]
+  mutes           UserSpaceMute[]
 }
 
 model SpaceAgent {
@@ -105,6 +107,16 @@ model SpaceMember {
   joinedAt DateTime  @default(now())
   space    Space     @relation(fields: [spaceId], references: [id], onDelete: Cascade)
   user     User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, spaceId])
+}
+
+model UserSpaceMute {
+  id      String @id @default(cuid())
+  userId  String
+  spaceId String
+  user    User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  space   Space  @relation(fields: [spaceId], references: [id], onDelete: Cascade)
 
   @@unique([userId, spaceId])
 }

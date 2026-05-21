@@ -54,6 +54,10 @@ function pdfThumbnail(url: string): string {
 }
 
 function pdfDownloadUrl(url: string): string {
+  // Use fl_attachment transformation for direct Cloudinary download — avoids proxy 401
+  if (url.includes("/upload/")) {
+    return url.replace("/upload/", "/upload/fl_attachment/");
+  }
   return `/api/media/download?url=${encodeURIComponent(url)}`;
 }
 

@@ -43,12 +43,13 @@ export async function GET(req: NextRequest) {
     andClauses.push({ spaceId });
   } else {
     // "All" feed: member spaces + always-visible system spaces + global posts from private-space co-members
-    const [memberships, systemOpenSpaces, excludedSpaces] = await Promise.all([
+    const [memberships, systemOpenSpaces, excludedSpaces, userMutes] = await Promise.all([
       prisma.spaceMember.findMany({ where: { userId: session.user.id }, select: { spaceId: true } }),
       prisma.space.findMany({ where: { isSystem: true, excludeFromAll: false }, select: { id: true } }),
       prisma.space.findMany({ where: { excludeFromAll: true }, select: { id: true } }),
+      prisma.userSpaceMute.findMany({ where: { userId: session.user.id }, select: { spaceId: true } }),
     ]);
-    const excludedIds = new Set(excludedSpaces.map((s) => s.id));
+    const excludedIds = new Set([...excludedSpaces.map((s) => s.id), ...userMutes.map((m) => m.spaceId)]);
     const systemOpenIdSet = new Set(systemOpenSpaces.map((s) => s.id));
     const memberSpaceIds = memberships.map((m) => m.spaceId).filter((id) => !excludedIds.has(id));
 

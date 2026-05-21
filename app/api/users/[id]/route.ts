@@ -32,24 +32,49 @@ export async function GET(
   const viewerSpaceIds = viewerMemberships.map((m) => m.spaceId);
 
   // Only show posts that are global (spaceId = null) or in a space the viewer is also in
-  const posts = await prisma.post.findMany({
-    where: {
-      userId: id,
-      OR: [{ spaceId: null }, { spaceId: { in: viewerSpaceIds } }],
-    },
-    orderBy: { createdAt: "desc" },
-    take: 20,
-    include: {
-      reactions: true,
-      comments: { orderBy: { createdAt: "asc" } },
-      media: { orderBy: { order: "asc" } },
-      hashtags: { include: { hashtag: true } },
-      space: { select: { name: true } },
-      _count: { select: { reactions: true, comments: true } },
-    },
-  });
+  const [posts, comments] = await Promise.all([
+    prisma.post.findMany({
+      where: {
+        userId: id,
+        OR: [{ spaceId: null }, { spaceId: { in: viewerSpaceIds } }],
+      },
+      orderBy: { createdAt: "desc" },
+      take: 30,
+      include: {
+        reactions: true,
+        comments: { orderBy: { createdAt: "asc" } },
+        media: { orderBy: { order: "asc" } },
+        hashtags: { include: { hashtag: true } },
+        space: { select: { name: true } },
+        _count: { select: { reactions: true, comments: true } },
+      },
+    }),
+    prisma.comment.findMany({
+      where: {
+        userId: id,
+        post: { OR: [{ spaceId: null }, { spaceId: { in: viewerSpaceIds } }] },
+      },
+      orderBy: { createdAt: "desc" },
+      take: 30,
+      select: {
+        id: true,
+        body: true,
+        createdAt: true,
+        postId: true,
+        post: {
+          select: {
+            id: true,
+            content: true,
+            authorName: true,
+            type: true,
+            space: { select: { name: true } },
+          },
+        },
+      },
+    }),
+  ]);
 
-  return NextResponse.json({ user, posts });
+  return NextResponse.json({ user, posts, comments });
 }
 
 const PatchSchema = z.object({

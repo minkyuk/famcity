@@ -8,6 +8,7 @@ import { HashtagSidebar } from "@/components/shared/HashtagSidebar";
 import { OnlineWidget } from "@/components/shared/OnlineWidget";
 import { UpcomingEvents } from "@/components/shared/UpcomingEvents";
 import { InlineComposeCard } from "@/components/shared/InlineComposeCard";
+import { SpaceFeedFilter } from "@/components/Feed/SpaceFeedFilter";
 import { isAdmin } from "@/lib/admin";
 
 export const dynamic = "force-dynamic";
@@ -16,18 +17,28 @@ export default async function HomePage() {
   const session = await getServerSession(authOptions);
   if (!session?.user) redirect("/login");
 
-  const [memberships, systemOpenSpaces, excludedSpaces] = await Promise.all([
+  const [memberships, systemOpenSpaces, excludedSpaces, userMutes] = await Promise.all([
     prisma.spaceMember.findMany({ where: { userId: session.user.id }, select: { spaceId: true } }),
     // System spaces always visible in All feed (not excluded)
     prisma.space.findMany({ where: { isSystem: true, excludeFromAll: false }, select: { id: true } }),
     prisma.space.findMany({ where: { excludeFromAll: true }, select: { id: true } }),
+    prisma.userSpaceMute.findMany({ where: { userId: session.user.id }, select: { spaceId: true } }),
   ]);
-  const excludedIds = new Set(excludedSpaces.map((s) => s.id));
+  const mutedIds = new Set(userMutes.map((m) => m.spaceId));
+  const excludedIds = new Set([...excludedSpaces.map((s) => s.id), ...mutedIds]);
   const systemOpenIdSet = new Set(systemOpenSpaces.map((s) => s.id));
   const memberSpaceIds = memberships.map((m) => m.spaceId).filter((id) => !excludedIds.has(id));
 
   // All spaces for the feed = member spaces + always-visible system spaces
   const spaceIds = [...new Set([...memberSpaceIds, ...systemOpenSpaces.map((s) => s.id)])];
+
+  // Fetch names for filter UI — only member spaces (system spaces can't be muted)
+  const memberSpaces = memberSpaceIds.length > 0
+    ? await prisma.space.findMany({
+        where: { id: { in: memberships.map((m) => m.spaceId) }, isSystem: false },
+        select: { id: true, name: true },
+      })
+    : [];
 
   // Co-member computation uses ONLY private (non-system) spaces so that
   // system spaces shared by everyone don't inflate co-member lists
@@ -107,6 +118,9 @@ export default async function HomePage() {
           </Suspense>
         </div>
         <InlineComposeCard />
+        {memberSpaces.length > 0 && (
+          <SpaceFeedFilter spaces={memberSpaces} initialMutedIds={[...mutedIds]} />
+        )}
         <Suspense>
           <Feed initialPosts={posts} initialNextCursor={nextCursor} isAdmin={isAdmin(session)} />
         </Suspense>
