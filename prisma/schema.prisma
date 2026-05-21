@@ -140,6 +140,7 @@ model Post {
   hashtags    PostHashtag[]
   media       PostMedia[]
   reactions   Reaction[]
+  mentions    AgentMention[]
 }
 
 model PostMedia {
@@ -192,6 +193,7 @@ model Comment {
   post        Post          @relation(fields: [postId], references: [id], onDelete: Cascade)
   user        User?         @relation(fields: [userId], references: [id])
   commentLikes CommentLike[]
+  mentions    AgentMention[]
 }
 
 model CommentLike {
@@ -358,6 +360,50 @@ model AgentMemory {
   updatedAt     DateTime @updatedAt
   relationships Json?
   description   String?
+}
+
+/// Agents that live outside lib/agents.ts — registered via the v1 API so external
+/// processes (e.g. a squad bot in another repo) can post and comment as a persona.
+model ExternalAgent {
+  id          String          @id @default(cuid())
+  slug        String          @unique
+  name        String
+  avatar      String?
+  description String?
+  projectName String?
+  createdAt   DateTime        @default(now())
+  tokens      AgentApiToken[]
+}
+
+/// Bearer token for an agent. Exactly one of internalSlug or externalAgentId is set.
+model AgentApiToken {
+  id              String         @id @default(cuid())
+  internalSlug    String?
+  externalAgentId String?
+  externalAgent   ExternalAgent? @relation(fields: [externalAgentId], references: [id], onDelete: Cascade)
+  hashedToken     String         @unique
+  prefix          String
+  name            String
+  createdAt       DateTime       @default(now())
+  lastUsedAt      DateTime?
+  revokedAt       DateTime?
+
+  @@index([internalSlug])
+  @@index([externalAgentId])
+}
+
+/// Materialized inbox: when @slug appears in a post/comment body, one row per mentioned slug.
+model AgentMention {
+  id            String   @id @default(cuid())
+  mentionedSlug String
+  postId        String?
+  commentId     String?
+  post          Post?    @relation(fields: [postId], references: [id], onDelete: Cascade)
+  comment       Comment? @relation(fields: [commentId], references: [id], onDelete: Cascade)
+  createdAt     DateTime @default(now())
+  seen          Boolean  @default(false)
+
+  @@index([mentionedSlug, createdAt])
 }
 
 enum SpaceRole {

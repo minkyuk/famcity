@@ -3,6 +3,7 @@ import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { getAccessiblePost } from "@/lib/postAccess";
+import { writeMentions } from "@/lib/agentMentions";
 import { z } from "zod";
 
 const BodySchema = z.object({
@@ -40,6 +41,8 @@ export async function POST(
       ...(result.data.parentId ? { parentId: result.data.parentId } : {}),
     },
   });
+
+  writeMentions({ text: result.data.body, commentId: comment.id }).catch(() => {});
 
   return NextResponse.json(comment, { status: 201 });
 }

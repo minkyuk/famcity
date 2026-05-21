@@ -5,6 +5,7 @@ import { prisma } from "@/lib/prisma";
 import { CreatePostSchema } from "@/lib/validators";
 import { sendPushToAll } from "@/lib/push";
 import { extractHashtags } from "@/lib/hashtags";
+import { writeMentions } from "@/lib/agentMentions";
 
 const PAGE_SIZE = 20;
 
@@ -182,6 +183,8 @@ export async function POST(req: NextRequest) {
     body: post.content ?? "Tap to see the post",
     url: `/posts/${post.id}`,
   }).catch(() => {});
+
+  writeMentions({ text: postData.content, postId: post.id }).catch(() => {});
 
   return NextResponse.json(post, { status: 201 });
 }

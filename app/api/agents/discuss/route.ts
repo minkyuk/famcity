@@ -8,6 +8,7 @@ import { generateInviteCode } from "@/lib/invite";
 import { authOptions } from "@/lib/auth";
 import { fetchRss, SCIENCE_FEEDS } from "@/lib/rss";
 import { isTextualDuplicate } from "@/lib/textSimilarity";
+import { writeMentions } from "@/lib/agentMentions";
 import {
   loadBeliefs, updateBelief, formatBeliefsForPrompt, parseBeliefUpdate,
   loadRelationships, recordInteraction, formatRelationshipsForPrompt, parseRelationshipUpdate,
@@ -195,9 +196,10 @@ Respond. No hashtags.${STYLE_INSTRUCTION}${pickTone()}${pickLang()}`;
     const text = response.content[0].type === "text" ? response.content[0].text.trim() : "";
     if (!text || text.length < 10) return;
     if (!(await isFactuallyHumble(text, post.content ?? null))) return;
-    await prisma.comment.create({
+    const fafoComment = await prisma.comment.create({
       data: { postId: post.id, authorName: agent.name, authorImage: avatar, body: text },
     });
+    writeMentions({ text, commentId: fafoComment.id }).catch(() => {});
   } catch {
     // ignore individual agent failures in FAFO mode
   }
@@ -1353,7 +1355,7 @@ Join this conversation. Respond to what ${originalPoster} shared — or to somet
       if (hasFlightResults(freshComments)) return;
     }
 
-    await prisma.comment.create({
+    const knightComment = await prisma.comment.create({
       data: {
         postId: target.id,
         authorName: agent.name,
@@ -1363,6 +1365,7 @@ Join this conversation. Respond to what ${originalPoster} shared — or to somet
         ...(commentSummary ? { summary: commentSummary } : {}),
       },
     });
+    writeMentions({ text: finalText, commentId: knightComment.id }).catch(() => {});
 
     // Auto-record interaction count with every other agent in this thread (fire-and-forget)
     const topic = (target.content ?? "discussion").slice(0, 60);
@@ -1491,7 +1494,7 @@ Write a short, thoughtful post sharing your reaction or a related idea it sparke
     await updateBelief(agent.slug, update.topic, update.belief, update.confidence).catch(() => {});
   }
 
-  await prisma.post.create({
+  const denPost = await prisma.post.create({
     data: {
       authorName: agent.name,
       authorImage: agentAvatarUrl(agent.slug),
@@ -1501,6 +1504,7 @@ Write a short, thoughtful post sharing your reaction or a related idea it sparke
       ...(postSummary ? { summary: postSummary } : {}),
     },
   });
+  writeMentions({ text: headlinePrefix + text, postId: denPost.id }).catch(() => {});
 }
 
 // Prompts that call for genuine pondering rather than sharing a fact
@@ -1702,9 +1706,10 @@ ${respondTo} is waiting for a reply. Respond directly and helpfully — engage w
       const freshComments = await prisma.comment.findMany({ where: { postId: post.id }, select: { body: true } });
       if (hasFlightResults(freshComments)) return;
     }
-    await prisma.comment.create({
+    const passiveComment = await prisma.comment.create({
       data: { postId: post.id, authorName: agent.name, authorImage: avatar, body: text },
     });
+    writeMentions({ text, commentId: passiveComment.id }).catch(() => {});
   } catch {
     // ignore individual failures
   }
@@ -2117,9 +2122,10 @@ async function runSpaceAgentAction(
       if (hasFlightResults(freshComments)) return;
     }
 
-    await prisma.comment.create({
+    const spaceAgentComment = await prisma.comment.create({
       data: { postId: target.id, authorName: spaceAgent.name, authorImage: avatar, body: finalText, ...(chosen.replyId ? { parentId: chosen.replyId } : {}), ...(commentSummary ? { summary: commentSummary } : {}) },
     });
+    writeMentions({ text: finalText, commentId: spaceAgentComment.id }).catch(() => {});
   } else {
     if (passiveMode) return; // passive mode: no new posts from space agents either
     // Per-agent daily cap: 1/day soft, 2/day hard (second only if human engaged today)
@@ -2166,9 +2172,10 @@ async function runSpaceAgentAction(
     const { text, update } = parseBeliefUpdate(afterSummaryP);
     if (update) await updateBelief(spaceAgent.slug, update.topic, update.belief, update.confidence).catch(() => {});
 
-    await prisma.post.create({
+    const spaceAgentPost = await prisma.post.create({
       data: { authorName: spaceAgent.name, authorImage: avatar, spaceId, content: text, type: "TEXT", ...(postSummary ? { summary: postSummary } : {}) },
     });
+    writeMentions({ text, postId: spaceAgentPost.id }).catch(() => {});
   }
 }
 
