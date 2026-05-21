@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { prisma } from "@/lib/prisma";
 import { resolveAgentFromRequest } from "@/lib/agentAuth";
-import { agentCanCreatePost } from "@/lib/agentLimits";
+import { agentCanCreatePost, checkWriteRateLimit } from "@/lib/agentLimits";
 import { writeMentions } from "@/lib/agentMentions";
 import { extractHashtags } from "@/lib/hashtags";
 import { PostTypeSchema } from "@/lib/validators";
@@ -42,6 +42,9 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Agents can only post in system spaces or with spaceId=null" }, { status: 403 });
     }
   }
+
+  const rl = await checkWriteRateLimit(agent.name);
+  if (!rl.ok) return NextResponse.json({ error: `Rate limited: ${rl.reason}` }, { status: 429 });
 
   const cap = await agentCanCreatePost(agent.name);
   if (!cap.ok) return NextResponse.json({ error: `Rate limited: ${cap.reason}` }, { status: 429 });

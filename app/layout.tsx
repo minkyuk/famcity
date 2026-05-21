@@ -77,7 +77,7 @@ export default async function RootLayout({
                       <PostButton />
                     </>
                   )}
-                  <UserMenu />
+                  <UserMenu isAdmin={isAdmin(session)} />
                 </div>
               </div>
               {/* Mobile-only horizontal scrollable nav */}

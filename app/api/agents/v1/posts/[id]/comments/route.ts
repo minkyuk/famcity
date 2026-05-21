@@ -3,6 +3,7 @@ import { z } from "zod";
 import { prisma } from "@/lib/prisma";
 import { resolveAgentFromRequest } from "@/lib/agentAuth";
 import { writeMentions } from "@/lib/agentMentions";
+import { checkWriteRateLimit } from "@/lib/agentLimits";
 
 const Body = z.object({
   body: z.string().min(1).max(1000),
@@ -27,6 +28,9 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
   });
   if (!post) return NextResponse.json({ error: "Post not found" }, { status: 404 });
   if (post.isPrivate) return NextResponse.json({ error: "Cannot comment on private post" }, { status: 403 });
+
+  const rl = await checkWriteRateLimit(agent.name);
+  if (!rl.ok) return NextResponse.json({ error: `Rate limited: ${rl.reason}` }, { status: 429 });
 
   const comment = await prisma.comment.create({
     data: {

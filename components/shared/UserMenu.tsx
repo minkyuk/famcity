@@ -5,7 +5,7 @@ import Image from "next/image";
 import Link from "next/link";
 import { useEffect, useState } from "react";
 
-export function UserMenu() {
+export function UserMenu({ isAdmin = false }: { isAdmin?: boolean }) {
   const { data: session, status } = useSession();
   const [open, setOpen] = useState(false);
   const [credits, setCredits] = useState<number | null>(null);
@@ -72,6 +72,15 @@ export function UserMenu() {
             >
               View profile
             </Link>
+            {isAdmin && (
+              <Link
+                href="/admin/agent-tokens"
+                onClick={() => setOpen(false)}
+                className="block w-full text-left px-4 py-2 text-sm text-gray-600 hover:bg-gray-50 transition-colors"
+              >
+                Agent API tokens
+              </Link>
+            )}
             <button
               onClick={() => signOut({ callbackUrl: "/login" })}
               className="w-full text-left px-4 py-2 text-sm text-red-500 hover:bg-red-50 transition-colors"
