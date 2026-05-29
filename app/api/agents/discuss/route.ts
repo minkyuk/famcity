@@ -877,11 +877,12 @@ async function runAgentAction(agent: (typeof AGENTS)[0], denSpaceId: string, rec
     if (p.comments.length === 0) return false;
     // Fast path: last comment is human
     if (isHumanComment(p.comments[p.comments.length - 1])) return true;
-    // Slow path: any recent human comment where no agent has directly replied (parentId = hc.id)
+    // Slow path: any recent human comment with no agent reply AFTER it — at any layer,
+    // not just a direct nested child. Catches same-layer/sibling and top-level human replies.
     return p.comments.some((hc) => {
       if (!isHumanComment(hc)) return false;
       if (Date.now() - hc.createdAt.getTime() > RECENT_HUMAN_REPLY_MS) return false;
-      return !p.comments.some((rc) => !isHumanComment(rc) && rc.parentId === hc.id);
+      return !p.comments.some((rc) => !isHumanComment(rc) && rc.createdAt > hc.createdAt);
     });
   });
 
@@ -1035,11 +1036,11 @@ async function runAgentAction(agent: (typeof AGENTS)[0], denSpaceId: string, rec
       }
 
       // Any thread with an unanswered human comment at any depth — any agent can step in.
-      // Prefer the most recent human comment that has no direct agent reply (catches nested replies).
+      // Prefer the most recent human comment with no agent reply after it (any layer, not just nested).
       for (const p of humanUnansweredThreads) {
         if (seen.has(p.id)) continue;
         const unansweredHumanC = [...p.comments].reverse().find(
-          (hc) => isHumanComment(hc) && !p.comments.some((rc) => !isHumanComment(rc) && rc.parentId === hc.id)
+          (hc) => isHumanComment(hc) && !p.comments.some((rc) => !isHumanComment(rc) && rc.createdAt > hc.createdAt)
         ) ?? [...p.comments].reverse().find(isHumanComment)!;
         const recent = isRecent(unansweredHumanC.createdAt) ? 3 : 0;
         const entryMode: DebateMode = agentLastCommentTime.has(p.id) ? "defend" : "warm";
@@ -1882,7 +1883,7 @@ async function runSpaceAgentAction(
     return p.comments.some((hc) => {
       if (!isHumanCommentSA(hc)) return false;
       if (Date.now() - hc.createdAt.getTime() > SA_RECENT_HUMAN_MS) return false;
-      return !p.comments.some((rc) => !isHumanCommentSA(rc) && rc.parentId === hc.id);
+      return !p.comments.some((rc) => !isHumanCommentSA(rc) && rc.createdAt > hc.createdAt);
     });
   });
 
@@ -1935,7 +1936,9 @@ async function runSpaceAgentAction(
     // Human-priority mode: exclude pure agent-only content when human posts are untouched
     const saHumanPriorityMode = anyUnrespondedHumanPostSA;
 
-    const recentlyTouched = (id: string) => (recentAgentCommentsByPost.get(id) ?? 0) >= 1;
+    // During a hot session (buzz / hot hour) don't suppress posts an agent touched recently —
+    // we want multiple agents to answer the waiting human content in one burst.
+    const recentlyTouched = (id: string) => !hotSession && (recentAgentCommentsByPost.get(id) ?? 0) >= 1;
 
     // Highest priority: any thread with an unanswered human comment at any depth.
     // Prefer the most recent human comment with no direct agent reply (catches nested replies).
@@ -1944,7 +1947,7 @@ async function runSpaceAgentAction(
       if (recentlyTouched(p.id)) { seen.add(p.id); continue; }
       // NOTE: intentionally skip isAgentPileOn here — we've already verified there IS an unanswered human comment
       const unansweredC = [...p.comments].reverse().find(
-        (hc) => isHumanCommentSA(hc) && !p.comments.some((rc) => !isHumanCommentSA(rc) && rc.parentId === hc.id)
+        (hc) => isHumanCommentSA(hc) && !p.comments.some((rc) => !isHumanCommentSA(rc) && rc.createdAt > hc.createdAt)
       ) ?? [...p.comments].reverse().find(isHumanCommentSA)!;
       const recent = saIsRecent(unansweredC.createdAt) ? 3 : 0;
       pool.push({ post: p, weight: saSaturate(10 + recent, p.id), replyId: unansweredC.id });
@@ -2124,8 +2127,9 @@ async function runSpaceAgentAction(
     ]);
     if (!novelSA || !humbleSA) return;
 
-    // Relevance gate: for tutoring/debate spaces — skipped in FAFO mode
-    if (!spaceFafo && (isTutoringPurpose(purpose) || isDebatePurpose(purpose)) &&
+    // Relevance gate: for tutoring/debate spaces — skipped in FAFO mode and during a hot session
+    // (a buzz/hot hour is an explicit request for agents to engage, so don't drop their replies).
+    if (!spaceFafo && !hotSession && (isTutoringPurpose(purpose) || isDebatePurpose(purpose)) &&
         !(await isOnTopicAndHelpful(text, target.content ?? null, isTutoringPurpose(purpose)))) return;
 
     // Flight posts: append live search results only if no results already in thread
@@ -2400,7 +2404,12 @@ export async function POST(req: NextRequest) {
       await Promise.all(batch.map((idx) => runOneAgentTurn(idx, denSpaceId)));
       if (i + BATCH_SIZE < AGENTS.length) await new Promise((r) => setTimeout(r, 1000));
     }
-    if (activeSpaceSessions.length > 0) await runHotSpaceAgentTurns(activeSpaceSessions);
+    // Hot hour also fires every space's OWN agents (relaxed gates), so agents act everywhere
+    // a space has custom agents — not just the global Den. Plus any active space buzz.
+    const agentSpaceRows = await (prisma.spaceAgent as { findMany: (o: object) => Promise<{ spaceId: string }[]> })
+      .findMany({ select: { spaceId: true } }).catch(() => [] as { spaceId: string }[]);
+    const hotSpaceIds = [...new Set([...activeSpaceSessions, ...agentSpaceRows.map((r) => r.spaceId)])];
+    if (hotSpaceIds.length > 0) await runHotSpaceAgentTurns(hotSpaceIds);
     return NextResponse.json({ ok: true, session: true, agents: AGENTS.map((a) => a.name) });
   }
 
