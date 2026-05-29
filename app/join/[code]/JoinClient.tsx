@@ -23,7 +23,8 @@ export function JoinClient({ code }: { code: string }) {
           setMessage(`Joined "${data.name}"! Redirecting…`);
           setTimeout(() => router.push(`/spaces/${data.spaceId}`), 1000);
         } else {
-          setMessage("Invalid or expired invite link.");
+          // Surface the server's reason (e.g. expired link) instead of a generic message
+          setMessage(data.error ?? "Invalid or expired invite link.");
         }
       })
       .catch(() => setMessage("Something went wrong."));

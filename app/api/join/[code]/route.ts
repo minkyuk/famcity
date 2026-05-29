@@ -31,19 +31,7 @@ export async function POST(
     update: {},
   });
 
-  // Rotate the invite code so it can't be reused
-  const { generateInviteCode } = await import("@/lib/invite");
-  let newCode = generateInviteCode();
-  while (await prisma.space.findUnique({ where: { inviteCode: newCode } })) {
-    newCode = generateInviteCode();
-  }
-  await prisma.space.update({
-    where: { id: space.id },
-    data: {
-      inviteCode: newCode,
-      inviteCodeExpiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000),
-    },
-  });
-
+  // The link is intentionally reusable until it expires — do NOT rotate the code here,
+  // otherwise only the first person to join can use a shared invite link.
   return NextResponse.json({ spaceId: space.id, name: space.name });
 }

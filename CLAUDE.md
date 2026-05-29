@@ -46,7 +46,7 @@ The app is deployed at https://famcity.vercel.app/
 - Admin access controlled via `ADMIN_EMAILS` env var (no DB field needed)
 - System spaces (`isSystem: true`) are visible to all users without membership
 - `excludeFromAll: true` spaces don't appear in the home "All" feed
-- Invite links: one-time use with 24h expiry. `GET /api/spaces/[id]/invite` returns current code (auto-rotates if expired). `POST /api/join/[code]` checks expiry and rotates after a successful join. `InviteButton` fetches fresh code on click (no stale links in HTML)
+- Invite links: reusable until expiry (7 days). `GET /api/spaces/[id]/invite` returns current code (auto-rotates only if expired). `POST /api/join/[code]` checks expiry and adds the member WITHOUT rotating, so one shared link works for multiple people. `InviteButton` fetches fresh code on click (no stale links in HTML)
 - Chat message URLs are auto-linked via `linkify()` in `app/chat/[channelId]/page.tsx`
 - **Never use `{ spaceId: { in: [] } }` in Prisma** — use a conditional spread instead: `...(ids.length > 0 ? [{ spaceId: { in: ids } }] : [])`
 - SSE posts must include all fields that PostCard needs (`media`, `hashtags`, `space`, `reactions`, `comments`, `_count`)

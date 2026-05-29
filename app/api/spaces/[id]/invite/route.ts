@@ -5,7 +5,7 @@ import { prisma } from "@/lib/prisma";
 import { isAdmin } from "@/lib/admin";
 import { generateInviteCode } from "@/lib/invite";
 
-const EXPIRY_MS = 24 * 60 * 60 * 1000; // 24 hours
+const EXPIRY_MS = 7 * 24 * 60 * 60 * 1000; // 7 days — links are reusable until they expire
 
 /** GET /api/spaces/[id]/invite
  *  Returns the current invite code + expiry for owners/admins.
