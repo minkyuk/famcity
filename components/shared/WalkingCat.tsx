@@ -10,7 +10,7 @@ const PUDDLE_H = 58;
 
 // ─── Orange cat SVG ──────────────────────────────────────────────────────────
 
-function CatSVG({ speed }: { speed: number }) {
+function CatSVG({ speed, excited }: { speed: number; excited: boolean }) {
   const dur = Math.max(0.3, 0.7 - speed * 0.05) + "s";
   return (
     <svg width={CAT_W} height={CAT_H} viewBox="0 0 88 58" xmlns="http://www.w3.org/2000/svg">
@@ -20,15 +20,22 @@ function CatSVG({ speed }: { speed: number }) {
         .lfr{animation:lB ${dur} ease-in-out infinite;transform-box:fill-box;transform-origin:top center}
         .lbl{animation:lB ${dur} ease-in-out infinite;transform-box:fill-box;transform-origin:top center}
         .lbr{animation:lA ${dur} ease-in-out infinite;transform-box:fill-box;transform-origin:top center}
+        ${excited ? `
+        .tail{animation:tailWag 0.2s ease-in-out infinite;transform-box:fill-box;transform-origin:90% 40%}
+        .eyeL,.eyeR{animation:eyePop 0.25s ease-out forwards;transform-box:fill-box;transform-origin:center}
+        ` : `
         .tail{animation:tailSway 0.9s ease-in-out infinite;transform-box:fill-box;transform-origin:90% 40%}
         .eyeL{animation:blinkL 3.2s ease-in-out infinite;transform-box:fill-box;transform-origin:center}
         .eyeR{animation:blinkR 3.2s ease-in-out infinite;transform-box:fill-box;transform-origin:center}
+        `}
         @keyframes bob{0%,100%{transform:translateY(0)}50%{transform:translateY(-2.5px)}}
         @keyframes lA{0%,100%{transform:rotate(-28deg) translateY(1px)}50%{transform:rotate(22deg) translateY(-1px)}}
         @keyframes lB{0%,100%{transform:rotate(22deg) translateY(-1px)}50%{transform:rotate(-28deg) translateY(1px)}}
         @keyframes tailSway{0%,100%{transform:rotate(-18deg)}50%{transform:rotate(22deg)}}
+        @keyframes tailWag{0%,100%{transform:rotate(-34deg)}50%{transform:rotate(40deg)}}
         @keyframes blinkL{0%,85%,100%{transform:scaleY(1)}88%,96%{transform:scaleY(0.08)}}
         @keyframes blinkR{0%,87%,100%{transform:scaleY(1)}90%,97%{transform:scaleY(0.08)}}
+        @keyframes eyePop{from{transform:scale(1)}to{transform:scale(1.55)}}
       `}</style>
       <g className="tail">
         <path d="M18,34 Q6,22 10,10 Q14,2 19,7" stroke="#e09040" strokeWidth="4.5" fill="none" strokeLinecap="round"/>
@@ -62,7 +69,7 @@ function CatSVG({ speed }: { speed: number }) {
 // ─── Black poodle SVG ────────────────────────────────────────────────────────
 // Cartoon black poodle with pompom head, chest, feet, and tail.
 
-function PuddleSVG({ speed }: { speed: number }) {
+function PuddleSVG({ speed, excited }: { speed: number; excited: boolean }) {
   const dur = Math.max(0.3, 0.7 - speed * 0.05) + "s";
   return (
     <svg width={PUDDLE_W} height={PUDDLE_H} viewBox="0 0 88 58" xmlns="http://www.w3.org/2000/svg" style={{ overflow: "visible" }}>
@@ -72,11 +79,18 @@ function PuddleSVG({ speed }: { speed: number }) {
         .pdlfr{animation:pdlB ${dur} ease-in-out infinite;transform-box:fill-box;transform-origin:top center}
         .pdlbl{animation:pdlB ${dur} ease-in-out infinite;transform-box:fill-box;transform-origin:top center}
         .pdlbr{animation:pdlA ${dur} ease-in-out infinite;transform-box:fill-box;transform-origin:top center}
+        ${excited ? `
+        .pdtail{animation:pdtailWag 0.18s ease-in-out infinite;transform-box:fill-box;transform-origin:20% 80%}
+        .pdeye{animation:pdEyePop 0.25s ease-out forwards;transform-box:fill-box;transform-origin:center}
+        ` : `
         .pdtail{animation:pdtailSway 1s ease-in-out infinite;transform-box:fill-box;transform-origin:20% 80%}
+        `}
         @keyframes pdbob{0%,100%{transform:translateY(0)}50%{transform:translateY(-2px)}}
         @keyframes pdlA{0%,100%{transform:rotate(-25deg)}50%{transform:rotate(20deg)}}
         @keyframes pdlB{0%,100%{transform:rotate(20deg)}50%{transform:rotate(-25deg)}}
         @keyframes pdtailSway{0%,100%{transform:rotate(-25deg)}50%{transform:rotate(15deg)}}
+        @keyframes pdtailWag{0%,100%{transform:rotate(-35deg)}50%{transform:rotate(30deg)}}
+        @keyframes pdEyePop{from{transform:scale(1)}to{transform:scale(1.5)}}
       `}</style>
 
       {/* Tail — curly with pompom at tip */}
@@ -100,12 +114,16 @@ function PuddleSVG({ speed }: { speed: number }) {
         <ellipse cx="71" cy="29" rx="5" ry="10" fill="#111"/>
 
         {/* Eyes — white with dark pupils */}
-        <ellipse cx="58" cy="20" rx="3" ry="3.5" fill="white"/>
-        <ellipse cx="58" cy="20" rx="1.5" ry="2" fill="#111"/>
-        <circle cx="58.8" cy="18.8" r="0.7" fill="white"/>
-        <ellipse cx="67" cy="20" rx="3" ry="3.5" fill="white"/>
-        <ellipse cx="67" cy="20" rx="1.5" ry="2" fill="#111"/>
-        <circle cx="67.8" cy="18.8" r="0.7" fill="white"/>
+        <g className="pdeye">
+          <ellipse cx="58" cy="20" rx="3" ry="3.5" fill="white"/>
+          <ellipse cx="58" cy="20" rx="1.5" ry="2" fill="#111"/>
+          <circle cx="58.8" cy="18.8" r="0.7" fill="white"/>
+        </g>
+        <g className="pdeye">
+          <ellipse cx="67" cy="20" rx="3" ry="3.5" fill="white"/>
+          <ellipse cx="67" cy="20" rx="1.5" ry="2" fill="#111"/>
+          <circle cx="67.8" cy="18.8" r="0.7" fill="white"/>
+        </g>
         {/* Nose */}
         <ellipse cx="62" cy="27" rx="2.2" ry="1.4" fill="white"/>
 
@@ -229,6 +247,16 @@ export function WalkingCat() {
   const [mounted, setMounted] = useState(false);
   useEffect(() => { setMounted(true); }, []);
 
+  const [catExcited, setCatExcited] = useState(false);
+  const [puddleExcited, setPuddleExcited] = useState(false);
+  const catTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const puddleTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => () => {
+    if (catTimer.current) clearTimeout(catTimer.current);
+    if (puddleTimer.current) clearTimeout(puddleTimer.current);
+  }, []);
+
   const catKickRef = useRef<((dy: number) => void) | null>(null);
   const puddleKickRef = useRef<((dy: number) => void) | null>(null);
   const lastScrollY = useRef(0);
@@ -263,29 +291,49 @@ export function WalkingCat() {
   }, mounted, () => {});
   puddleKickRef.current = puddle.kick;
 
+  const pokeCat = () => {
+    cat.kick(-60); // little happy hop
+    setCatExcited(true);
+    if (catTimer.current) clearTimeout(catTimer.current);
+    catTimer.current = setTimeout(() => setCatExcited(false), 1600);
+  };
+
+  const pokePuddle = () => {
+    puddle.kick(-60);
+    setPuddleExcited(true);
+    if (puddleTimer.current) clearTimeout(puddleTimer.current);
+    puddleTimer.current = setTimeout(() => setPuddleExcited(false), 1600);
+  };
+
   if (!mounted) return null;
 
   return createPortal(
     <>
       {/* Orange cat */}
-      <div style={{
-        position: "fixed", left: cat.pos.x, top: cat.pos.y,
-        zIndex: 9998, pointerEvents: "none", userSelect: "none",
-        transform: cat.facingRight ? "scaleX(1)" : "scaleX(-1)",
-        filter: "drop-shadow(0 3px 6px rgba(0,0,0,0.18))",
-        willChange: "left, top",
-      }}>
-        <CatSVG speed={cat.speed} />
+      <div
+        onClick={pokeCat}
+        style={{
+          position: "fixed", left: cat.pos.x, top: cat.pos.y,
+          zIndex: 9998, pointerEvents: "auto", userSelect: "none", cursor: "pointer",
+          transform: cat.facingRight ? "scaleX(1)" : "scaleX(-1)",
+          filter: "drop-shadow(0 3px 6px rgba(0,0,0,0.18))",
+          willChange: "left, top",
+        }}
+      >
+        <CatSVG speed={cat.speed} excited={catExcited} />
       </div>
 
       {/* Black puddle */}
-      <div style={{
-        position: "fixed", left: puddle.pos.x, top: puddle.pos.y,
-        zIndex: 9997, pointerEvents: "none", userSelect: "none",
-        transform: puddle.facingRight ? "scaleX(1)" : "scaleX(-1)",
-        willChange: "left, top",
-      }}>
-        <PuddleSVG speed={puddle.speed} />
+      <div
+        onClick={pokePuddle}
+        style={{
+          position: "fixed", left: puddle.pos.x, top: puddle.pos.y,
+          zIndex: 9997, pointerEvents: "auto", userSelect: "none", cursor: "pointer",
+          transform: puddle.facingRight ? "scaleX(1)" : "scaleX(-1)",
+          willChange: "left, top",
+        }}
+      >
+        <PuddleSVG speed={puddle.speed} excited={puddleExcited} />
       </div>
     </>,
     document.body
