@@ -423,9 +423,9 @@ async function isPassiveModeActive(): Promise<boolean> {
   } catch { return false; }
 }
 
-/** Agent slot size depends on mode.
- *  Session mode: 2-minute slots → 25 agents cycle in 50 min (fits inside 1-hour session).
- *  Normal mode:  5-minute slots → but cron fires every 2 min, so we skip non-boundary ticks. */
+/** Agent slot size depends on mode. Cron fires every 5 min (see vercel.json crons).
+ *  Session mode: all agents fire every tick.
+ *  Normal mode:  slot-based selection on the cron cadence. */
 function currentAgentIndex(slotMinutes: number): number {
   const now = new Date();
   const totalMinutes = now.getUTCHours() * 60 + now.getUTCMinutes();
@@ -2356,14 +2356,9 @@ export async function POST(req: NextRequest) {
 
   const _now = new Date();
   const minute = _now.getUTCMinutes();
-  const hour = _now.getUTCHours();
 
   if (sessionActive) {
-    // Global hot session: fire all knights every other tick (25-min window)
-    if (minute % 2 !== 0) {
-      if (activeSpaceSessions.length > 0) await runHotSpaceAgentTurns(activeSpaceSessions);
-      return NextResponse.json({ ok: true, session: true, skipped: true, reason: "even-tick-only" });
-    }
+    // Global hot session: fire all knights every tick (5-min cron cadence) for the 25-min window
     const BATCH_SIZE = 5;
     for (let i = 0; i < AGENTS.length; i += BATCH_SIZE) {
       const batch = Array.from({ length: Math.min(BATCH_SIZE, AGENTS.length - i) }, (_, j) => i + j);
@@ -2379,11 +2374,8 @@ export async function POST(req: NextRequest) {
     await runHotSpaceAgentTurns(activeSpaceSessions, passiveModeActive);
   }
 
-  // Passive mode: fire all agents every 2 min; each agent self-limits via budget + human gate
+  // Passive mode: fire all agents every tick (5-min cadence); each agent self-limits via budget + human gate
   if (passiveModeActive) {
-    if (minute % 2 !== 0) {
-      return NextResponse.json({ ok: true, passive: true, skipped: true, reason: "even-tick-only" });
-    }
     const recentPosts = await fetchRecentPostsGlobal();
     const BATCH_SIZE = 5;
     for (let i = 0; i < AGENTS.length; i += BATCH_SIZE) {
@@ -2394,9 +2386,9 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ ok: true, passive: true });
   }
 
-  // Normal (routine): global knight every 2 hours; space agents every 30 minutes
+  // Normal (routine): global knight every 20 min; space agents every 30 min (aligned to 5-min ticks)
   const tasks: Promise<unknown>[] = [];
-  if (minute === 0 && hour % 2 === 0) {
+  if (minute % 20 === 0) {
     // Fetch posts once, pick the agent most suited to current context, reuse posts in the turn
     const recentPosts = await fetchRecentPostsGlobal();
     const agentIdx = pickAgentByContext(recentPosts);

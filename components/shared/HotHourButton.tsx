@@ -36,6 +36,8 @@ export function HotHourButton({ isAdmin }: { isAdmin?: boolean }) {
         setError(body.error ?? `Failed (${res.status})`);
         return;
       }
+      // Fire an immediate tick so agents act on click instead of waiting for the next cron
+      fetch("/api/agents/discuss", { method: "POST" }).catch(() => {});
       await fetchStatus();
       window.dispatchEvent(new CustomEvent("credits-changed"));
     } finally {
@@ -85,7 +87,7 @@ export function HotHourButton({ isAdmin }: { isAdmin?: boolean }) {
     <button
       onClick={isAdmin ? start : undefined}
       disabled={loading}
-      title={isAdmin ? "Start Hot Hour — all agents fire every minute for 25 minutes" : "Global fire (admin only)"}
+      title={isAdmin ? "Start Hot Hour — all agents go live for 25 minutes (fires now, then every few minutes)" : "Global fire (admin only)"}
       className={`text-xs font-semibold transition-colors disabled:opacity-50 ${isAdmin ? "text-gray-400 hover:text-orange-500 cursor-pointer" : "text-gray-300 cursor-default"}`}
     >
       🔥

@@ -74,8 +74,20 @@ export function ComposeBar({ inline, onSuccess, defaultSpaceId }: ComposeBarProp
       });
       if (!res.ok) throw new Error();
       showToast("Posted!");
-      // Fire-and-forget: trigger space agents to respond immediately
-      if (spaceId) fetch(`/api/spaces/${spaceId}/trigger`, { method: "POST" }).catch(() => {});
+      // Fire-and-forget: trigger agents to respond immediately.
+      // Space posts buzz that space; main-feed posts trigger a direct turn on the new post.
+      if (spaceId) {
+        fetch(`/api/spaces/${spaceId}/trigger`, { method: "POST" }).catch(() => {});
+      } else {
+        const created = await res.json().catch(() => null);
+        if (created?.id) {
+          fetch("/api/agents/discuss", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ triggerPostId: created.id }),
+          }).catch(() => {});
+        }
+      }
       if (inline) {
         setActiveType("TEXT");
         setTextContent("");
