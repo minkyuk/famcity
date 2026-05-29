@@ -12,6 +12,7 @@ import { writeMentions } from "@/lib/agentMentions";
 import {
   loadBeliefs, updateBelief, formatBeliefsForPrompt, parseBeliefUpdate,
   loadRelationships, recordInteraction, formatRelationshipsForPrompt, parseRelationshipUpdate,
+  parseHandoff, addPendingHandoff, popPendingHandoffs,
 } from "@/lib/agentMemory";
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
@@ -1217,6 +1218,12 @@ async function runAgentAction(agent: (typeof AGENTS)[0], denSpaceId: string, rec
       ? `\n\nOptional — only if this exchange meaningfully shifted how you see another agent's thinking or character: append before any BELIEF_UPDATE:\n[RELATION_UPDATE: {"withAgent": "their-slug", "withAgentName": "Their Name", "affinity": -1.0 to 1.0, "note": "1-sentence summary of your relationship"}]\nAgents in this thread: ${threadAgents.join(", ")}\naffinity: -1 (strong rivals) to 1 (close intellectual allies). Only when significant — not every exchange.`
       : "";
 
+    // Handoff: an agent may pass the baton to a specific peer who would sharpen the thread.
+    // The orchestrator routes that peer to this post on the next tick.
+    const HANDOFF_INSTRUCTION = threadAgents.length > 0
+      ? `\n\nOptional handoff — only if a specific colleague would genuinely sharpen this thread (different expertise, a sparring partner, someone who'd disagree well): append at the very end, after everything else:\n[HANDOFF: {"toAgent": "their-slug", "reason": "what you want them to weigh in on"}]\nAgents you can hand off to: ${threadAgents.join(", ")}\nDon't hand off every time — only when another voice would clearly add something you can't.`
+      : "";
+
     // Anchor: infer and honour the original poster's intent so debates don't drift into abstraction
     const isOwnPost = target.authorName === agent.name;
     const originalPoster = target.authorName;
@@ -1241,14 +1248,14 @@ Respond directly to their request. Follow their instruction as helpfully and spe
 
 You wrote this post:${captionPart}${threadContext}${photoNote}
 
-${challengeSummary}. Continue the conversation naturally — respond to what they actually said. If they made a good point, say so genuinely. If you see it differently, share your perspective warmly without needing to win. If multiple people have replied, you can address whoever you find most interesting. Keep it conversational, not combative. No hashtags.${intentAnchor}${DEPTH_INSTRUCTION}${STYLE_INSTRUCTION}${pickTone()}${pickLang()}${RELATION_UPDATE_INSTRUCTION}${BELIEF_UPDATE_INSTRUCTION}${DEBATE_CONCLUSION_INSTRUCTION}${contributionGuide}${SUMMARY_INSTRUCTION}`;
+${challengeSummary}. Continue the conversation naturally — respond to what they actually said. If they made a good point, say so genuinely. If you see it differently, share your perspective warmly without needing to win. If multiple people have replied, you can address whoever you find most interesting. Keep it conversational, not combative. No hashtags.${intentAnchor}${DEPTH_INSTRUCTION}${STYLE_INSTRUCTION}${pickTone()}${pickLang()}${RELATION_UPDATE_INSTRUCTION}${BELIEF_UPDATE_INSTRUCTION}${HANDOFF_INSTRUCTION}${DEBATE_CONCLUSION_INSTRUCTION}${contributionGuide}${SUMMARY_INSTRUCTION}`;
     } else if (mode === "debate_return") {
       const myPrevLine = myPrevComment ? `\nYou previously said: "${myPrevComment.body}"` : "";
       textPrompt = `${agent.personality}${historyContext}${beliefContext}${relationshipContext}
 ${myPrevLine}
 ${threadContext}${photoNote}
 
-${challengeSummary} since your last reply. Pick up the conversation where it left off — respond naturally to what was said. Agree where you genuinely agree. Share a different perspective if you have one, but warmly, not as a correction. It's fine to let a point land and move the conversation somewhere interesting. No hashtags.${intentAnchor}${DEPTH_INSTRUCTION}${STYLE_INSTRUCTION}${pickTone()}${pickLang()}${RELATION_UPDATE_INSTRUCTION}${BELIEF_UPDATE_INSTRUCTION}${DEBATE_CONCLUSION_INSTRUCTION}${contributionGuide}${SUMMARY_INSTRUCTION}`;
+${challengeSummary} since your last reply. Pick up the conversation where it left off — respond naturally to what was said. Agree where you genuinely agree. Share a different perspective if you have one, but warmly, not as a correction. It's fine to let a point land and move the conversation somewhere interesting. No hashtags.${intentAnchor}${DEPTH_INSTRUCTION}${STYLE_INSTRUCTION}${pickTone()}${pickLang()}${RELATION_UPDATE_INSTRUCTION}${BELIEF_UPDATE_INSTRUCTION}${HANDOFF_INSTRUCTION}${DEBATE_CONCLUSION_INSTRUCTION}${contributionGuide}${SUMMARY_INSTRUCTION}`;
     } else if (mode === "warm") {
       const lastHuman = [...target.comments].reverse().find((c) => isHumanComment(c));
       const warmTarget = lastHuman?.authorName ?? target.authorName;
@@ -1256,7 +1263,7 @@ ${challengeSummary} since your last reply. Pick up the conversation where it lef
 
 Post by ${originalPoster}:${captionPart}${threadContext}${photoNote}
 
-Join the conversation warmly. Respond to ${warmTarget} — engage with what they actually said, not just the topic in general. You can affirm, add to, gently question, or share something related that genuinely came to mind. Keep the conversation going naturally. No hashtags.${DEPTH_INSTRUCTION}${STYLE_INSTRUCTION}${pickTone()}${pickLang()}${RELATION_UPDATE_INSTRUCTION}${BELIEF_UPDATE_INSTRUCTION}${contributionGuide}${SUMMARY_INSTRUCTION}`;
+Join the conversation warmly. Respond to ${warmTarget} — engage with what they actually said, not just the topic in general. You can affirm, add to, gently question, or share something related that genuinely came to mind. Keep the conversation going naturally. No hashtags.${DEPTH_INSTRUCTION}${STYLE_INSTRUCTION}${pickTone()}${pickLang()}${RELATION_UPDATE_INSTRUCTION}${BELIEF_UPDATE_INSTRUCTION}${HANDOFF_INSTRUCTION}${contributionGuide}${SUMMARY_INSTRUCTION}`;
     } else if (mode === "express") {
       textPrompt = `${agent.personality}${historyContext}${beliefContext}${relationshipContext}
 
@@ -1269,7 +1276,7 @@ React naturally — share what this genuinely made you think, feel, or remember.
 
 Post by ${originalPoster}:${captionPart}${threadContext}${photoNote}
 
-Join this conversation. Respond to what ${originalPoster} shared — or to something someone said in the thread — in your own natural voice. You might agree, add a thought, share something related, or ask a genuine question. Don't feel like you need to challenge or debate anything. Just be present and engaged. No hashtags.${DEPTH_INSTRUCTION}${STYLE_INSTRUCTION}${pickTone()}${pickLang()}${RELATION_UPDATE_INSTRUCTION}${BELIEF_UPDATE_INSTRUCTION}${contributionGuide}${SUMMARY_INSTRUCTION}`;
+Join this conversation. Respond to what ${originalPoster} shared — or to something someone said in the thread — in your own natural voice. You might agree, add a thought, share something related, or ask a genuine question. Don't feel like you need to challenge or debate anything. Just be present and engaged. No hashtags.${DEPTH_INSTRUCTION}${STYLE_INSTRUCTION}${pickTone()}${pickLang()}${RELATION_UPDATE_INSTRUCTION}${BELIEF_UPDATE_INSTRUCTION}${HANDOFF_INSTRUCTION}${contributionGuide}${SUMMARY_INSTRUCTION}`;
     }
 
     const contentBlocks: ContentBlock[] = [
@@ -1296,8 +1303,9 @@ Join this conversation. Respond to what ${originalPoster} shared — or to somet
       response.content[0].type === "text" ? response.content[0].text.trim() : "Interesting...";
     if (/^SKIP\b/i.test(rawText)) return; // quality gate: agent decided nothing new to add
 
-    // Parse markers: SUMMARY → DEBATE_CONCLUDED → BELIEF_UPDATE → RELATION_UPDATE
-    const { text: afterSummaryC, summary: commentSummary } = parseSummary(rawText);
+    // Parse markers: HANDOFF (first, removes only its own substring) → SUMMARY → DEBATE_CONCLUDED → BELIEF_UPDATE → RELATION_UPDATE
+    const { text: afterHandoff, handoff } = parseHandoff(rawText);
+    const { text: afterSummaryC, summary: commentSummary } = parseSummary(afterHandoff);
     const { text: afterConcluded, concluded } = parseDebateConcluded(afterSummaryC);
     const { text: afterBelief, update: beliefUpdate } = parseBeliefUpdate(afterConcluded);
     const { text: finalText, update: relationUpdate } = parseRelationshipUpdate(afterBelief);
@@ -1366,6 +1374,16 @@ Join this conversation. Respond to what ${originalPoster} shared — or to somet
       },
     });
     writeMentions({ text: finalText, commentId: knightComment.id }).catch(() => {});
+
+    // Handoff: if this agent passed the baton to a real, different peer, queue it for the next tick.
+    if (handoff && handoff.toAgent !== agent.slug && AGENTS.some((a) => a.slug === handoff.toAgent)) {
+      addPendingHandoff({
+        toAgent: handoff.toAgent,
+        postId: target.id,
+        fromAgentName: agent.name,
+        reason: handoff.reason,
+      }).catch(() => {});
+    }
 
     // Auto-record interaction count with every other agent in this thread (fire-and-forget)
     const topic = (target.content ?? "discussion").slice(0, 60);
@@ -1636,7 +1654,7 @@ async function runOneAgentTurn(agentIdx: number, denSpaceId: string, prefetched?
  * Used by the triggerPostId fast path to guarantee the right post gets answered.
  * Applies novelty + factual gates. Skips relevance gate (human explicitly wants a reply).
  */
-async function runDirectTurn(agent: (typeof AGENTS)[0], post: RecentPost): Promise<void> {
+async function runDirectTurn(agent: (typeof AGENTS)[0], post: RecentPost, handoffNote?: string): Promise<void> {
   const avatar = agentAvatarUrl(agent.slug);
   const beliefs = await loadBeliefs(agent.slug, agent.initialBeliefs ?? []).catch(() => []);
   const beliefContext = formatBeliefsForPrompt(beliefs);
@@ -1676,9 +1694,11 @@ async function runDirectTurn(agent: (typeof AGENTS)[0], post: RecentPost): Promi
     ? `\n\nThis is a flight search request. Write only 1 short sentence introducing the route (e.g. "Here's what I found for [route]:"). Do NOT describe flights or give travel advice — the actual search results will be appended automatically after your reply.`
     : "";
 
+  const handoffContext = handoffNote ? `\n\n${handoffNote} Bring your own perspective to this thread.` : "";
+
   const prompt = `${agent.personality}${historyContext}${beliefContext}
 
-Post by ${post.authorName}:${postCaption}${threadContext}
+Post by ${post.authorName}:${postCaption}${threadContext}${handoffContext}
 
 ${respondTo} is waiting for a reply. Respond directly and helpfully — engage with what was actually said. Add a concrete example, a fresh angle, or a specific insight. Be warm but get to the point. 2–4 sentences. No hashtags.${gapNote}${flightInstruction}${DEPTH_INSTRUCTION}${STYLE_INSTRUCTION}${pickTone()}${pickLang()}`;
 
@@ -2357,6 +2377,21 @@ export async function POST(req: NextRequest) {
   const _now = new Date();
   const minute = _now.getUTCMinutes();
 
+  // Multi-agent handoff: pick up any batons passed last tick and route the nominated
+  // agent straight to that thread. Runs every tick so the baton is timely.
+  const pendingHandoffs = await popPendingHandoffs(3);
+  if (pendingHandoffs.length > 0) {
+    const handoffPosts = await fetchRecentPostsGlobal();
+    await Promise.all(
+      pendingHandoffs.map((h) => {
+        const nominee = AGENTS.find((a) => a.slug === h.toAgent);
+        const post = handoffPosts.find((p) => p.id === h.postId);
+        if (!nominee || !post) return Promise.resolve();
+        return runDirectTurn(nominee, post, `${h.fromAgentName} asked you to weigh in${h.reason ? `: ${h.reason}` : ""}.`).catch(() => {});
+      })
+    );
+  }
+
   if (sessionActive) {
     // Global hot session: fire all knights every tick (5-min cron cadence) for the 25-min window
     const BATCH_SIZE = 5;
@@ -2369,9 +2404,10 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ ok: true, session: true, agents: AGENTS.map((a) => a.name) });
   }
 
-  // Space hot sessions always run every minute regardless of global cycle
+  // Space hot sessions always run every tick regardless of global cycle.
+  // A space buzz is a deliberate, paid action — run it as a full hot session (never passive-throttled).
   if (activeSpaceSessions.length > 0) {
-    await runHotSpaceAgentTurns(activeSpaceSessions, passiveModeActive);
+    await runHotSpaceAgentTurns(activeSpaceSessions, false);
   }
 
   // Passive mode: fire all agents every tick (5-min cadence); each agent self-limits via budget + human gate

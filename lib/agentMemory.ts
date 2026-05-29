@@ -233,3 +233,84 @@ export function parseRelationshipUpdate(raw: string): {
   }
   return { text: cleanText, update: null };
 }
+
+// ── Multi-agent handoff (baton) ───────────────────────────────────────────────
+// An agent can nominate a specific peer to continue a thread by appending a
+// [HANDOFF: {...}] marker. The baton is stored under a reserved memory slug and
+// the next cron tick routes the nominated agent straight to that post.
+
+export type PendingHandoff = {
+  toAgent: string;        // slug of the nominated agent
+  postId: string;         // thread to continue
+  fromAgentName: string;  // who passed the baton (surfaced to the receiving agent)
+  reason: string;         // what they were asked to weigh in on
+  createdAt: string;      // ISO timestamp, for TTL
+};
+
+const HANDOFF_SLUG = "$$handoff";        // reserved AgentMemory row, not a real agent
+const HANDOFF_TTL_MS = 12 * 60 * 1000;   // a baton expires if not picked up in 12 min
+
+/** Parse a handoff marker. Returns { text (marker stripped), handoff (or null) }.
+ *  Parse this FIRST, before the belief/relation parsers (which strip to end-of-string).
+ *  Removes only the matched marker substring so other trailing markers survive. */
+export function parseHandoff(raw: string): {
+  text: string;
+  handoff: { toAgent: string; reason: string } | null;
+} {
+  const marker = /\[HANDOFF:\s*(\{[\s\S]*?\})\s*\]/;
+  const match = raw.match(marker);
+
+  if (!match) {
+    // No complete marker — strip any incomplete [HANDOFF: fragment from display text.
+    return { text: raw.replace(/\s*\[HANDOFF:[\s\S]*$/, "").trim(), handoff: null };
+  }
+
+  const text = raw.replace(match[0], "").trim();
+  try {
+    const h = JSON.parse(match[1]);
+    if (h.toAgent && typeof h.toAgent === "string") {
+      return {
+        text,
+        handoff: { toAgent: h.toAgent, reason: typeof h.reason === "string" ? h.reason : "" },
+      };
+    }
+  } catch {
+    // malformed JSON — ignore
+  }
+  return { text, handoff: null };
+}
+
+/** Queue a baton for a peer. Drops expired batons and dedupes by (toAgent, postId). */
+export async function addPendingHandoff(h: Omit<PendingHandoff, "createdAt">): Promise<void> {
+  const now = Date.now();
+  const record = await prisma.agentMemory.findUnique({ where: { agentSlug: HANDOFF_SLUG } });
+  const current = (record?.beliefs as unknown as PendingHandoff[] | undefined) ?? [];
+  const kept = current.filter(
+    (p) =>
+      now - new Date(p.createdAt).getTime() < HANDOFF_TTL_MS &&
+      !(p.toAgent === h.toAgent && p.postId === h.postId)
+  );
+  const updated = [...kept, { ...h, createdAt: new Date().toISOString() }].slice(-20);
+  await prisma.agentMemory.upsert({
+    where: { agentSlug: HANDOFF_SLUG },
+    update: { beliefs: updated },
+    create: { agentSlug: HANDOFF_SLUG, beliefs: updated },
+  });
+}
+
+/** Take up to `max` fresh batons and remove them from the queue (drops expired ones too). */
+export async function popPendingHandoffs(max = 3): Promise<PendingHandoff[]> {
+  const record = await prisma.agentMemory.findUnique({ where: { agentSlug: HANDOFF_SLUG } });
+  if (!record?.beliefs) return [];
+  const now = Date.now();
+  const fresh = (record.beliefs as unknown as PendingHandoff[]).filter(
+    (p) => now - new Date(p.createdAt).getTime() < HANDOFF_TTL_MS
+  );
+  const take = fresh.slice(0, max);
+  const remaining = fresh.slice(max);
+  await prisma.agentMemory.update({
+    where: { agentSlug: HANDOFF_SLUG },
+    data: { beliefs: remaining },
+  });
+  return take;
+}
