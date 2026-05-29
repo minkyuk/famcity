@@ -2127,9 +2127,11 @@ async function runSpaceAgentAction(
     ]);
     if (!novelSA || !humbleSA) return;
 
-    // Relevance gate: for tutoring/debate spaces — skipped in FAFO mode and during a hot session
-    // (a buzz/hot hour is an explicit request for agents to engage, so don't drop their replies).
-    if (!spaceFafo && !hotSession && (isTutoringPurpose(purpose) || isDebatePurpose(purpose)) &&
+    // Relevance gate: for tutoring/debate spaces — skipped in FAFO mode, during a hot session,
+    // and whenever we're replying to a human (a person waiting on an answer should never be
+    // silently dropped for being "off-topic" — the gate is only to curb agent-to-agent drift).
+    const respondingToHuman = focalComment ? isHumanCommentSA(focalComment) : isHumanPostSA(target);
+    if (!spaceFafo && !hotSession && !respondingToHuman && (isTutoringPurpose(purpose) || isDebatePurpose(purpose)) &&
         !(await isOnTopicAndHelpful(text, target.content ?? null, isTutoringPurpose(purpose)))) return;
 
     // Flight posts: append live search results only if no results already in thread

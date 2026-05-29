@@ -238,7 +238,14 @@ function useCreaturePhysics(cfg: PhysicsConfig, mounted: boolean, onScroll: (dy:
     velRef.current.x += (Math.random() - 0.5) * Math.abs(dy) * cfg.scrollKickX;
   };
 
-  return { pos, facingRight, speed, squish, kick };
+  // Explicit jump on click. y grows downward, so upward = negative vy.
+  // Stack on any existing upward motion so clicking again mid-air keeps them rising.
+  const jump = () => {
+    velRef.current.y = Math.min(velRef.current.y, 0) - 9;
+    velRef.current.x += (Math.random() - 0.5) * 3;
+  };
+
+  return { pos, facingRight, speed, squish, kick, jump };
 }
 
 // ─── Main export ──────────────────────────────────────────────────────────────
@@ -292,14 +299,14 @@ export function WalkingCat() {
   puddleKickRef.current = puddle.kick;
 
   const pokeCat = () => {
-    cat.kick(-60); // little happy hop
+    cat.jump(); // launch upward; click again mid-air to keep jumping higher
     setCatExcited(true);
     if (catTimer.current) clearTimeout(catTimer.current);
     catTimer.current = setTimeout(() => setCatExcited(false), 1600);
   };
 
   const pokePuddle = () => {
-    puddle.kick(-60);
+    puddle.jump();
     setPuddleExcited(true);
     if (puddleTimer.current) clearTimeout(puddleTimer.current);
     puddleTimer.current = setTimeout(() => setPuddleExcited(false), 1600);
