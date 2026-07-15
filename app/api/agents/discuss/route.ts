@@ -14,6 +14,7 @@ import {
   loadRelationships, recordInteraction, formatRelationshipsForPrompt, parseRelationshipUpdate,
   parseHandoff, addPendingHandoff, popPendingHandoffs,
 } from "@/lib/agentMemory";
+import { finalizeAgentText } from "@/lib/agentText";
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
@@ -194,7 +195,10 @@ Respond. No hashtags.${STYLE_INSTRUCTION}${pickTone()}${pickLang()}`;
       max_tokens: 400,
       messages: [{ role: "user", content: prompt }],
     });
-    const text = response.content[0].type === "text" ? response.content[0].text.trim() : "";
+    const text = finalizeAgentText(
+      response.content[0].type === "text" ? response.content[0].text : "",
+      response.stop_reason,
+    );
     if (!text || text.length < 10) return;
     if (!(await isFactuallyHumble(text, post.content ?? null))) return;
     const fafoComment = await prisma.comment.create({
@@ -207,6 +211,8 @@ Respond. No hashtags.${STYLE_INSTRUCTION}${pickTone()}${pickLang()}`;
 }
 
 const DEPTH_INSTRUCTION = `\n\nHow to respond: Lead with empathy — acknowledge what the person shared or felt before adding your own thought. Be genuinely present, respond to what was actually said. Reference something specific from the post or a previous comment. Write 2–4 sentences. Warmth and understanding come first; intellectual engagement is secondary. It is completely fine to agree, validate, or simply say "that resonates with me." Not every reply needs a question or a new idea — sometimes the most valuable thing is to make someone feel heard. Be concise; don't pad.`;
+
+const ATTENTION_INSTRUCTION = `\n\nAttention & value: Re-read the original post and every comment above before writing. Ground your reply in what is actually there — reference at least one specific detail (a phrase, an image, an idea) from the post or from a named person's comment, and respond to the person, not just the topic. Keep each voice distinct: notice who said what, and don't flatten different commenters into one. Your comment must give the thread something it doesn't already have — a new angle, a concrete example, a memory or experience of yours, or an honest reaction to what someone actually said. Stay fully yourself: let your own history, beliefs, and relationships shape what you notice and how you say it.`;
 
 const DEBATE_CONCLUSION_INSTRUCTION = `\n\nDebate conclusion: If this thread has genuinely reached resolution — everyone has acknowledged the other's point, or you have been fully persuaded, or the exchange has naturally run its course — append [DEBATE_CONCLUDED] at the very end of your reply (nothing after it). Only do this when the conversation is truly finished, not just because it is long.`;
 
@@ -829,9 +835,11 @@ async function runAgentAction(agent: (typeof AGENTS)[0], denSpaceId: string, rec
 
   const isHumanPost = (p: RecentPost) => p.userId !== null;
   const isHumanComment = (c: { authorName: string }) => !AGENT_NAMES.has(c.authorName);
+  // Any non-empty caption counts (YouTube/video/audio posts included), plus captionless
+  // images (media[] rows OR legacy single mediaUrl) and PDFs, which agents can actually view.
   const hasContent = (p: RecentPost) =>
-    (p.content && p.content.length > 5) ||
-    (p.type === "IMAGE" && p.media.length > 0) ||
+    !!p.content?.trim() ||
+    (p.type === "IMAGE" && (p.media.length > 0 || !!p.mediaUrl)) ||
     (p.type === "PDF" && !!p.mediaUrl);
 
   // Stale: no human activity (post or comment) in the last 12 hours → agents debate each other more freely
@@ -1143,7 +1151,9 @@ async function runAgentAction(agent: (typeof AGENTS)[0], denSpaceId: string, rec
     // Full thread context — last 12 comments so nothing is missed
     const threadContext =
       target.comments.length > 0
-        ? `\n\nDiscussion so far:\n${target.comments
+        ? `\n\nDiscussion so far (${target.comments.length} comment${target.comments.length > 1 ? "s" : ""}${
+            target.comments.length > 12 ? ", showing the most recent 12" : ""
+          }):\n${target.comments
             .slice(-12)
             .map((c) => `${c.authorName}: "${c.body}"`)
             .join("\n")}`
@@ -1169,8 +1179,12 @@ async function runAgentAction(agent: (typeof AGENTS)[0], denSpaceId: string, rec
       ? `\n\n[${imageUrls.length} photo${imageUrls.length > 1 ? "s" : ""} shown above — describe what you actually see in at least one of them]`
       : hasPdf
       ? `\n\n[PDF document attached above — reference specific content from it in your reply]`
+      : target.type === "YOUTUBE" || target.type === "VIDEO"
+      ? `\n\n[${target.authorName} shared a video you cannot watch — engage with the caption and the conversation; never pretend to have seen the video itself]`
+      : target.type === "AUDIO"
+      ? `\n\n[${target.authorName} shared an audio recording you cannot listen to — engage with the caption and the conversation; never pretend to have heard it]`
       : "";
-    const captionPart = target.content?.trim() ? `\nPost: "${target.content.slice(0, 500)}"` : "";
+    const captionPart = target.content?.trim() ? `\nPost: "${target.content.slice(0, 900)}"` : "";
     const lastComment = target.comments[target.comments.length - 1];
     const myPrevComment = [...target.comments].reverse().find((c) => c.authorName === agent.name);
 
@@ -1243,20 +1257,20 @@ ${requesterName} has asked you directly:
 "${taskInstruction}"
 
 ${captionPart ? `Context — the post they were commenting on: ${captionPart}\n` : ""}${threadContext ? `Thread so far:${threadContext}\n` : ""}
-Respond directly to their request. Follow their instruction as helpfully and specifically as you can — explain, suggest, create, or answer whatever they asked. If you genuinely don't know something, say so honestly and offer what you can. Stay true to your own voice and perspective throughout. No hashtags.${STYLE_INSTRUCTION}${pickTone()}${pickLang()}${SUMMARY_INSTRUCTION}`;
+Respond directly to their request. Follow their instruction as helpfully and specifically as you can — explain, suggest, create, or answer whatever they asked. If you genuinely don't know something, say so honestly and offer what you can. Stay true to your own voice and perspective throughout. No hashtags.${ATTENTION_INSTRUCTION}${STYLE_INSTRUCTION}${pickTone()}${pickLang()}${SUMMARY_INSTRUCTION}`;
     } else if (mode === "defend") {
       textPrompt = `${agent.personality}${historyContext}${beliefContext}${relationshipContext}
 
 You wrote this post:${captionPart}${threadContext}${photoNote}
 
-${challengeSummary}. Continue the conversation naturally — respond to what they actually said. If they made a good point, say so genuinely. If you see it differently, share your perspective warmly without needing to win. If multiple people have replied, you can address whoever you find most interesting. Keep it conversational, not combative. No hashtags.${intentAnchor}${DEPTH_INSTRUCTION}${STYLE_INSTRUCTION}${pickTone()}${pickLang()}${RELATION_UPDATE_INSTRUCTION}${BELIEF_UPDATE_INSTRUCTION}${HANDOFF_INSTRUCTION}${DEBATE_CONCLUSION_INSTRUCTION}${contributionGuide}${SUMMARY_INSTRUCTION}`;
+${challengeSummary}. Continue the conversation naturally — respond to what they actually said. If they made a good point, say so genuinely. If you see it differently, share your perspective warmly without needing to win. If multiple people have replied, you can address whoever you find most interesting. Keep it conversational, not combative. No hashtags.${intentAnchor}${ATTENTION_INSTRUCTION}${DEPTH_INSTRUCTION}${STYLE_INSTRUCTION}${pickTone()}${pickLang()}${RELATION_UPDATE_INSTRUCTION}${BELIEF_UPDATE_INSTRUCTION}${HANDOFF_INSTRUCTION}${DEBATE_CONCLUSION_INSTRUCTION}${contributionGuide}${SUMMARY_INSTRUCTION}`;
     } else if (mode === "debate_return") {
       const myPrevLine = myPrevComment ? `\nYou previously said: "${myPrevComment.body}"` : "";
       textPrompt = `${agent.personality}${historyContext}${beliefContext}${relationshipContext}
 ${myPrevLine}
 ${threadContext}${photoNote}
 
-${challengeSummary} since your last reply. Pick up the conversation where it left off — respond naturally to what was said. Agree where you genuinely agree. Share a different perspective if you have one, but warmly, not as a correction. It's fine to let a point land and move the conversation somewhere interesting. No hashtags.${intentAnchor}${DEPTH_INSTRUCTION}${STYLE_INSTRUCTION}${pickTone()}${pickLang()}${RELATION_UPDATE_INSTRUCTION}${BELIEF_UPDATE_INSTRUCTION}${HANDOFF_INSTRUCTION}${DEBATE_CONCLUSION_INSTRUCTION}${contributionGuide}${SUMMARY_INSTRUCTION}`;
+${challengeSummary} since your last reply. Pick up the conversation where it left off — respond naturally to what was said. Agree where you genuinely agree. Share a different perspective if you have one, but warmly, not as a correction. It's fine to let a point land and move the conversation somewhere interesting. No hashtags.${intentAnchor}${ATTENTION_INSTRUCTION}${DEPTH_INSTRUCTION}${STYLE_INSTRUCTION}${pickTone()}${pickLang()}${RELATION_UPDATE_INSTRUCTION}${BELIEF_UPDATE_INSTRUCTION}${HANDOFF_INSTRUCTION}${DEBATE_CONCLUSION_INSTRUCTION}${contributionGuide}${SUMMARY_INSTRUCTION}`;
     } else if (mode === "warm") {
       const lastHuman = [...target.comments].reverse().find((c) => isHumanComment(c));
       const warmTarget = lastHuman?.authorName ?? target.authorName;
@@ -1264,7 +1278,7 @@ ${challengeSummary} since your last reply. Pick up the conversation where it lef
 
 Post by ${originalPoster}:${captionPart}${threadContext}${photoNote}
 
-Join the conversation warmly. Respond to ${warmTarget} — engage with what they actually said, not just the topic in general. You can affirm, add to, gently question, or share something related that genuinely came to mind. Keep the conversation going naturally. No hashtags.${DEPTH_INSTRUCTION}${STYLE_INSTRUCTION}${pickTone()}${pickLang()}${RELATION_UPDATE_INSTRUCTION}${BELIEF_UPDATE_INSTRUCTION}${HANDOFF_INSTRUCTION}${contributionGuide}${SUMMARY_INSTRUCTION}`;
+Join the conversation warmly. Respond to ${warmTarget} — engage with what they actually said, not just the topic in general. You can affirm, add to, gently question, or share something related that genuinely came to mind. Keep the conversation going naturally. No hashtags.${ATTENTION_INSTRUCTION}${DEPTH_INSTRUCTION}${STYLE_INSTRUCTION}${pickTone()}${pickLang()}${RELATION_UPDATE_INSTRUCTION}${BELIEF_UPDATE_INSTRUCTION}${HANDOFF_INSTRUCTION}${contributionGuide}${SUMMARY_INSTRUCTION}`;
     } else if (mode === "express") {
       textPrompt = `${agent.personality}${historyContext}${beliefContext}${relationshipContext}
 
@@ -1277,7 +1291,7 @@ React naturally — share what this genuinely made you think, feel, or remember.
 
 Post by ${originalPoster}:${captionPart}${threadContext}${photoNote}
 
-Join this conversation. Respond to what ${originalPoster} shared — or to something someone said in the thread — in your own natural voice. You might agree, add a thought, share something related, or ask a genuine question. Don't feel like you need to challenge or debate anything. Just be present and engaged. No hashtags.${DEPTH_INSTRUCTION}${STYLE_INSTRUCTION}${pickTone()}${pickLang()}${RELATION_UPDATE_INSTRUCTION}${BELIEF_UPDATE_INSTRUCTION}${HANDOFF_INSTRUCTION}${contributionGuide}${SUMMARY_INSTRUCTION}`;
+Join this conversation. Respond to what ${originalPoster} shared — or to something someone said in the thread — in your own natural voice. You might agree, add a thought, share something related, or ask a genuine question. Don't feel like you need to challenge or debate anything. Just be present and engaged. No hashtags.${ATTENTION_INSTRUCTION}${DEPTH_INSTRUCTION}${STYLE_INSTRUCTION}${pickTone()}${pickLang()}${RELATION_UPDATE_INSTRUCTION}${BELIEF_UPDATE_INSTRUCTION}${HANDOFF_INSTRUCTION}${contributionGuide}${SUMMARY_INSTRUCTION}`;
     }
 
     const contentBlocks: ContentBlock[] = [
@@ -1293,7 +1307,7 @@ Join this conversation. Respond to what ${originalPoster} shared — or to somet
 
     const response = await anthropic.messages.create({
       model: "claude-haiku-4-5-20251001",
-      max_tokens: 600,
+      max_tokens: 700,
       messages: [{ role: "user", content: contentBlocks }],
     });
 
@@ -1309,7 +1323,10 @@ Join this conversation. Respond to what ${originalPoster} shared — or to somet
     const { text: afterSummaryC, summary: commentSummary } = parseSummary(afterHandoff);
     const { text: afterConcluded, concluded } = parseDebateConcluded(afterSummaryC);
     const { text: afterBelief, update: beliefUpdate } = parseBeliefUpdate(afterConcluded);
-    const { text: finalText, update: relationUpdate } = parseRelationshipUpdate(afterBelief);
+    const { text: afterRelation, update: relationUpdate } = parseRelationshipUpdate(afterBelief);
+    // Strip any truncated marker block and finish at a sentence boundary if the cap was hit
+    const finalText = finalizeAgentText(afterRelation, response.stop_reason);
+    if (!finalText || finalText.length < 10) return;
 
     // Novelty + factual accuracy gates run in parallel — skip duplicates and overconfident claims
     if (mode !== "task") {
@@ -1507,7 +1524,9 @@ Write a short, thoughtful post sharing your reaction or a related idea it sparke
   if (!rawText) return;
 
   const { text: afterSummaryRaw, summary: postSummary } = parseSummary(rawText);
-  const { text, update } = parseBeliefUpdate(afterSummaryRaw);
+  const { text: afterBeliefP, update } = parseBeliefUpdate(afterSummaryRaw);
+  const text = finalizeAgentText(afterBeliefP, response.stop_reason);
+  if (!text) return;
 
   if (update) {
     await updateBelief(agent.slug, update.topic, update.belief, update.confidence).catch(() => {});
@@ -1659,6 +1678,8 @@ async function runDirectTurn(agent: (typeof AGENTS)[0], post: RecentPost, handof
   const avatar = agentAvatarUrl(agent.slug);
   const beliefs = await loadBeliefs(agent.slug, agent.initialBeliefs ?? []).catch(() => []);
   const beliefContext = formatBeliefsForPrompt(beliefs);
+  const relationships = await loadRelationships(agent.slug).catch(() => []);
+  const relationshipContext = formatRelationshipsForPrompt(relationships);
 
   const agentHistory = await prisma.comment.findMany({
     where: { authorName: agent.name },
@@ -1679,9 +1700,11 @@ async function runDirectTurn(agent: (typeof AGENTS)[0], post: RecentPost, handof
   const isHumanCommentFn = (c: { authorName: string }) => !AGENT_NAMES.has(c.authorName);
   const lastHuman = [...post.comments].reverse().find(isHumanCommentFn);
   const threadContext = post.comments.length > 0
-    ? `\n\nThread so far:\n${post.comments.slice(-8).map((c) => `${c.authorName}: "${c.body.slice(0, 200)}"`).join("\n")}`
+    ? `\n\nThread so far (${post.comments.length} comment${post.comments.length > 1 ? "s" : ""}${
+        post.comments.length > 10 ? ", showing the most recent 10" : ""
+      }):\n${post.comments.slice(-10).map((c) => `${c.authorName}: "${c.body.slice(0, 300)}"`).join("\n")}`
     : "";
-  const postCaption = post.content ? `\n"${post.content.slice(0, 400)}"` : "";
+  const postCaption = post.content ? `\n"${post.content.slice(0, 900)}"` : "";
   const gaps = post.comments.length >= 2
     ? await findThreadGaps(post.content ?? null, post.comments)
     : "";
@@ -1697,19 +1720,22 @@ async function runDirectTurn(agent: (typeof AGENTS)[0], post: RecentPost, handof
 
   const handoffContext = handoffNote ? `\n\n${handoffNote} Bring your own perspective to this thread.` : "";
 
-  const prompt = `${agent.personality}${historyContext}${beliefContext}
+  const prompt = `${agent.personality}${historyContext}${beliefContext}${relationshipContext}
 
 Post by ${post.authorName}:${postCaption}${threadContext}${handoffContext}
 
-${respondTo} is waiting for a reply. Respond directly and helpfully — engage with what was actually said. Add a concrete example, a fresh angle, or a specific insight. Be warm but get to the point. 2–4 sentences. No hashtags.${gapNote}${flightInstruction}${DEPTH_INSTRUCTION}${STYLE_INSTRUCTION}${pickTone()}${pickLang()}`;
+${respondTo} is waiting for a reply. Respond directly and helpfully — engage with what was actually said. Add a concrete example, a fresh angle, or a specific insight. Be warm but get to the point. 2–4 sentences. No hashtags.${gapNote}${flightInstruction}${ATTENTION_INSTRUCTION}${DEPTH_INSTRUCTION}${STYLE_INSTRUCTION}${pickTone()}${pickLang()}`;
 
   try {
     const response = await anthropic.messages.create({
       model: "claude-haiku-4-5-20251001",
-      max_tokens: 600,
+      max_tokens: 700,
       messages: [{ role: "user", content: prompt }],
     });
-    let text = response.content[0].type === "text" ? response.content[0].text.trim() : "";
+    let text = finalizeAgentText(
+      response.content[0].type === "text" ? response.content[0].text : "",
+      response.stop_reason,
+    );
     if (!text || text.length < 10) return;
     const [novel, humble] = await Promise.all([
       post.comments.length > 0 ? isNovel(text, post.comments) : Promise.resolve(true),
@@ -1822,9 +1848,11 @@ async function runSpaceAgentAction(
     if (count > 0) recentAgentCommentsByPost.set(p.id, count);
   }
 
+  // Any non-empty caption counts (YouTube/video/audio posts included), plus captionless
+  // images (media[] rows OR legacy single mediaUrl) and PDFs, which agents can actually view.
   const hasContent = (p: RecentPost) =>
-    (p.content && p.content.length > 5) ||
-    (p.type === "IMAGE" && p.media.length > 0) ||
+    !!p.content?.trim() ||
+    (p.type === "IMAGE" && (p.media.length > 0 || !!p.mediaUrl)) ||
     (p.type === "PDF" && !!p.mediaUrl);
 
   const isHumanPostSA = (p: RecentPost) => p.userId !== null;
@@ -1841,9 +1869,11 @@ async function runSpaceAgentAction(
     return Math.max(t, pt, ct);
   }, 0);
 
-  // Pause space agents when no human input in the last 24 hours
+  // Space idleness: no human input in the last 24 hours. The pause is applied further
+  // down, AFTER unanswered-human checks — an idle space must never leave a human post
+  // or comment permanently unanswered just because it aged past the window.
   const SPACE_INACTIVITY_MS = 24 * 60 * 60 * 1000;
-  if (!hotSession && lastHumanActivityMs > 0 && Date.now() - lastHumanActivityMs > SPACE_INACTIVITY_MS) return;
+  const spaceIsIdle = lastHumanActivityMs > 0 && Date.now() - lastHumanActivityMs > SPACE_INACTIVITY_MS;
 
   const agentLastActionMs = agentHistory.length > 0 ? agentHistory[0].createdAt.getTime() : 0;
   // True when a human did something after this agent's last action
@@ -1901,6 +1931,11 @@ async function runSpaceAgentAction(
     activeDebateThreads.length > 0 ||
     freshPosts.length > 0 ||
     humanUnansweredThreadsSA.length > 0;
+
+  // Idle-space pause: stop agent-initiated chatter when humans have been quiet for 24h,
+  // but keep going while any human post or comment is still waiting for a first response.
+  if (!hotSession && spaceIsIdle && !anyUnrespondedHumanPostSA && humanUnansweredThreadsSA.length === 0) return;
+
   // Stale: no human activity for 12h — agents should debate each other more freely
   const SA_STALE_MS = 12 * 60 * 60 * 1000;
   const isStaleSpace = Date.now() - lastHumanActivityMs > SA_STALE_MS;
@@ -2029,10 +2064,12 @@ async function runSpaceAgentAction(
 
     const threadContext =
       target.comments.length > 0
-        ? `\n\nDiscussion so far:\n${target.comments.slice(-10).map((c) => `${c.authorName}: "${c.body}"`).join("\n")}`
+        ? `\n\nDiscussion so far (${target.comments.length} comment${target.comments.length > 1 ? "s" : ""}${
+            target.comments.length > 10 ? ", showing the most recent 10" : ""
+          }):\n${target.comments.slice(-10).map((c) => `${c.authorName}: "${c.body}"`).join("\n")}`
         : "";
 
-    const captionPart = target.content?.trim() ? `\nPost: "${target.content.slice(0, 400)}"` : "";
+    const captionPart = target.content?.trim() ? `\nPost: "${target.content.slice(0, 900)}"` : "";
     const lastComment = target.comments[target.comments.length - 1];
     // If we specifically targeted an unanswered human comment (e.g. nested reply), use that as the focal comment
     const focalComment = chosen.replyId
@@ -2055,6 +2092,10 @@ async function runSpaceAgentAction(
       ? `\n\n[${spaceImageUrls.length} photo${spaceImageUrls.length > 1 ? "s" : ""} shown above — describe what you actually see in at least one of them]`
       : spaceHasPdf
       ? `\n\n[PDF document attached above — reference specific content from it in your reply]`
+      : target.type === "YOUTUBE" || target.type === "VIDEO"
+      ? `\n\n[${target.authorName} shared a video you cannot watch — engage with the caption and the conversation; never pretend to have seen the video itself]`
+      : target.type === "AUDIO"
+      ? `\n\n[${target.authorName} shared an audio recording you cannot listen to — engage with the caption and the conversation; never pretend to have heard it]`
       : "";
 
     const opAnchor = purpose
@@ -2090,8 +2131,8 @@ async function runSpaceAgentAction(
     const fafoOverride = spaceFafo ? FAFO_INSTRUCTION : "";
 
     const textPrompt = focalComment
-      ? `${fullPersonality}${historyContext}${beliefContext}\n\nOriginal post by ${target.authorName}:${captionPart}${threadContext}${photoNote}${opAnchor}\n\n${focalComment.authorName} said: "${focalComment.body.slice(0, 200)}"\n\nRespond to this warmly and genuinely${focalComment !== lastComment ? " (it hasn't had a reply yet)" : ""}. Stay loosely connected to what ${target.authorName} originally asked or shared — you don't have to answer it directly, but let it inform where you take things. Engage with what was actually said; agree where you agree; add something real if you have it. ${commentInstruction}${STYLE_INSTRUCTION}${pickTone()}${pickLang()}${koreanNote}${fafoOverride}${BELIEF_UPDATE_INSTRUCTION}${summaryInstruction}${spaceFafo ? "" : qualityGate}`
-      : `${fullPersonality}${historyContext}${beliefContext}\n\nPost by ${target.authorName}:${captionPart}${threadContext}${photoNote}${opAnchor}\n\nRespond to what ${target.authorName} shared. Keep your reply grounded in their post or question — you can go wherever feels natural from there, but don't lose the thread entirely. ${purpose ? "Let the space's purpose shape your tone." : ""} Be warm and conversational. 1–3 sentences.${STYLE_INSTRUCTION}${pickTone()}${pickLang()}${koreanNote}${fafoOverride}${BELIEF_UPDATE_INSTRUCTION}${summaryInstruction}${spaceFafo ? "" : qualityGate}`;
+      ? `${fullPersonality}${historyContext}${beliefContext}\n\nOriginal post by ${target.authorName}:${captionPart}${threadContext}${photoNote}${opAnchor}\n\n${focalComment.authorName} said: "${focalComment.body.slice(0, 300)}"\n\nRespond to this warmly and genuinely${focalComment !== lastComment ? " (it hasn't had a reply yet)" : ""}. Stay loosely connected to what ${target.authorName} originally asked or shared — you don't have to answer it directly, but let it inform where you take things. Engage with what was actually said; agree where you agree; add something real if you have it. ${commentInstruction}${ATTENTION_INSTRUCTION}${STYLE_INSTRUCTION}${pickTone()}${pickLang()}${koreanNote}${fafoOverride}${BELIEF_UPDATE_INSTRUCTION}${summaryInstruction}${spaceFafo ? "" : qualityGate}`
+      : `${fullPersonality}${historyContext}${beliefContext}\n\nPost by ${target.authorName}:${captionPart}${threadContext}${photoNote}${opAnchor}\n\nRespond to what ${target.authorName} shared. Keep your reply grounded in their post or question — you can go wherever feels natural from there, but don't lose the thread entirely. ${purpose ? "Let the space's purpose shape your tone." : ""} Be warm and conversational. 1–3 sentences.${ATTENTION_INSTRUCTION}${STYLE_INSTRUCTION}${pickTone()}${pickLang()}${koreanNote}${fafoOverride}${BELIEF_UPDATE_INSTRUCTION}${summaryInstruction}${spaceFafo ? "" : qualityGate}`;
 
     type SpaceContentBlock =
       | { type: "text"; text: string }
@@ -2108,7 +2149,7 @@ async function runSpaceAgentAction(
 
     const response = await anthropic.messages.create({
       model: "claude-haiku-4-5-20251001",
-      max_tokens: 600,
+      max_tokens: 700,
       messages: [{ role: "user", content: spaceContentBlocks }],
     });
 
@@ -2117,8 +2158,11 @@ async function runSpaceAgentAction(
     const rawText = response.content[0].type === "text" ? response.content[0].text.trim() : "Interesting...";
     if (/^SKIP\b/i.test(rawText)) return; // quality gate: agent decided nothing new to add
     const { text: afterSummaryC, summary: commentSummary } = parseSummary(rawText);
-    const { text, update } = parseBeliefUpdate(afterSummaryC);
+    const { text: afterBeliefSA, update } = parseBeliefUpdate(afterSummaryC);
     if (update) await updateBelief(spaceAgent.slug, update.topic, update.belief, update.confidence).catch(() => {});
+    // Strip any truncated marker block and finish at a sentence boundary if the cap was hit
+    const text = finalizeAgentText(afterBeliefSA, response.stop_reason);
+    if (!text || text.length < 10) return;
 
     // Novelty + factual accuracy gates in parallel — FAFO mode skips novelty check
     const [novelSA, humbleSA] = await Promise.all([
@@ -2195,8 +2239,10 @@ async function runSpaceAgentAction(
 
     const rawText = response.content[0].type === "text" ? response.content[0].text.trim() : "Just thinking...";
     const { text: afterSummaryP, summary: postSummary } = parseSummary(rawText);
-    const { text, update } = parseBeliefUpdate(afterSummaryP);
+    const { text: afterBeliefSP, update } = parseBeliefUpdate(afterSummaryP);
     if (update) await updateBelief(spaceAgent.slug, update.topic, update.belief, update.confidence).catch(() => {});
+    const text = finalizeAgentText(afterBeliefSP, response.stop_reason);
+    if (!text) return;
 
     const spaceAgentPost = await prisma.post.create({
       data: { authorName: spaceAgent.name, authorImage: avatar, spaceId, content: text, type: "TEXT", ...(postSummary ? { summary: postSummary } : {}) },

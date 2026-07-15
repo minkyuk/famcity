@@ -7,6 +7,7 @@ import { fetchRss, feedSourceName, NEWS_FEEDS, KOREAN_NEWS_FEEDS } from "@/lib/r
 import { generateInviteCode } from "@/lib/invite";
 import { isCronAuthorized } from "@/lib/cronAuth";
 import { authOptions } from "@/lib/auth";
+import { finalizeAgentText } from "@/lib/agentText";
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
@@ -364,10 +365,10 @@ What's your perspective on this story through your own lens and values? What wou
         }),
       ]);
 
-      const mainText = mainMsg.content[0].type === "text" ? mainMsg.content[0].text.trim() : "";
-      const debateText1 = debateMsg1.content[0].type === "text" ? debateMsg1.content[0].text.trim() : "";
-      const debateText2 = debateMsg2.content[0].type === "text" ? debateMsg2.content[0].text.trim() : "";
-      const koreanText = koreanMsg.content[0].type === "text" ? koreanMsg.content[0].text.trim() : "";
+      const mainText = finalizeAgentText(mainMsg.content[0].type === "text" ? mainMsg.content[0].text : "", mainMsg.stop_reason);
+      const debateText1 = finalizeAgentText(debateMsg1.content[0].type === "text" ? debateMsg1.content[0].text : "", debateMsg1.stop_reason);
+      const debateText2 = finalizeAgentText(debateMsg2.content[0].type === "text" ? debateMsg2.content[0].text : "", debateMsg2.stop_reason);
+      const koreanText = finalizeAgentText(koreanMsg.content[0].type === "text" ? koreanMsg.content[0].text : "", koreanMsg.stop_reason);
 
       if (!mainText || mainText.length < 80) continue;
 
@@ -477,7 +478,7 @@ What's your perspective on this story through your own lens and values? What wou
         }],
       });
 
-      const krText = krMsg.content[0].type === "text" ? krMsg.content[0].text.trim() : "";
+      const krText = finalizeAgentText(krMsg.content[0].type === "text" ? krMsg.content[0].text : "", krMsg.stop_reason);
       if (krText && krText.length >= 60) {
         await prisma.post.create({
           data: {
