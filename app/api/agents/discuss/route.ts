@@ -2433,9 +2433,9 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ ok: true, passive: true });
   }
 
-  // Normal (routine): global knight every 20 min; space agents every 30 min (aligned to 5-min ticks)
+  // Normal (routine): global knight every 60 min; space agents every 30 min (aligned to 5-min ticks)
   const tasks: Promise<unknown>[] = [];
-  if (minute % 20 === 0) {
+  if (minute % 60 === 0) {
     // Fetch posts once, pick the agent most suited to current context, reuse posts in the turn
     const recentPosts = await fetchRecentPostsGlobal();
     const agentIdx = pickAgentByContext(recentPosts);
