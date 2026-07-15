@@ -15,6 +15,7 @@ import {
   parseHandoff, addPendingHandoff, popPendingHandoffs,
 } from "@/lib/agentMemory";
 import { finalizeAgentText } from "@/lib/agentText";
+import { fetchYouTubeTitle } from "@/lib/youtube";
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
@@ -837,10 +838,13 @@ async function runAgentAction(agent: (typeof AGENTS)[0], denSpaceId: string, rec
   const isHumanComment = (c: { authorName: string }) => !AGENT_NAMES.has(c.authorName);
   // Any non-empty caption counts (YouTube/video/audio posts included), plus captionless
   // images (media[] rows OR legacy single mediaUrl) and PDFs, which agents can actually view.
+  // Captionless YouTube posts qualify too — the video title is fetched via oEmbed at
+  // prompt-build time, so agents have something real to react to.
   const hasContent = (p: RecentPost) =>
     !!p.content?.trim() ||
     (p.type === "IMAGE" && (p.media.length > 0 || !!p.mediaUrl)) ||
-    (p.type === "PDF" && !!p.mediaUrl);
+    (p.type === "PDF" && !!p.mediaUrl) ||
+    (p.type === "YOUTUBE" && !!p.mediaUrl);
 
   // Stale: no human activity (post or comment) in the last 12 hours → agents debate each other more freely
   const STALE_HUMAN_MS = 12 * 60 * 60 * 1000;
@@ -1175,11 +1179,18 @@ async function runAgentAction(agent: (typeof AGENTS)[0], denSpaceId: string, rec
       : [];
     const imageUrls = candidateUrls.filter((url) => (photoQueryCounts[photoKey(url)] ?? 0) < MAX_PHOTO_QUERIES);
     const hasImages = imageUrls.length > 0;
+    const ytInfo = target.type === "YOUTUBE" && target.mediaUrl
+      ? await fetchYouTubeTitle(target.mediaUrl)
+      : null;
     const photoNote = hasImages
       ? `\n\n[${imageUrls.length} photo${imageUrls.length > 1 ? "s" : ""} shown above — describe what you actually see in at least one of them]`
       : hasPdf
       ? `\n\n[PDF document attached above — reference specific content from it in your reply]`
-      : target.type === "YOUTUBE" || target.type === "VIDEO"
+      : target.type === "YOUTUBE"
+      ? ytInfo
+        ? `\n\n[${target.authorName} shared a YouTube video: "${ytInfo.title}"${ytInfo.author ? ` (channel: ${ytInfo.author})` : ""} — you cannot watch it, so react to the title and what ${target.authorName} chose to share; never pretend to have seen the video itself]`
+        : `\n\n[${target.authorName} shared a YouTube video you cannot watch — engage with the caption and the conversation; never pretend to have seen the video itself]`
+      : target.type === "VIDEO"
       ? `\n\n[${target.authorName} shared a video you cannot watch — engage with the caption and the conversation; never pretend to have seen the video itself]`
       : target.type === "AUDIO"
       ? `\n\n[${target.authorName} shared an audio recording you cannot listen to — engage with the caption and the conversation; never pretend to have heard it]`
@@ -1705,6 +1716,14 @@ async function runDirectTurn(agent: (typeof AGENTS)[0], post: RecentPost, handof
       }):\n${post.comments.slice(-10).map((c) => `${c.authorName}: "${c.body.slice(0, 300)}"`).join("\n")}`
     : "";
   const postCaption = post.content ? `\n"${post.content.slice(0, 900)}"` : "";
+  const directYt = post.type === "YOUTUBE" && post.mediaUrl ? await fetchYouTubeTitle(post.mediaUrl) : null;
+  const mediaNote = directYt
+    ? `\n[The post shares a YouTube video: "${directYt.title}"${directYt.author ? ` (channel: ${directYt.author})` : ""} — you cannot watch it; react to the title and caption, never pretend to have seen it]`
+    : post.type === "YOUTUBE" || post.type === "VIDEO"
+    ? `\n[The post shares a video you cannot watch — engage with the caption and thread; never pretend to have seen it]`
+    : post.type === "AUDIO"
+    ? `\n[The post shares an audio recording you cannot listen to — engage with the caption and thread; never pretend to have heard it]`
+    : "";
   const gaps = post.comments.length >= 2
     ? await findThreadGaps(post.content ?? null, post.comments)
     : "";
@@ -1722,7 +1741,7 @@ async function runDirectTurn(agent: (typeof AGENTS)[0], post: RecentPost, handof
 
   const prompt = `${agent.personality}${historyContext}${beliefContext}${relationshipContext}
 
-Post by ${post.authorName}:${postCaption}${threadContext}${handoffContext}
+Post by ${post.authorName}:${postCaption}${mediaNote}${threadContext}${handoffContext}
 
 ${respondTo} is waiting for a reply. Respond directly and helpfully — engage with what was actually said. Add a concrete example, a fresh angle, or a specific insight. Be warm but get to the point. 2–4 sentences. No hashtags.${gapNote}${flightInstruction}${ATTENTION_INSTRUCTION}${DEPTH_INSTRUCTION}${STYLE_INSTRUCTION}${pickTone()}${pickLang()}`;
 
@@ -1850,10 +1869,13 @@ async function runSpaceAgentAction(
 
   // Any non-empty caption counts (YouTube/video/audio posts included), plus captionless
   // images (media[] rows OR legacy single mediaUrl) and PDFs, which agents can actually view.
+  // Captionless YouTube posts qualify too — the video title is fetched via oEmbed at
+  // prompt-build time, so agents have something real to react to.
   const hasContent = (p: RecentPost) =>
     !!p.content?.trim() ||
     (p.type === "IMAGE" && (p.media.length > 0 || !!p.mediaUrl)) ||
-    (p.type === "PDF" && !!p.mediaUrl);
+    (p.type === "PDF" && !!p.mediaUrl) ||
+    (p.type === "YOUTUBE" && !!p.mediaUrl);
 
   const isHumanPostSA = (p: RecentPost) => p.userId !== null;
   // "human" in this space = not a knight agent AND not this space agent itself
@@ -2088,11 +2110,18 @@ async function runSpaceAgentAction(
       : [];
     const spaceImageUrls = spaceCandidateUrls.filter((url) => (spacePhotoCounts[photoKey(url)] ?? 0) < MAX_PHOTO_QUERIES);
     const spaceHasPdf = target.type === "PDF" && !!tMediaUrl;
+    const spaceYtInfo = target.type === "YOUTUBE" && tMediaUrl
+      ? await fetchYouTubeTitle(tMediaUrl)
+      : null;
     const photoNote = spaceImageUrls.length > 0
       ? `\n\n[${spaceImageUrls.length} photo${spaceImageUrls.length > 1 ? "s" : ""} shown above — describe what you actually see in at least one of them]`
       : spaceHasPdf
       ? `\n\n[PDF document attached above — reference specific content from it in your reply]`
-      : target.type === "YOUTUBE" || target.type === "VIDEO"
+      : target.type === "YOUTUBE"
+      ? spaceYtInfo
+        ? `\n\n[${target.authorName} shared a YouTube video: "${spaceYtInfo.title}"${spaceYtInfo.author ? ` (channel: ${spaceYtInfo.author})` : ""} — you cannot watch it, so react to the title and what ${target.authorName} chose to share; never pretend to have seen the video itself]`
+        : `\n\n[${target.authorName} shared a YouTube video you cannot watch — engage with the caption and the conversation; never pretend to have seen the video itself]`
+      : target.type === "VIDEO"
       ? `\n\n[${target.authorName} shared a video you cannot watch — engage with the caption and the conversation; never pretend to have seen the video itself]`
       : target.type === "AUDIO"
       ? `\n\n[${target.authorName} shared an audio recording you cannot listen to — engage with the caption and the conversation; never pretend to have heard it]`

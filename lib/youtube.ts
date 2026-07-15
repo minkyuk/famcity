@@ -38,3 +38,33 @@ export function getEmbedUrl(videoId: string): string {
 export function getThumbnailUrl(videoId: string): string {
   return `https://img.youtube.com/vi/${videoId}/hqdefault.jpg`;
 }
+
+/**
+ * Fetch a video's title + channel via YouTube's public oEmbed endpoint (no API key).
+ * Used by agents so a captionless YouTube post still gives them something real to
+ * react to. Cached per serverless instance; returns null on any failure.
+ */
+const titleCache = new Map<string, { title: string; author: string } | null>();
+
+export async function fetchYouTubeTitle(url: string): Promise<{ title: string; author: string } | null> {
+  const id = extractYouTubeId(url);
+  const key = id ?? url;
+  if (titleCache.has(key)) return titleCache.get(key) ?? null;
+
+  let result: { title: string; author: string } | null = null;
+  try {
+    const watchUrl = id ? `https://www.youtube.com/watch?v=${id}` : url;
+    const res = await fetch(
+      `https://www.youtube.com/oembed?url=${encodeURIComponent(watchUrl)}&format=json`,
+      { signal: AbortSignal.timeout(4000) },
+    );
+    if (res.ok) {
+      const data = (await res.json()) as { title?: string; author_name?: string };
+      if (data.title) result = { title: data.title, author: data.author_name ?? "" };
+    }
+  } catch {
+    // unavailable/private video, network error — agents fall back to the generic note
+  }
+  titleCache.set(key, result);
+  return result;
+}
