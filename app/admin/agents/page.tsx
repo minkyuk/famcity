@@ -58,7 +58,7 @@ export default async function AdminAgentHealthPage() {
         <StatTile
           label="예상 비용 (24시간)"
           value={`$${h.costUsd24h.toFixed(2)}`}
-          sub={h.unpricedCalls24h ? `가격 미확인 ${h.unpricedCalls24h}건 제외` : "Haiku 4.5 기준 추정"}
+          sub={h.unpricedCalls24h ? `가격 미확인 ${h.unpricedCalls24h}건 제외` : "모델별 단가로 추정"}
         />
         <StatTile label="마지막 성공" value={timeAgoKo(h.lastSuccessAt, now)} />
         <StatTile label="에이전트 댓글 / 글 (24시간)" value={`${fmt(h.agentComments24h)} / ${fmt(h.agentPosts24h)}`} sub={`마지막 댓글 ${timeAgoKo(h.lastAgentCommentAt, now)}`} />

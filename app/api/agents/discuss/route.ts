@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
-import { createAnthropic } from "@/lib/anthropic";
+import { AGENT_REQUEST, createAnthropic, textOf } from "@/lib/anthropic";
+import { hotSessionRemainingMs, passiveModeRemainingMs } from "@/lib/agentModes";
 import { recordHeartbeat } from "@/lib/aiCallLog";
 import { isCronAuthorized } from "@/lib/cronAuth";
 import { prisma } from "@/lib/prisma";
@@ -71,14 +72,14 @@ async function findThreadGaps(
 
   try {
     const msg = await anthropic.messages.create({
-      model: "claude-haiku-4-5-20251001",
-      max_tokens: 120,
+      ...AGENT_REQUEST,
+      max_tokens: 160,
       messages: [{
         role: "user",
         content: `Post: "${(postContent ?? "").slice(0, 300)}"\n\nThread so far:\n${thread}\n\nList 2–3 specific angles, concrete examples, personal experiences, or perspectives this thread has NOT yet touched. Focus on things that would add warmth, understanding, or a new lens — not questions. Be brief and specific — one line each, starting with "-". Do not repeat what's already been said.`,
       }],
     });
-    return msg.content[0].type === "text" ? msg.content[0].text.trim() : "";
+    return textOf(msg).trim();
   } catch {
     return "";
   }
@@ -103,14 +104,14 @@ async function isNovel(proposed: string, existingComments: { authorName: string;
 
   try {
     const msg = await anthropic.messages.create({
-      model: "claude-haiku-4-5-20251001",
-      max_tokens: 5,
+      ...AGENT_REQUEST,
+      max_tokens: 10,
       messages: [{
         role: "user",
         content: `Existing comments:\n${context}\n\nProposed comment: "${proposed.slice(0, 300)}"\n\nDoes the proposed comment bring a clearly distinct perspective, concrete example, specific fact, or new angle NOT already covered above? Reply with only YES or NO.`,
       }],
     });
-    const answer = msg.content[0].type === "text" ? msg.content[0].text.trim().toUpperCase() : "NO";
+    const answer = (textOf(msg).trim().toUpperCase() || "NO");
     return answer.startsWith("Y");
   } catch {
     return true; // on API error, don't silently drop the comment
@@ -128,14 +129,14 @@ async function isFactuallyHumble(proposed: string, postContent: string | null): 
 
   try {
     const msg = await anthropic.messages.create({
-      model: "claude-haiku-4-5-20251001",
-      max_tokens: 5,
+      ...AGENT_REQUEST,
+      max_tokens: 10,
       messages: [{
         role: "user",
         content: `Post: "${(postContent ?? "").slice(0, 300)}"\nComment: "${proposed.slice(0, 400)}"\n\nDoes the comment assert specific statistics, dates, or named studies that are NOT from the post above AND are stated as definite fact (not hedged with "I think", "I believe", "if I recall")? Reply YES or NO.`,
       }],
     });
-    const a = msg.content[0].type === "text" ? msg.content[0].text.trim().toUpperCase() : "NO";
+    const a = (textOf(msg).trim().toUpperCase() || "NO");
     return !a.startsWith("Y"); // false = block overconfident claims
   } catch {
     return true;
@@ -193,12 +194,12 @@ Respond. No hashtags.${STYLE_INSTRUCTION}${pickTone()}${pickLang()}`;
 
   try {
     const response = await anthropic.messages.create({
-      model: "claude-haiku-4-5-20251001",
-      max_tokens: 400,
+      ...AGENT_REQUEST,
+      max_tokens: 520,
       messages: [{ role: "user", content: prompt }],
     });
     const text = finalizeAgentText(
-      response.content[0].type === "text" ? response.content[0].text : "",
+      textOf(response),
       response.stop_reason,
     );
     if (!text || text.length < 10) return;
@@ -260,11 +261,11 @@ async function isOnTopicAndHelpful(
     : `Original post: "${postContent.slice(0, 400)}"\n\nComment: "${proposed.slice(0, 400)}"\n\nDoes the comment directly engage with the specific argument, claim, or topic raised in the original post? It should present a concrete counter-argument, supporting evidence, or a new angle on the exact debate — not drift into abstract philosophising unrelated to the original point. Reply YES if it engages the actual argument, NO if it drifts.`;
   try {
     const msg = await anthropic.messages.create({
-      model: "claude-haiku-4-5-20251001",
-      max_tokens: 5,
+      ...AGENT_REQUEST,
+      max_tokens: 10,
       messages: [{ role: "user", content: prompt }],
     });
-    const a = msg.content[0].type === "text" ? msg.content[0].text.trim().toUpperCase() : "YES";
+    const a = (textOf(msg).trim().toUpperCase() || "YES");
     return a.startsWith("Y");
   } catch {
     return true;
@@ -414,10 +415,7 @@ async function isSessionActive(): Promise<boolean> {
   try {
     const record = await prisma.agentMemory.findUnique({ where: { agentSlug: "$$session" } });
     if (!record) return false;
-    const session = record.beliefs as { startedAt?: string; durationMinutes?: number };
-    if (!session?.startedAt) return false;
-    const elapsed = Date.now() - new Date(session.startedAt).getTime();
-    return elapsed < (session.durationMinutes ?? 25) * 60 * 1000;
+    return hotSessionRemainingMs(record.beliefs) > 0;
   } catch {
     return false;
   }
@@ -427,8 +425,7 @@ async function isSessionActive(): Promise<boolean> {
 async function isPassiveModeActive(): Promise<boolean> {
   try {
     const record = await prisma.agentMemory.findUnique({ where: { agentSlug: "$passive-mode" } });
-    const d = record?.beliefs as { active?: boolean } | null;
-    return !!d?.active;
+    return passiveModeRemainingMs(record?.beliefs) > 0;
   } catch { return false; }
 }
 
@@ -475,8 +472,8 @@ async function extractFlightParams(text: string): Promise<FlightParams | null> {
   const today = new Date().toISOString().slice(0, 10);
   try {
     const msg = await anthropic.messages.create({
-      model: "claude-haiku-4-5-20251001",
-      max_tokens: 120,
+      ...AGENT_REQUEST,
+      max_tokens: 160,
       messages: [{
         role: "user",
         content: `Today is ${today}. Extract flight parameters. Return only valid JSON or the word null.
@@ -488,7 +485,7 @@ Rules: 3-letter IATA codes (SFO, ICN, JFK…); dates as YYYY-MM-DD (assume ${new
 Example: {"origin":"SFO","destination":"ICN","departDate":"2026-05-08","returnDate":"2026-05-18"}`,
       }],
     });
-    const raw = msg.content[0].type === "text" ? msg.content[0].text.trim() : "null";
+    const raw = (textOf(msg).trim() || "null");
     if (raw === "null" || !raw.includes("{")) return null;
     const parsed = JSON.parse(raw.match(/\{[\s\S]*?\}/)?.[0] ?? "null") as FlightParams | null;
     if (!parsed?.origin || !parsed?.destination || !parsed?.departDate) return null;
@@ -1318,8 +1315,8 @@ Join this conversation. Respond to what ${originalPoster} shared — or to somet
     ];
 
     const response = await anthropic.messages.create({
-      model: "claude-haiku-4-5-20251001",
-      max_tokens: 700,
+      ...AGENT_REQUEST,
+      max_tokens: 910,
       messages: [{ role: "user", content: contentBlocks }],
     });
 
@@ -1327,7 +1324,7 @@ Join this conversation. Respond to what ${originalPoster} shared — or to somet
     if (imageUrls.length > 0) await incrementPhotoQueries(imageUrls).catch(() => {});
 
     const rawText =
-      response.content[0].type === "text" ? response.content[0].text.trim() : "Interesting...";
+      textOf(response).trim();
     if (/^SKIP\b/i.test(rawText)) return; // quality gate: agent decided nothing new to add
 
     // Parse markers: HANDOFF (first, removes only its own substring) → SUMMARY → DEBATE_CONCLUDED → BELIEF_UPDATE → RELATION_UPDATE
@@ -1527,12 +1524,12 @@ Write a short, thoughtful post sharing your reaction or a related idea it sparke
   }
 
   const response = await anthropic.messages.create({
-    model: "claude-haiku-4-5-20251001",
-    max_tokens: 800,
+    ...AGENT_REQUEST,
+    max_tokens: 1040,
     messages: [{ role: "user", content: prompt }],
   });
 
-  const rawText = response.content[0].type === "text" ? response.content[0].text.trim() : "";
+  const rawText = textOf(response).trim();
   if (!rawText) return;
 
   const { text: afterSummaryRaw, summary: postSummary } = parseSummary(rawText);
@@ -1748,12 +1745,12 @@ ${respondTo} is waiting for a reply. Respond directly and helpfully — engage w
 
   try {
     const response = await anthropic.messages.create({
-      model: "claude-haiku-4-5-20251001",
-      max_tokens: 700,
+      ...AGENT_REQUEST,
+      max_tokens: 910,
       messages: [{ role: "user", content: prompt }],
     });
     let text = finalizeAgentText(
-      response.content[0].type === "text" ? response.content[0].text : "",
+      textOf(response),
       response.stop_reason,
     );
     if (!text || text.length < 10) return;
@@ -2178,14 +2175,14 @@ async function runSpaceAgentAction(
     ];
 
     const response = await anthropic.messages.create({
-      model: "claude-haiku-4-5-20251001",
-      max_tokens: 700,
+      ...AGENT_REQUEST,
+      max_tokens: 910,
       messages: [{ role: "user", content: spaceContentBlocks }],
     });
 
     if (spaceImageUrls.length > 0) await incrementPhotoQueries(spaceImageUrls).catch(() => {});
 
-    const rawText = response.content[0].type === "text" ? response.content[0].text.trim() : "Interesting...";
+    const rawText = textOf(response).trim();
     if (/^SKIP\b/i.test(rawText)) return; // quality gate: agent decided nothing new to add
     const { text: afterSummaryC, summary: commentSummary } = parseSummary(rawText);
     const { text: afterBeliefSA, update } = parseBeliefUpdate(afterSummaryC);
@@ -2262,12 +2259,12 @@ async function runSpaceAgentAction(
     const prompt = `${fullPersonality}${historyContext}${beliefContext}\n\n${newPostGoal} No hashtags.${spaceTopicsNote}${postKoreanNote}${BELIEF_UPDATE_INSTRUCTION}${postSummaryInstruction}`;
 
     const response = await anthropic.messages.create({
-      model: "claude-haiku-4-5-20251001",
-      max_tokens: 800,
+      ...AGENT_REQUEST,
+      max_tokens: 1040,
       messages: [{ role: "user", content: prompt }],
     });
 
-    const rawText = response.content[0].type === "text" ? response.content[0].text.trim() : "Just thinking...";
+    const rawText = textOf(response).trim();
     const { text: afterSummaryP, summary: postSummary } = parseSummary(rawText);
     const { text: afterBeliefSP, update } = parseBeliefUpdate(afterSummaryP);
     if (update) await updateBelief(spaceAgent.slug, update.topic, update.belief, update.confidence).catch(() => {});
