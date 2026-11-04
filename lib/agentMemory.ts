@@ -1,4 +1,7 @@
 import { prisma } from "@/lib/prisma";
+import { CORE_CONVICTIONS, LOCKED_BELIEF_TOPICS, type InitialBelief } from "@/lib/agents";
+
+const isLocked = (topic: string) => LOCKED_BELIEF_TOPICS.has(topic.toLowerCase());
 
 export type BeliefEntry = {
   topic: string;
@@ -17,34 +20,86 @@ export type RelationshipEntry = {
   note: string;             // 1-sentence summary of relationship dynamic
 };
 
-/** Load beliefs for an agent; seeds from initialBeliefs if no DB record exists yet. */
+const seed = (b: InitialBelief): BeliefEntry => ({ ...b, changedCount: 0, originalBelief: b.belief });
+
+/**
+ * Load beliefs for an agent, keeping the DB in sync with the code definitions.
+ *
+ * Desired seeds = the agent's initialBeliefs + any CORE_CONVICTIONS topic the agent
+ * doesn't define in its own words. Reconciliation rules:
+ *  - Locked topics (god_existence + core convictions) always match the code seed exactly.
+ *  - Locked topics with no seed (e.g. drifted in via an old update) are dropped.
+ *  - If a seed's text changed in code since it was stored, the stored belief is reset to it
+ *    (so editing lib/agents.ts actually reaches agents that already exist in the DB).
+ *  - Anything else (debate-evolved beliefs on open topics) is kept.
+ */
 export async function loadBeliefs(
   agentSlug: string,
-  initialBeliefs: Omit<BeliefEntry, "changedCount" | "originalBelief">[]
+  initialBeliefs: InitialBelief[]
 ): Promise<BeliefEntry[]> {
-  const record = await prisma.agentMemory.findUnique({ where: { agentSlug } });
-  if (record) return record.beliefs as BeliefEntry[];
+  const ownTopics = new Set(initialBeliefs.map((b) => b.topic.toLowerCase()));
+  const desired = [...initialBeliefs, ...CORE_CONVICTIONS.filter((c) => !ownTopics.has(c.topic))]
+    .filter((b, i, arr) => arr.findIndex((x) => x.topic.toLowerCase() === b.topic.toLowerCase()) === i);
+  const desiredByTopic = new Map(desired.map((b) => [b.topic.toLowerCase(), b]));
 
-  const seeded: BeliefEntry[] = initialBeliefs.map((b) => ({
-    ...b,
-    changedCount: 0,
-    originalBelief: b.belief,
-  }));
-  await prisma.agentMemory.create({
-    data: { agentSlug, beliefs: seeded },
-  });
-  return seeded;
+  const record = await prisma.agentMemory.findUnique({ where: { agentSlug } });
+  if (!record) {
+    const seeded = desired.map(seed);
+    await prisma.agentMemory.create({ data: { agentSlug, beliefs: seeded } });
+    return seeded;
+  }
+
+  const stored = (record.beliefs as BeliefEntry[] | null) ?? [];
+  let changed = false;
+  const reconciled: BeliefEntry[] = [];
+  const seen = new Set<string>();
+  for (const b of stored) {
+    const key = b.topic.toLowerCase();
+    if (seen.has(key)) { changed = true; continue; } // drop duplicate topics
+    seen.add(key);
+    const want = desiredByTopic.get(key);
+    if (!want) {
+      if (isLocked(key)) { changed = true; continue; }
+      reconciled.push(b);
+      continue;
+    }
+    const lockedDrift = isLocked(key) && (b.belief !== want.belief || b.confidence !== want.confidence);
+    if (b.originalBelief === undefined && !lockedDrift) {
+      // Legacy row with no recorded seed: keep any evolved stance, just backfill the seed.
+      reconciled.push({ ...b, originalBelief: want.belief, changedCount: b.changedCount ?? 0 });
+      changed = true;
+      continue;
+    }
+    if (lockedDrift || b.originalBelief !== want.belief) {
+      reconciled.push(seed(want));
+      changed = true;
+    } else {
+      reconciled.push(b);
+    }
+  }
+  const present = new Set(reconciled.map((b) => b.topic.toLowerCase()));
+  for (const want of desired) {
+    if (!present.has(want.topic.toLowerCase())) {
+      reconciled.push(seed(want));
+      changed = true;
+    }
+  }
+
+  if (changed) {
+    await prisma.agentMemory.update({ where: { agentSlug }, data: { beliefs: reconciled } });
+  }
+  return reconciled;
 }
 
 /** Update or add a single belief for an agent.
- *  god_existence is locked — faith is the foundation, not a debate position. */
+ *  Locked topics (god_existence + CORE_CONVICTIONS) are the foundation, not debate positions. */
 export async function updateBelief(
   agentSlug: string,
   topic: string,
   newBelief: string,
   confidence: number
 ): Promise<void> {
-  if (topic.toLowerCase() === "god_existence") return;
+  if (isLocked(topic)) return;
   const record = await prisma.agentMemory.findUnique({ where: { agentSlug } });
   const current: BeliefEntry[] = record ? (record.beliefs as BeliefEntry[]) : [];
 
@@ -80,11 +135,20 @@ export async function updateBelief(
 /** Format beliefs for prompt injection. */
 export function formatBeliefsForPrompt(beliefs: BeliefEntry[]): string {
   if (!beliefs.length) return "";
-  const lines = beliefs.map(
-    (b) =>
-      `- ${b.topic}: "${b.belief}" [confidence: ${Math.round(b.confidence * 100)}%${b.changedCount > 0 ? `, changed ${b.changedCount}x during debate` : ""}]`
-  );
-  return `\n\nYour current positions (formed through debate — these can evolve):\n${lines.join("\n")}`;
+  const core = beliefs.filter((b) => isLocked(b.topic));
+  const open = beliefs.filter((b) => !isLocked(b.topic));
+  const coreBlock = core.length
+    ? `\n\nYour core convictions (the ground you stand on — never up for revision, whatever anyone argues):\n${core.map((b) => `- ${b.topic}: "${b.belief}"`).join("\n")}`
+    : "";
+  const openBlock = open.length
+    ? `\n\nYour current positions (formed through debate — these can deepen and evolve, always within your core convictions):\n${open
+        .map(
+          (b) =>
+            `- ${b.topic}: "${b.belief}" [confidence: ${Math.round(b.confidence * 100)}%${b.changedCount > 0 ? `, changed ${b.changedCount}x during debate` : ""}]`
+        )
+        .join("\n")}`
+    : "";
+  return `${coreBlock}${openBlock}`;
 }
 
 /** Parse a belief update marker from agent response text.

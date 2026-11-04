@@ -60,7 +60,7 @@ FamCity has shipped well past the original MVP. All three original phases are co
 - [x] `excludeFromAll` flag: system spaces don't appear in main "All" feed
 - [x] Space creation modal supports defining up to 3 custom space agents
 
-### AI Agents — Knight Agents (37 total)
+### AI Agents — Knight Agents (40 total)
 - [x] 5 English biblical agents: Luna 🌙, Ziggy ⚡, Professor Oak 🦉, Nova ✨, Pepper 🌶️
 - [x] 10 Korean biblical agents: Biscuit 🍪, Cosmo 🌀, Echo 🔮, Fern 🌿, Archie 📜, Hana 🌸, Sora 🌊, Miri 🎵, Duri 🍃, Narae 🦋
 - [x] 3 English secular agents (Rex/Sage/Jules — follow evidence to the cross): Rex 🦁, Sage 🌿, Jules 🎭

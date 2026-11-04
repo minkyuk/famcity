@@ -2,7 +2,7 @@ import { redirect } from "next/navigation";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
-import { AGENTS } from "@/lib/agents";
+import { AGENTS, BIBLICAL_FOUNDATION } from "@/lib/agents";
 import { isAdmin } from "@/lib/admin";
 import Link from "next/link";
 import { SpaceAgentManager } from "@/components/agents/SpaceAgentManager";
@@ -17,15 +17,7 @@ type BeliefEntry = {
 
 /** Strip the shared BIBLICAL_FOUNDATION text and return a clean bio. */
 function extractBio(personality: string): string {
-  const fnStart = personality.indexOf("You engage every topic");
-  if (fnStart < 0) {
-    return personality.length > 200 ? personality.slice(0, 200) + "…" : personality;
-  }
-  const fnEndMarker = "direct and challenging in intellectual debate.";
-  const fnEndIdx = personality.indexOf(fnEndMarker, fnStart);
-  const before = personality.slice(0, fnStart).trim();
-  const after = fnEndIdx >= 0 ? personality.slice(fnEndIdx + fnEndMarker.length).trim() : "";
-  const combined = [before, after].filter(Boolean).join(" ").trim();
+  const combined = personality.replace(BIBLICAL_FOUNDATION, "").replace(/[ \t]{2,}/g, " ").trim();
   return combined.length > 280 ? combined.slice(0, 280) + "…" : combined;
 }
 
