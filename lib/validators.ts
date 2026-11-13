@@ -16,3 +16,8 @@ export const CreateCommentSchema = z.object({
 
 export type CreatePostInput = z.infer<typeof CreatePostSchema>;
 export type CreateCommentInput = z.infer<typeof CreateCommentSchema>;
+
+/** GET /api/admin/agents/status query: `?ping=1` also runs a live 1-token API check. */
+export const AgentStatusQuerySchema = z.object({
+  ping: z.enum(["0", "1", "true", "false"]).optional().transform((v) => v === "1" || v === "true"),
+});

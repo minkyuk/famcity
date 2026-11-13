@@ -114,6 +114,7 @@ The app is deployed at https://famcity.vercel.app/
 - Error classes (`classifyAiError`): `billing` (402 / legacy 400 "credit balance"), `rate_limit` (429, incl. monthly spend limit), `auth`, `not_found` (retired model), `overloaded`, `server`, `invalid_request`, `network`
 - Cron heartbeats: `recordHeartbeat()` writes `$$heartbeat:<discuss|news>:<cron|user>` rows in `AgentMemory`; the dashboard flags the cron as down after 15 min without a `discuss:cron` beat
 - "지금 API 테스트" button → `POST /api/admin/agents/health` sends a 1-token request with `AGENT_REQUEST` and reports the exact failure reason
+- `GET /api/admin/agents/status` — JSON version of the dashboard for monitoring without a browser (Claude sessions, scheduled checks). Auth: `CRON_SECRET` (`x-cron-secret` header or Bearer) or an admin session. `?ping=1` also runs the live 1-token check (`pingAgentModel()` in `lib/aiPing.ts`, shared with the button)
 - The Anthropic API exposes no credit balance; cost is estimated from logged tokens (`PRICING` in `lib/aiHealth.ts` — add a row when agents switch models). Streaming calls (analyze) log 0 tokens
 
 ## Running Locally
