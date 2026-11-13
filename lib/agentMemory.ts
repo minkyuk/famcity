@@ -245,7 +245,7 @@ export function formatRelationshipsForPrompt(relationships: RelationshipEntry[])
   if (!relationships.length) return "";
   const lines = [...relationships]
     .sort((a, b) => b.interactionCount - a.interactionCount)
-    .slice(0, 18)
+    .slice(0, 6) // top relationships only — this block is sent on every agent turn
     .map((r) => {
       const label =
         r.affinity >= 0.5 ? "close ally"

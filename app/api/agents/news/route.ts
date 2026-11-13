@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
-import { AGENT_REQUEST, createAnthropic, textOf } from "@/lib/anthropic";
+import { AGENT_REQUEST, anthropicFor, textOf } from "@/lib/anthropic";
 import { recordHeartbeat } from "@/lib/aiCallLog";
 import { prisma } from "@/lib/prisma";
 import { AGENTS, agentAvatarUrl, FAITH_GUARDRAIL } from "@/lib/agents";
@@ -10,7 +10,6 @@ import { isCronAuthorized } from "@/lib/cronAuth";
 import { authOptions } from "@/lib/auth";
 import { finalizeAgentText } from "@/lib/agentText";
 
-const anthropic = createAnthropic("news");
 
 async function getOrCreateNewsSpace(): Promise<string> {
   const existing = await prisma.space.findFirst({
@@ -140,8 +139,8 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ ok: true, posted: 0, reason: "no_new_stories" });
   }
 
-  // --- Voting round: 8 random agents each pick their top 2 stories ---
-  const VOTER_COUNT = Math.min(8, AGENTS.length);
+  // --- Voting round: 4 random agents each pick their top 2 stories ---
+  const VOTER_COUNT = Math.min(4, AGENTS.length);
   const voterIndices = new Set<number>();
   while (voterIndices.size < VOTER_COUNT) {
     voterIndices.add(Math.floor(Math.random() * AGENTS.length));
@@ -161,7 +160,7 @@ export async function POST(req: NextRequest) {
 
   const votingResults = await Promise.allSettled(
     voters.map(async (agent): Promise<VoteResult> => {
-      const msg = await anthropic.messages.create({
+      const msg = await anthropicFor("news:vote").messages.create({
         ...AGENT_REQUEST,
         max_tokens: 390,
         messages: [{
@@ -290,7 +289,7 @@ Respond ONLY with valid JSON, no other text:
     try {
       // Run poster paragraphs, both debate perspectives, and Korean version in parallel
       const [mainMsg, debateMsg1, debateMsg2, koreanMsg] = await Promise.all([
-        anthropic.messages.create({
+        anthropicFor("news:report").messages.create({
           ...AGENT_REQUEST,
           max_tokens: 780,
           messages: [{
@@ -315,7 +314,7 @@ No hashtags. Do not start with "I". Do not repeat the headline verbatim. No aste
           }],
         }),
 
-        anthropic.messages.create({
+        anthropicFor("news:debate").messages.create({
           ...AGENT_REQUEST,
           max_tokens: 290,
           messages: [{
@@ -329,7 +328,7 @@ Give your honest read on this story from your own worldview. What do you see as 
           }],
         }),
 
-        anthropic.messages.create({
+        anthropicFor("news:debate").messages.create({
           ...AGENT_REQUEST,
           max_tokens: 290,
           messages: [{
@@ -344,7 +343,7 @@ What's your perspective on this story through your own lens and values? What wou
         }),
 
         // Korean version — same agent, same source, written fresh in Korean
-        anthropic.messages.create({
+        anthropicFor("news:reportKorean").messages.create({
           ...AGENT_REQUEST,
           max_tokens: 650,
           messages: [{
@@ -458,7 +457,7 @@ What's your perspective on this story through your own lens and values? What wou
       const krAvatar = agentAvatarUrl(krAgent.slug);
       const krSource = feedSourceName(pick.url);
 
-      const krMsg = await anthropic.messages.create({
+      const krMsg = await anthropicFor("news:koreanFeed").messages.create({
         ...AGENT_REQUEST,
         max_tokens: 650,
         messages: [{
