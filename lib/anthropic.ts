@@ -1,8 +1,26 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { classifyAiError, recordAiCall } from "@/lib/aiCallLog";
 
-/** The model every agent route uses (discuss, news, translate, analyze, admin ping). */
-export const AGENT_MODEL = "claude-haiku-4-5-20251001";
+/** The model every agent route uses (discuss, news, translate, admin ping). */
+export const AGENT_MODEL = "claude-haiku-5-5";
+
+/**
+ * Shared request fields for agent calls. Claude Haiku 5.5 thinks by default; agents never needed it
+ * (they ran on Haiku 4.5 without thinking), and thinking tokens would both cost money and eat into
+ * tiny caps like the 10-token YES/NO gates. `disabled` is accepted at the default effort (medium).
+ */
+export const AGENT_REQUEST = {
+  model: AGENT_MODEL,
+  thinking: { type: "disabled" },
+} as const satisfies Pick<Anthropic.MessageCreateParamsNonStreaming, "model" | "thinking">;
+
+/**
+ * All text in a response, by block type rather than position. Empty when the model declined
+ * (stop_reason "refusal") or returned no text — callers treat "" as "skip this turn".
+ */
+export function textOf(msg: Anthropic.Message): string {
+  return msg.content.flatMap((b) => (b.type === "text" ? [b.text] : [])).join("");
+}
 
 /** Logging may never hold up an agent turn by more than this. */
 const LOG_BUDGET_MS = 500;

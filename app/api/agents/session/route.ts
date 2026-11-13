@@ -4,6 +4,7 @@ import { authOptions } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { isCronAuthorized } from "@/lib/cronAuth";
 import { isAdmin } from "@/lib/admin";
+import { HOT_SESSION_MINUTES, hotSessionRemainingMs } from "@/lib/agentModes";
 
 const SESSION_SLUG = "$$session";
 
@@ -18,16 +19,13 @@ export async function GET(req: NextRequest) {
     const record = await prisma.agentMemory.findUnique({ where: { agentSlug: SESSION_SLUG } });
     if (!record) return NextResponse.json({ active: false });
 
-    const data = record.beliefs as { startedAt?: string; durationMinutes?: number };
-    if (!data?.startedAt) return NextResponse.json({ active: false });
-
-    const startedAt = new Date(data.startedAt);
-    const durationMs = (data.durationMinutes ?? 60) * 60 * 1000;
-    const elapsed = Date.now() - startedAt.getTime();
-    const active = elapsed < durationMs;
-    const remainingMinutes = active ? Math.ceil((durationMs - elapsed) / 60_000) : 0;
-
-    return NextResponse.json({ active, startedAt: data.startedAt, remainingMinutes });
+    const remainingMs = hotSessionRemainingMs(record.beliefs);
+    const data = record.beliefs as { startedAt?: string }; // only used to echo startedAt back
+    return NextResponse.json({
+      active: remainingMs > 0,
+      startedAt: data?.startedAt,
+      remainingMinutes: Math.ceil(remainingMs / 60_000),
+    });
   } catch {
     return NextResponse.json({ active: false });
   }
@@ -35,7 +33,7 @@ export async function GET(req: NextRequest) {
 
 const FIRE_COST = 1000;
 
-/** POST — start a 25-min discussion session */
+/** POST — start a hot session (fixed HOT_SESSION_MINUTES for everyone; no longer configurable via ?minutes=) */
 export async function POST(req: NextRequest) {
   const authSession = await getServerSession(authOptions);
   if (!isCronAuthorized(req)) {
@@ -44,8 +42,7 @@ export async function POST(req: NextRequest) {
 
   const admin = authSession ? isAdmin(authSession) : false;
 
-  const url = new URL(req.url);
-  const durationMinutes = Math.min(parseInt(url.searchParams.get("minutes") ?? "25", 10) || 25, 180);
+  const durationMinutes = HOT_SESSION_MINUTES;
 
   const startedAt = new Date().toISOString();
   const sessionPayload = { startedAt, durationMinutes };

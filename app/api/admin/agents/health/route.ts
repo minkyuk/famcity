@@ -3,7 +3,7 @@ import Anthropic from "@anthropic-ai/sdk";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { isAdmin } from "@/lib/admin";
-import { AGENT_MODEL, createAnthropic } from "@/lib/anthropic";
+import { AGENT_MODEL, AGENT_REQUEST, createAnthropic } from "@/lib/anthropic";
 import { classifyAiError } from "@/lib/aiCallLog";
 
 const anthropic = createAnthropic("admin-ping");
@@ -20,7 +20,7 @@ export async function POST() {
   const started = Date.now();
   try {
     await anthropic.messages.create(
-      { model: AGENT_MODEL, max_tokens: 1, messages: [{ role: "user", content: "ping" }] },
+      { ...AGENT_REQUEST, max_tokens: 1, messages: [{ role: "user", content: "ping" }] },
       { maxRetries: 0 }
     );
     return NextResponse.json({ ok: true, model: AGENT_MODEL, ms: Date.now() - started });

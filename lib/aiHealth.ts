@@ -2,8 +2,10 @@ import { prisma } from "@/lib/prisma";
 import { AGENTS } from "@/lib/agents";
 import { ensureAiCallLogTable, pruneAiCallLog, readHeartbeat, type AiErrorType } from "@/lib/aiCallLog";
 
-/** USD per million tokens. Source: Anthropic pricing (Haiku 4.5: $1 in / $5 out; cache read 0.1×, write 1.25× of input). */
+/** USD per million tokens (cache read 0.1×, 5-min cache write 1.25× of input).
+ *  Haiku 5.5 is $0.10/$0.50 for prompts ≤100K tokens (agent prompts are far below that). */
 const PRICING: Record<string, { input: number; output: number; cacheRead: number; cacheWrite: number }> = {
+  "claude-haiku-5-5": { input: 0.1, output: 0.5, cacheRead: 0.01, cacheWrite: 0.125 },
   "claude-haiku-4-5": { input: 1, output: 5, cacheRead: 0.1, cacheWrite: 1.25 },
 };
 function priceFor(model: string | null) {
