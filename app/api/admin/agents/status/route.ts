@@ -5,6 +5,7 @@ import { isAdmin } from "@/lib/admin";
 import { isCronAuthorized } from "@/lib/cronAuth";
 import { loadAiHealth } from "@/lib/aiHealth";
 import { pingAgentModel } from "@/lib/aiPing";
+import { loadDailyActivity } from "@/lib/activityHistory";
 import { AgentStatusQuerySchema } from "@/lib/validators";
 
 /**
@@ -21,9 +22,10 @@ export async function GET(req: NextRequest) {
   const parsed = AgentStatusQuerySchema.safeParse({ ping: req.nextUrl.searchParams.get("ping") ?? undefined });
   if (!parsed.success) return NextResponse.json({ error: "Invalid query" }, { status: 400 });
 
-  const [health, ping] = await Promise.all([
+  const [health, ping, dailyActivity] = await Promise.all([
     loadAiHealth(),
     parsed.data.ping ? pingAgentModel() : Promise.resolve(null),
+    loadDailyActivity().catch(() => []),
   ]);
-  return NextResponse.json({ checkedAt: new Date().toISOString(), ping, health });
+  return NextResponse.json({ checkedAt: new Date().toISOString(), ping, health, dailyActivity });
 }

@@ -9,6 +9,8 @@ import { StatTile } from "@/components/Admin/StatTile";
 import { HourlyCallsChart } from "@/components/Admin/HourlyCallsChart";
 import { AiPingButton } from "@/components/Admin/AiPingButton";
 import { TokenBreakdownTable } from "@/components/Admin/TokenBreakdownTable";
+import { DailyActivityTable } from "@/components/Admin/DailyActivityTable";
+import { loadDailyActivity } from "@/lib/activityHistory";
 
 export const dynamic = "force-dynamic";
 
@@ -31,7 +33,7 @@ export default async function AdminAgentHealthPage() {
   const session = await getServerSession(authOptions);
   if (!isAdmin(session)) redirect("/");
 
-  const h = await loadAiHealth();
+  const [h, history] = await Promise.all([loadAiHealth(), loadDailyActivity().catch(() => [])]);
   const now = Date.now();
 
   return (
@@ -70,6 +72,8 @@ export default async function AdminAgentHealthPage() {
       </div>
 
       <TokenBreakdownTable rows={h.byRoute} />
+
+      <DailyActivityTable days={history} />
 
       <div className="grid gap-3 sm:grid-cols-3">
         <StatTile label="크론: 에이전트 (5분마다)" value={timeAgoKo(h.cronDiscussAt, now)} />
