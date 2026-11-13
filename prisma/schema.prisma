@@ -425,3 +425,25 @@ enum RSVPStatus {
   NO
   MAYBE
 }
+
+/// One row per Anthropic Messages API request (every attempt, including SDK retries).
+/// Written by the tracked fetch in lib/anthropic.ts; read by the admin dashboard at /admin/agents.
+/// The table is also auto-created by lib/aiCallLog.ts (CREATE TABLE IF NOT EXISTS) so a deploy
+/// works before `prisma db push` has been run — the DDL there must match this model exactly.
+model AiCallLog {
+  id               String   @id @default(cuid())
+  createdAt        DateTime @default(now())
+  route            String
+  model            String?
+  ok               Boolean
+  status           Int?
+  errorType        String?
+  errorMessage     String?
+  inputTokens      Int      @default(0)
+  outputTokens     Int      @default(0)
+  cacheReadTokens  Int      @default(0)
+  cacheWriteTokens Int      @default(0)
+  durationMs       Int      @default(0)
+
+  @@index([createdAt])
+}

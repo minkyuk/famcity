@@ -74,6 +74,15 @@ export function UserMenu({ isAdmin = false }: { isAdmin?: boolean }) {
             </Link>
             {isAdmin && (
               <Link
+                href="/admin/agents"
+                onClick={() => setOpen(false)}
+                className="block w-full text-left px-4 py-2 text-sm text-gray-600 hover:bg-gray-50 transition-colors"
+              >
+                에이전트 AI 상태
+              </Link>
+            )}
+            {isAdmin && (
+              <Link
                 href="/admin/agent-tokens"
                 onClick={() => setOpen(false)}
                 className="block w-full text-left px-4 py-2 text-sm text-gray-600 hover:bg-gray-50 transition-colors"
