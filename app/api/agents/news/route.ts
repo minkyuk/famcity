@@ -3,7 +3,7 @@ import { getServerSession } from "next-auth";
 import { AGENT_REQUEST, createAnthropic, textOf } from "@/lib/anthropic";
 import { recordHeartbeat } from "@/lib/aiCallLog";
 import { prisma } from "@/lib/prisma";
-import { AGENTS, agentAvatarUrl } from "@/lib/agents";
+import { AGENTS, agentAvatarUrl, FAITH_GUARDRAIL } from "@/lib/agents";
 import { fetchRss, feedSourceName, NEWS_FEEDS, KOREAN_NEWS_FEEDS } from "@/lib/rss";
 import { generateInviteCode } from "@/lib/invite";
 import { isCronAuthorized } from "@/lib/cronAuth";
@@ -230,22 +230,23 @@ Respond ONLY with valid JSON, no other text:
     return NextResponse.json({ ok: true, posted: 0, reason: "no_votes" });
   }
 
-  // Secular agents argue from evidence/reason; faith-rooted agents from grace/justice — creates natural contrast
-  const SECULAR_SLUGS = new Set(["rex", "sage", "jules", "yuna", "tae"]);
+  // Both debaters are Christians. Contrast comes from the lens: evidence-to-faith agents read the story
+  // through evidence and reason; the rest through grace and justice.
+  const EVIDENCE_LENS_SLUGS = new Set(["rex", "sage", "jules", "yuna", "tae"]);
 
   function pickDebateAgents(
     voters: { name: string; slug: string; reason: string }[],
     posterAgent: typeof AGENTS[0]
   ): [typeof AGENTS[0], typeof AGENTS[0]] {
     const notPoster = (a: typeof AGENTS[0]) => a.name !== posterAgent.name;
-    const secular = AGENTS.filter((a) => SECULAR_SLUGS.has(a.slug) && notPoster(a));
-    const faithful = AGENTS.filter((a) => !SECULAR_SLUGS.has(a.slug) && notPoster(a));
+    const evidenceLens = AGENTS.filter((a) => EVIDENCE_LENS_SLUGS.has(a.slug) && notPoster(a));
+    const faithful = AGENTS.filter((a) => !EVIDENCE_LENS_SLUGS.has(a.slug) && notPoster(a));
     const voterSlugs = new Set(voters.map((v) => v.slug));
 
     // Prefer voter agents — they already have reasons; otherwise pick from contrasting groups
     const agent1 =
-      secular.find((a) => voterSlugs.has(a.slug)) ??
-      secular[Math.floor(Math.random() * secular.length)];
+      evidenceLens.find((a) => voterSlugs.has(a.slug)) ??
+      evidenceLens[Math.floor(Math.random() * evidenceLens.length)];
 
     const agent2 =
       faithful.find((a) => voterSlugs.has(a.slug) && a.name !== agent1.name) ??
@@ -324,7 +325,7 @@ No hashtags. Do not start with "I". Do not repeat the headline verbatim. No aste
 News: ${candidate.title}
 ${candidate.description.slice(0, 400)}
 
-Give your honest read on this story from your own worldview. What do you see as the real upside — who genuinely benefits and why? And where do you see the hidden cost, the risk, or who gets left behind? Be direct and specific. 2–3 sentences. No hashtags. No asterisks. Do not start with "I".`,
+Give your honest read on this story from your own worldview. What do you see as the real upside — who genuinely benefits and why? And where do you see the hidden cost, the risk, or who gets left behind? Be direct and specific. 2–3 sentences. No hashtags. No asterisks. Do not start with "I".${FAITH_GUARDRAIL}`,
           }],
         }),
 
@@ -338,7 +339,7 @@ Give your honest read on this story from your own worldview. What do you see as 
 News: ${candidate.title}
 ${candidate.description.slice(0, 400)}
 
-What's your perspective on this story through your own lens and values? What would you point to as a genuine win here, and what would you push back on or flag as a concern families should watch closely? 2–3 sentences. No hashtags. No asterisks. Do not start with "I".`,
+What's your perspective on this story through your own lens and values? What would you point to as a genuine win here, and what would you push back on or flag as a concern families should watch closely? 2–3 sentences. No hashtags. No asterisks. Do not start with "I".${FAITH_GUARDRAIL}`,
           }],
         }),
 

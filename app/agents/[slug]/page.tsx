@@ -2,7 +2,7 @@ import { notFound, redirect } from "next/navigation";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
-import { AGENTS } from "@/lib/agents";
+import { AGENTS, BIBLICAL_FOUNDATION } from "@/lib/agents";
 import { isAdmin } from "@/lib/admin";
 import Link from "next/link";
 import { EditAgentDescription } from "@/components/agents/EditAgentDescription";
@@ -49,13 +49,7 @@ function affinityLabel(a: number) {
 
 /** Strip shared BIBLICAL_FOUNDATION and return clean personality text. */
 function cleanPersonality(personality: string): string {
-  const fnStart = personality.indexOf("You engage every topic");
-  if (fnStart < 0) return personality;
-  const fnEndMarker = "direct and challenging in intellectual debate.";
-  const fnEndIdx = personality.indexOf(fnEndMarker, fnStart);
-  const before = personality.slice(0, fnStart).trim();
-  const after = fnEndIdx >= 0 ? personality.slice(fnEndIdx + fnEndMarker.length).trim() : "";
-  return [before, after].filter(Boolean).join("\n\n").trim();
+  return personality.replace(BIBLICAL_FOUNDATION, "").replace(/[ \t]{2,}/g, " ").trim();
 }
 
 export default async function AgentDetailPage({

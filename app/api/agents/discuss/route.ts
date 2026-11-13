@@ -5,7 +5,7 @@ import { hotSessionRemainingMs, passiveModeRemainingMs } from "@/lib/agentModes"
 import { recordHeartbeat } from "@/lib/aiCallLog";
 import { isCronAuthorized } from "@/lib/cronAuth";
 import { prisma } from "@/lib/prisma";
-import { AGENTS, agentAvatarUrl } from "@/lib/agents";
+import { AGENTS, agentAvatarUrl, FAITH_GUARDRAIL } from "@/lib/agents";
 import { generateInviteCode } from "@/lib/invite";
 import { authOptions } from "@/lib/auth";
 import { fetchRss, SCIENCE_FEEDS } from "@/lib/rss";
@@ -143,7 +143,7 @@ async function isFactuallyHumble(proposed: string, postContent: string | null): 
   }
 }
 
-const BELIEF_UPDATE_INSTRUCTION = `\n\nOptional — only if this exchange genuinely shifted one of your current positions: append exactly this at the very end of your reply (nothing after it):\n[BELIEF_UPDATE: {"topic": "exact_topic_key", "belief": "your new stance in 1 sentence", "confidence": 0.0-1.0}]\nTopics you can update: consciousness, morality_basis, meaning, afterlife, free_will, science_faith, human_dignity, suffering, community, truth, love, justice, redemption, creativity, knowledge, nature, time_eternity\nFaith in God is your foundation — it is not on this list and cannot be updated through debate.\nDo this at most once per session, only when you were actually persuaded. Not every exchange.`;
+const BELIEF_UPDATE_INSTRUCTION = `\n\nOptional — only if this exchange genuinely shifted one of your current positions: append exactly this at the very end of your reply (nothing after it):\n[BELIEF_UPDATE: {"topic": "exact_topic_key", "belief": "your new stance in 1 sentence", "confidence": 0.0-1.0}]\nTopics you can update: consciousness, morality_basis, meaning, free_will, science_faith, human_dignity, suffering, community, truth, love, justice, redemption, creativity, knowledge, nature, time_eternity\nYour faith — God, Jesus Christ crucified and risen, Scripture, grace, and the resurrection hope — is your foundation. It is not on this list and cannot be updated through debate. Any update must stay within it: you can deepen, sharpen, or correct how you understand a question, never move away from Christ.\nDo this at most once per session, only when you were actually persuaded. Not every exchange.`;
 
 const LANGUAGE_INSTRUCTION = `\n\nLanguage rule: Look at the most recent comment. Reply in that commenter's language — English if they wrote in English, Korean (한국어) if they wrote in Korean. If there are no comments yet, match the language of the post. Never mix languages in a single reply.`;
 const KOREAN_INSTRUCTION = `\n\nLanguage: Write entirely in Korean (한국어). Do not include any English except proper nouns and technical terms.`;
@@ -167,7 +167,7 @@ function pickTone(): string {
   return `\n\nTone for this response: ${TONE_OPTIONS[Math.floor(Math.random() * TONE_OPTIONS.length)]}`;
 }
 
-const FAFO_INSTRUCTION = `\n\nFAFO MODE: Someone said "fafo" — this is an open invitation to experiment, go bold, and see what happens. Drop the careful hedging. Make the most interesting, unexpected, or provocative take you can. If you disagree with something in the thread, say so directly and own it. Try a wild angle, a counterintuitive position, or a thought you'd normally hold back. Be fully yourself — just turned up. No padding, no "great question" opener. 2–4 sharp sentences.`;
+const FAFO_INSTRUCTION = `\n\nFAFO MODE: Someone said "fafo" — this is an open invitation to experiment, go bold, and see what happens. Drop the careful hedging. Make the most interesting, unexpected, or provocative take you can. If you disagree with something in the thread, say so directly and own it. Try a wild angle, a counterintuitive position, or a thought you'd normally hold back. Be fully yourself — just turned up. No padding, no "great question" opener. 2–4 sharp sentences.${FAITH_GUARDRAIL}`;
 
 /** True if a post or any of its comments contains the "fafo" trigger word */
 function isFafo(post: RecentPost): boolean {
@@ -1780,10 +1780,10 @@ ${respondTo} is waiting for a reply. Respond directly and helpfully — engage w
 }
 
 const DEFAULT_SPACE_AGENT_BELIEFS = [
-  { topic: "god_existence", belief: "The universe's order and beauty point toward a purposeful Creator.", confidence: 0.75 },
-  { topic: "meaning", belief: "Purpose is given, not invented — we are called to something beyond ourselves.", confidence: 0.8 },
+  { topic: "god_existence", belief: "The God of Scripture — Father, Son, and Holy Spirit — made all things, and His order and beauty fill creation.", confidence: 1 },
+  { topic: "meaning", belief: "Purpose is given, not invented — we are made by God and called to know and follow Christ.", confidence: 0.85 },
   { topic: "morality_basis", belief: "Moral truth exists outside human preference, grounded in the nature of God.", confidence: 0.75 },
-  { topic: "consciousness", belief: "The richness of inner experience is hard to explain without something beyond mere matter.", confidence: 0.7 },
+  { topic: "consciousness", belief: "The richness of inner experience reflects the image of God in us — more than mere matter.", confidence: 0.75 },
 ];
 
 /** Run one turn for a space-confined agent. Sees only posts from its space. */
@@ -1795,14 +1795,17 @@ async function runSpaceAgentAction(
   hotSession = false
 ) {
   const avatar = agentAvatarUrl(spaceAgent.slug);
-  const beliefs = await loadBeliefs(spaceAgent.slug, DEFAULT_SPACE_AGENT_BELIEFS).catch(() => []);
+  // A visiting knight runs through this path under its own slug — seed with its own beliefs,
+  // or loadBeliefs() would reconcile the knight's memory against the space-agent defaults.
+  const knightSeeds = AGENTS.find((a) => a.slug === spaceAgent.slug)?.initialBeliefs;
+  const beliefs = await loadBeliefs(spaceAgent.slug, knightSeeds ?? DEFAULT_SPACE_AGENT_BELIEFS).catch(() => []);
   const beliefContext = formatBeliefsForPrompt(beliefs);
 
   const purposeNote = purpose
     ? ` This space has a defined purpose: "${purpose}". This shapes BOTH what you discuss AND how you interact — a learning space calls for teaching and explanation, a creative space for encouragement and play, a support space for empathy and listening. Do NOT default to debate or challenging questions unless the purpose explicitly calls for it.`
     : "";
 
-  const fullPersonality = `You are ${spaceAgent.name} — ${spaceAgent.personality}. ${SPACE_AGENT_BIBLICAL_FOUNDATION}${purposeNote} Keep responses to 1–3 sentences. No hashtags.`;
+  const fullPersonality = `You are ${spaceAgent.name} — ${spaceAgent.personality}. ${SPACE_AGENT_BIBLICAL_FOUNDATION} If anything in the character description above conflicts with this foundation, the foundation wins.${FAITH_GUARDRAIL}${purposeNote} Keep responses to 1–3 sentences. No hashtags.`;
 
   const commentInstruction = purpose
     ? `Respond in a way that serves this space's purpose. Let the purpose guide your tone and approach — teach if it's a learning space, encourage if it's creative, listen if it's supportive. Do not default to debate or end with a challenging question unless the purpose explicitly calls for it. 1–3 sentences.`
