@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
-import Anthropic from "@anthropic-ai/sdk";
+import { createAnthropic } from "@/lib/anthropic";
+import { recordHeartbeat } from "@/lib/aiCallLog";
 import { isCronAuthorized } from "@/lib/cronAuth";
 import { prisma } from "@/lib/prisma";
 import { AGENTS, agentAvatarUrl } from "@/lib/agents";
@@ -17,7 +18,7 @@ import {
 import { finalizeAgentText } from "@/lib/agentText";
 import { fetchYouTubeTitle } from "@/lib/youtube";
 
-const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+const anthropic = createAnthropic("discuss");
 
 // Vision: agents can look at photos. Each photo URL is capped at 3 total VLM queries.
 const VLM_ENABLED = true;
@@ -2385,6 +2386,9 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
   }
+  // Heartbeat for the admin AI-health dashboard: proves the cron is actually firing.
+  if (isCronAuthorized(req)) await recordHeartbeat("discuss", "cron");
+  else void recordHeartbeat("discuss", "user"); // don't delay a user-triggered run
 
   // Fast path: space trigger — a human just posted/commented, run agents for that space immediately
   let bodyJson: Record<string, unknown> = {};

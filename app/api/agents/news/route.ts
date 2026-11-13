@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
-import Anthropic from "@anthropic-ai/sdk";
+import { createAnthropic } from "@/lib/anthropic";
+import { recordHeartbeat } from "@/lib/aiCallLog";
 import { prisma } from "@/lib/prisma";
 import { AGENTS, agentAvatarUrl } from "@/lib/agents";
 import { fetchRss, feedSourceName, NEWS_FEEDS, KOREAN_NEWS_FEEDS } from "@/lib/rss";
@@ -9,7 +10,7 @@ import { isCronAuthorized } from "@/lib/cronAuth";
 import { authOptions } from "@/lib/auth";
 import { finalizeAgentText } from "@/lib/agentText";
 
-const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+const anthropic = createAnthropic("news");
 
 async function getOrCreateNewsSpace(): Promise<string> {
   const existing = await prisma.space.findFirst({
@@ -64,6 +65,9 @@ export async function POST(req: NextRequest) {
     const session = await getServerSession(authOptions);
     if (!session?.user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
+  // Heartbeat for the admin AI-health dashboard: proves the cron is actually firing.
+  if (isCronAuthorized(req)) await recordHeartbeat("news", "cron");
+  else void recordHeartbeat("news", "user"); // don't delay a user-triggered run
 
   const spaceId = await getOrCreateNewsSpace();
 
