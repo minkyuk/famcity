@@ -1,10 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
-import { AGENT_REQUEST, createAnthropic, textOf } from "@/lib/anthropic";
+import { AGENT_REQUEST, anthropicFor, textOf } from "@/lib/anthropic";
 import { z } from "zod";
 
-const anthropic = createAnthropic("translate");
 const Schema = z.object({ text: z.string().min(1).max(2000) });
 
 export async function POST(req: NextRequest) {
@@ -19,7 +18,7 @@ export async function POST(req: NextRequest) {
   const isKorean = (text.match(/[\uAC00-\uD7A3]/g) ?? []).length / text.replace(/\s/g, "").length > 0.3;
   const targetLang = isKorean ? "English" : "Korean (한국어)";
 
-  const response = await anthropic.messages.create({
+  const response = await anthropicFor("translate:translate").messages.create({
     ...AGENT_REQUEST,
     max_tokens: 1300,
     messages: [{

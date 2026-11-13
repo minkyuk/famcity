@@ -41,13 +41,15 @@ export type AiHealth = {
   userTriggerAt: Date | null;
   cronNewsAt: Date | null;
   tableError: string | null;
+  /** Token spend per code path ("discuss:runDirectTurn", "news:vote", ...), biggest first. */
+  byRoute: { route: string; calls: number; inputTokens: number; outputTokens: number; costUsd: number }[];
 };
 
 const HOUR = 60 * 60 * 1000;
 /** The discuss cron is scheduled every 5 minutes; three missed ticks means it isn't running. */
 const CRON_STALE_MS = 15 * 60 * 1000;
 /** Routes whose failures mean "agents can't talk". A one-off 400 from translate/analyze shouldn't turn the banner red. */
-const AGENT_ROUTES = ["discuss", "news", "admin-ping"];
+const AGENT_ROUTE_PREFIXES = ["discuss", "news", "admin-ping"];
 /** 529s are retried automatically; only flag them when nothing has succeeded for this long. */
 const OVERLOAD_ALERT_MS = 60 * 60 * 1000;
 
@@ -69,11 +71,14 @@ export async function loadAiHealth(): Promise<AiHealth> {
       prisma.aiCallLog
         .findMany({
           where: { createdAt: { gte: since } },
-          select: { createdAt: true, ok: true, errorType: true, model: true, inputTokens: true, outputTokens: true, cacheReadTokens: true, cacheWriteTokens: true },
+          select: { createdAt: true, route: true, ok: true, errorType: true, model: true, inputTokens: true, outputTokens: true, cacheReadTokens: true, cacheWriteTokens: true },
         })
         .catch(() => []),
       prisma.aiCallLog
-        .findFirst({ where: { route: { in: AGENT_ROUTES }, createdAt: { gte: since } }, orderBy: { createdAt: "desc" } })
+        .findFirst({
+          where: { OR: AGENT_ROUTE_PREFIXES.map((r) => ({ route: { startsWith: r } })), createdAt: { gte: since } },
+          orderBy: { createdAt: "desc" },
+        })
         .catch(() => null),
       prisma.aiCallLog.findFirst({ where: { ok: true }, orderBy: { createdAt: "desc" }, select: { createdAt: true } }).catch(() => null),
       prisma.aiCallLog.findMany({ where: { ok: false }, orderBy: { createdAt: "desc" }, take: 20 }).catch(() => []),
@@ -90,12 +95,20 @@ export async function loadAiHealth(): Promise<AiHealth> {
   const byType = new Map<string, number>();
   let inputTokens24h = 0, outputTokens24h = 0, costUsd24h = 0, unpricedCalls24h = 0, errors24h = 0;
 
+  const routeAgg = new Map<string, { calls: number; inputTokens: number; outputTokens: number; costUsd: number }>();
   for (const l of logs) {
     // Clamp both ends: clock skew between instances can put a row slightly in the future.
     const hoursAgo = Math.max(0, Math.min(23, Math.floor((now - l.createdAt.getTime()) / HOUR)));
     const bucket = hourly[23 - hoursAgo];
     if (l.ok) bucket.ok++; else { bucket.errors++; errors24h++; byType.set(l.errorType ?? "other", (byType.get(l.errorType ?? "other") ?? 0) + 1); }
     inputTokens24h += l.inputTokens;
+    const agg = routeAgg.get(l.route) ?? { calls: 0, inputTokens: 0, outputTokens: 0, costUsd: 0 };
+    agg.calls++;
+    agg.inputTokens += l.inputTokens;
+    agg.outputTokens += l.outputTokens;
+    const rp = priceFor(l.model);
+    if (rp) agg.costUsd += (l.inputTokens * rp.input + l.outputTokens * rp.output + l.cacheReadTokens * rp.cacheRead + l.cacheWriteTokens * rp.cacheWrite) / 1e6;
+    routeAgg.set(l.route, agg);
     outputTokens24h += l.outputTokens;
     const p = priceFor(l.model);
     if (p) {
@@ -139,5 +152,8 @@ export async function loadAiHealth(): Promise<AiHealth> {
     userTriggerAt,
     cronNewsAt,
     tableError,
+    byRoute: [...routeAgg.entries()]
+      .map(([route, a]) => ({ route, ...a }))
+      .sort((a, b) => b.inputTokens + b.outputTokens - (a.inputTokens + a.outputTokens)),
   };
 }

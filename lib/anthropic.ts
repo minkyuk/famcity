@@ -105,3 +105,18 @@ function trackedFetch(route: string): FetchFn {
 export function createAnthropic(route: string): Anthropic {
   return new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY, fetch: trackedFetch(route) });
 }
+
+const labeledClients = new Map<string, Anthropic>();
+
+/**
+ * Cached client whose calls are logged under a "route:purpose" label (e.g. "discuss:isNovel"),
+ * so the dashboard's token breakdown shows exactly which code path spends the tokens.
+ */
+export function anthropicFor(label: string): Anthropic {
+  let client = labeledClients.get(label);
+  if (!client) {
+    client = createAnthropic(label);
+    labeledClients.set(label, client);
+  }
+  return client;
+}

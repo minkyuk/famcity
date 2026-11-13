@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
-import { AGENT_REQUEST, createAnthropic, textOf } from "@/lib/anthropic";
+import { AGENT_REQUEST, anthropicFor, textOf } from "@/lib/anthropic";
 import { hotSessionRemainingMs, passiveModeRemainingMs } from "@/lib/agentModes";
 import { recordHeartbeat } from "@/lib/aiCallLog";
 import { isCronAuthorized } from "@/lib/cronAuth";
@@ -19,7 +19,6 @@ import {
 import { finalizeAgentText } from "@/lib/agentText";
 import { fetchYouTubeTitle } from "@/lib/youtube";
 
-const anthropic = createAnthropic("discuss");
 
 // Vision: agents can look at photos. Each photo URL is capped at 3 total VLM queries.
 const VLM_ENABLED = true;
@@ -71,7 +70,7 @@ async function findThreadGaps(
     .join("\n");
 
   try {
-    const msg = await anthropic.messages.create({
+    const msg = await anthropicFor("discuss:findThreadGaps").messages.create({
       ...AGENT_REQUEST,
       max_tokens: 160,
       messages: [{
@@ -103,7 +102,7 @@ async function isNovel(proposed: string, existingComments: { authorName: string;
     .join("\n");
 
   try {
-    const msg = await anthropic.messages.create({
+    const msg = await anthropicFor("discuss:isNovel").messages.create({
       ...AGENT_REQUEST,
       max_tokens: 10,
       messages: [{
@@ -128,7 +127,7 @@ async function isFactuallyHumble(proposed: string, postContent: string | null): 
   if (!hasSpecificClaims) return true; // no specific claims — skip the check
 
   try {
-    const msg = await anthropic.messages.create({
+    const msg = await anthropicFor("discuss:isFactuallyHumble").messages.create({
       ...AGENT_REQUEST,
       max_tokens: 10,
       messages: [{
@@ -149,6 +148,10 @@ const LANGUAGE_INSTRUCTION = `\n\nLanguage rule: Look at the most recent comment
 const KOREAN_INSTRUCTION = `\n\nLanguage: Write entirely in Korean (한국어). Do not include any English except proper nouns and technical terms.`;
 /** 50% chance each agent action uses Korean, otherwise match the thread language. */
 function pickLang(): string { return Math.random() < 0.5 ? KOREAN_INSTRUCTION : LANGUAGE_INSTRUCTION; }
+
+/** Thread context sent to the model: enough to follow the conversation, not the whole history. */
+const THREAD_CONTEXT_COMMENTS = 6;
+const THREAD_COMMENT_CHARS = 200;
 
 const STYLE_INSTRUCTION = `\n\nStyle rule: Write in plain prose — no asterisks, no bold, no bullet points, no markdown. Just natural sentences. Never narrate or describe your own personality or role — don't say "As [name]...", "Speaking as a physicist...", "From my perspective as...", or anything that describes yourself from the outside. Simply speak from who you are. Do not start your reply with "I".`;
 
@@ -193,7 +196,7 @@ Post by ${post.authorName}:${postCaption}${threadContext}
 Respond. No hashtags.${STYLE_INSTRUCTION}${pickTone()}${pickLang()}`;
 
   try {
-    const response = await anthropic.messages.create({
+    const response = await anthropicFor("discuss:runFafoTurn").messages.create({
       ...AGENT_REQUEST,
       max_tokens: 520,
       messages: [{ role: "user", content: prompt }],
@@ -260,7 +263,7 @@ async function isOnTopicAndHelpful(
     ? `Original question: "${postContent.slice(0, 400)}"\n\nAgent response: "${proposed.slice(0, 400)}"\n\nDoes the response genuinely help the student understand the topic? It must: (a) answer the question with a concrete explanation, example, analogy, or worked problem; OR (b) correct a misunderstanding; OR (c) add a new concrete dimension that expands the learner's understanding. It must NOT be primarily meta-commentary about the value of curiosity, the act of questioning, or what it means to learn. Reply YES if it genuinely helps, NO if it drifts.`
     : `Original post: "${postContent.slice(0, 400)}"\n\nComment: "${proposed.slice(0, 400)}"\n\nDoes the comment directly engage with the specific argument, claim, or topic raised in the original post? It should present a concrete counter-argument, supporting evidence, or a new angle on the exact debate — not drift into abstract philosophising unrelated to the original point. Reply YES if it engages the actual argument, NO if it drifts.`;
   try {
-    const msg = await anthropic.messages.create({
+    const msg = await anthropicFor("discuss:isOnTopicAndHelpful").messages.create({
       ...AGENT_REQUEST,
       max_tokens: 10,
       messages: [{ role: "user", content: prompt }],
@@ -471,7 +474,7 @@ async function extractFlightParams(text: string): Promise<FlightParams | null> {
   if (!FLIGHT_SEARCH_RE.test(text)) return null;
   const today = new Date().toISOString().slice(0, 10);
   try {
-    const msg = await anthropic.messages.create({
+    const msg = await anthropicFor("discuss:extractFlightParams").messages.create({
       ...AGENT_REQUEST,
       max_tokens: 160,
       messages: [{
@@ -1150,14 +1153,14 @@ async function runAgentAction(agent: (typeof AGENTS)[0], denSpaceId: string, rec
       }
     }
 
-    // Full thread context — last 12 comments so nothing is missed
+    // Recent thread context (bounded — this prompt runs on every agent turn)
     const threadContext =
       target.comments.length > 0
         ? `\n\nDiscussion so far (${target.comments.length} comment${target.comments.length > 1 ? "s" : ""}${
-            target.comments.length > 12 ? ", showing the most recent 12" : ""
+            target.comments.length > THREAD_CONTEXT_COMMENTS ? `, showing the most recent ${THREAD_CONTEXT_COMMENTS}` : ""
           }):\n${target.comments
-            .slice(-12)
-            .map((c) => `${c.authorName}: "${c.body}"`)
+            .slice(-THREAD_CONTEXT_COMMENTS)
+            .map((c) => `${c.authorName}: "${c.body.slice(0, THREAD_COMMENT_CHARS)}"`)
             .join("\n")}`
         : "";
 
@@ -1314,7 +1317,7 @@ Join this conversation. Respond to what ${originalPoster} shared — or to somet
       { type: "text" as const, text: textPrompt },
     ];
 
-    const response = await anthropic.messages.create({
+    const response = await anthropicFor("discuss:runAgentAction").messages.create({
       ...AGENT_REQUEST,
       max_tokens: 910,
       messages: [{ role: "user", content: contentBlocks }],
@@ -1523,7 +1526,7 @@ Write a short, thoughtful post sharing your reaction or a related idea it sparke
     prompt = buildFreeformPrompt(agent, historyContext, beliefContext, recentTopicsNote);
   }
 
-  const response = await anthropic.messages.create({
+  const response = await anthropicFor("discuss:tryCreateDenPost").messages.create({
     ...AGENT_REQUEST,
     max_tokens: 1040,
     messages: [{ role: "user", content: prompt }],
@@ -1710,8 +1713,8 @@ async function runDirectTurn(agent: (typeof AGENTS)[0], post: RecentPost, handof
   const lastHuman = [...post.comments].reverse().find(isHumanCommentFn);
   const threadContext = post.comments.length > 0
     ? `\n\nThread so far (${post.comments.length} comment${post.comments.length > 1 ? "s" : ""}${
-        post.comments.length > 10 ? ", showing the most recent 10" : ""
-      }):\n${post.comments.slice(-10).map((c) => `${c.authorName}: "${c.body.slice(0, 300)}"`).join("\n")}`
+        post.comments.length > THREAD_CONTEXT_COMMENTS ? `, showing the most recent ${THREAD_CONTEXT_COMMENTS}` : ""
+      }):\n${post.comments.slice(-THREAD_CONTEXT_COMMENTS).map((c) => `${c.authorName}: "${c.body.slice(0, THREAD_COMMENT_CHARS)}"`).join("\n")}`
     : "";
   const postCaption = post.content ? `\n"${post.content.slice(0, 900)}"` : "";
   const directYt = post.type === "YOUTUBE" && post.mediaUrl ? await fetchYouTubeTitle(post.mediaUrl) : null;
@@ -1744,7 +1747,7 @@ Post by ${post.authorName}:${postCaption}${mediaNote}${threadContext}${handoffCo
 ${respondTo} is waiting for a reply. Respond directly and helpfully — engage with what was actually said. Add a concrete example, a fresh angle, or a specific insight. Be warm but get to the point. 2–4 sentences. No hashtags.${gapNote}${flightInstruction}${ATTENTION_INSTRUCTION}${DEPTH_INSTRUCTION}${STYLE_INSTRUCTION}${pickTone()}${pickLang()}`;
 
   try {
-    const response = await anthropic.messages.create({
+    const response = await anthropicFor("discuss:runDirectTurn").messages.create({
       ...AGENT_REQUEST,
       max_tokens: 910,
       messages: [{ role: "user", content: prompt }],
@@ -2088,8 +2091,8 @@ async function runSpaceAgentAction(
     const threadContext =
       target.comments.length > 0
         ? `\n\nDiscussion so far (${target.comments.length} comment${target.comments.length > 1 ? "s" : ""}${
-            target.comments.length > 10 ? ", showing the most recent 10" : ""
-          }):\n${target.comments.slice(-10).map((c) => `${c.authorName}: "${c.body}"`).join("\n")}`
+            target.comments.length > THREAD_CONTEXT_COMMENTS ? `, showing the most recent ${THREAD_CONTEXT_COMMENTS}` : ""
+          }):\n${target.comments.slice(-THREAD_CONTEXT_COMMENTS).map((c) => `${c.authorName}: "${c.body.slice(0, THREAD_COMMENT_CHARS)}"`).join("\n")}`
         : "";
 
     const captionPart = target.content?.trim() ? `\nPost: "${target.content.slice(0, 900)}"` : "";
@@ -2177,7 +2180,7 @@ async function runSpaceAgentAction(
       { type: "text" as const, text: textPrompt },
     ];
 
-    const response = await anthropic.messages.create({
+    const response = await anthropicFor("discuss:spaceComment").messages.create({
       ...AGENT_REQUEST,
       max_tokens: 910,
       messages: [{ role: "user", content: spaceContentBlocks }],
@@ -2261,7 +2264,7 @@ async function runSpaceAgentAction(
       : `Write a short, engaging post in your space. Share a thought or observation that invites reflection. 1–3 sentences.`;
     const prompt = `${fullPersonality}${historyContext}${beliefContext}\n\n${newPostGoal} No hashtags.${spaceTopicsNote}${postKoreanNote}${BELIEF_UPDATE_INSTRUCTION}${postSummaryInstruction}`;
 
-    const response = await anthropic.messages.create({
+    const response = await anthropicFor("discuss:spacePost").messages.create({
       ...AGENT_REQUEST,
       max_tokens: 1040,
       messages: [{ role: "user", content: prompt }],
@@ -2301,9 +2304,13 @@ async function getActiveSpaceSessionIds(): Promise<string[]> {
   }
 }
 
+/** A human post in a space wakes at most this many agents there (was: every space agent + a knight). */
+const TRIGGER_SPACE_MAX_AGENTS = 2;
+
 /** During a space hot session: fire ALL space agents for those spaces every cron tick.
- *  If a space has no SpaceAgents yet, fall back to 2 random global knights scoped to that space. */
-async function runHotSpaceAgentTurns(spaceIds: string[], passiveMode = false) {
+ *  If a space has no SpaceAgents yet, fall back to 2 random global knights scoped to that space.
+ *  `maxAgents` caps how many agents run per space (space agents first, then the visiting knight). */
+async function runHotSpaceAgentTurns(spaceIds: string[], passiveMode = false, maxAgents = Infinity) {
   type SpaceAgentRow = { id: string; spaceId: string; name: string; personality: string; slug: string; createdAt: Date };
   const [spaceAgents, spaces] = await Promise.all([
     (prisma.spaceAgent as { findMany: (opts: object) => Promise<SpaceAgentRow[]> })
@@ -2330,12 +2337,17 @@ async function runHotSpaceAgentTurns(spaceIds: string[], passiveMode = false) {
       if (agents && agents.length > 0) {
         // Run sequentially so each agent sees the previous agent's freshly written comment
         // and the dedupe window kicks in, preventing pile-ons on the same post
-        for (const a of agents) {
+        const chosen = Number.isFinite(maxAgents)
+          ? [...agents].sort(() => Math.random() - 0.5).slice(0, maxAgents)
+          : agents;
+        for (const a of chosen) {
           await runSpaceAgentAction(a, spaceId, purpose, passiveMode, true);
         }
-        await runSpaceAgentAction(knightAsSpaceAgent, spaceId, purpose, passiveMode, true);
+        if (chosen.length < maxAgents) {
+          await runSpaceAgentAction(knightAsSpaceAgent, spaceId, purpose, passiveMode, true);
+        }
       } else {
-        const shuffled = [...AGENTS].sort(() => Math.random() - 0.5).slice(0, 2);
+        const shuffled = [...AGENTS].sort(() => Math.random() - 0.5).slice(0, Math.min(2, maxAgents));
         for (const a of shuffled) {
           await runSpaceAgentAction({ slug: a.slug, name: a.name, personality: a.personality }, spaceId, purpose, passiveMode, true);
         }
@@ -2395,7 +2407,7 @@ export async function POST(req: NextRequest) {
   try { bodyJson = JSON.parse(await req.text()); } catch {}
   const triggerSpaceId = typeof bodyJson.triggerSpaceId === "string" ? bodyJson.triggerSpaceId : undefined;
   if (triggerSpaceId) {
-    await runHotSpaceAgentTurns([triggerSpaceId], false);
+    await runHotSpaceAgentTurns([triggerSpaceId], false, TRIGGER_SPACE_MAX_AGENTS);
     return NextResponse.json({ ok: true, trigger: true, spaceId: triggerSpaceId });
   }
 
@@ -2418,16 +2430,14 @@ export async function POST(req: NextRequest) {
       });
     });
 
-    // Always include the triggered post first; deduplicate; cap at 5
+    // Answer the post the human just touched (one agent). Other unanswered posts are left to the
+    // routine cron sweep — fanning out to 5 posts per human comment was the biggest token sink.
     const triggeredPost = recentPosts.find((p) => p.id === triggerPostId);
-    const ordered = [
-      ...(triggeredPost ? [triggeredPost] : []),
-      ...unansweredPosts.filter((p) => p.id !== triggerPostId),
-    ].slice(0, 5);
+    const ordered = triggeredPost ? [triggeredPost] : unansweredPosts.slice(0, 1);
 
     // FAFO mode: triggered post (or any recent comment on it) contains "fafo"
     if (triggeredPost && isFafo(triggeredPost)) {
-      const shuffled = [...AGENTS].sort(() => Math.random() - 0.5).slice(0, 5);
+      const shuffled = [...AGENTS].sort(() => Math.random() - 0.5).slice(0, 3);
       await Promise.all(shuffled.map((a) => runFafoTurn(a, triggeredPost)));
       return NextResponse.json({ ok: true, trigger: true, fafoMode: true, postId: triggerPostId });
     }
@@ -2478,12 +2488,19 @@ export async function POST(req: NextRequest) {
   }
 
   if (sessionActive) {
-    // Global hot session: fire all knights every tick (5-min cron cadence) for the 25-min window
+    // Global hot session: HOT_SESSION_KNIGHTS random knights on every other 5-min tick (≈10 min)
+    // for the 25-min window. Firing all 40 every tick cost ~1.5M tokens per bolt.
+    const onTick = Math.floor(minute / 5) % 2 === 0;
+    if (!onTick) {
+      if (activeSpaceSessions.length > 0) await runHotSpaceAgentTurns(activeSpaceSessions, false); // paid space buzz keeps its cadence
+      return NextResponse.json({ ok: true, session: true, skipped: "off-tick" });
+    }
+    const HOT_SESSION_KNIGHTS = 10;
+    const picked = [...AGENTS.keys()].sort(() => Math.random() - 0.5).slice(0, HOT_SESSION_KNIGHTS);
     const BATCH_SIZE = 5;
-    for (let i = 0; i < AGENTS.length; i += BATCH_SIZE) {
-      const batch = Array.from({ length: Math.min(BATCH_SIZE, AGENTS.length - i) }, (_, j) => i + j);
-      await Promise.all(batch.map((idx) => runOneAgentTurn(idx, denSpaceId)));
-      if (i + BATCH_SIZE < AGENTS.length) await new Promise((r) => setTimeout(r, 1000));
+    for (let i = 0; i < picked.length; i += BATCH_SIZE) {
+      await Promise.all(picked.slice(i, i + BATCH_SIZE).map((idx) => runOneAgentTurn(idx, denSpaceId)));
+      if (i + BATCH_SIZE < picked.length) await new Promise((r) => setTimeout(r, 1000));
     }
     // Hot hour also fires every space's OWN agents (relaxed gates), so agents act everywhere
     // a space has custom agents — not just the global Den. Plus any active space buzz.

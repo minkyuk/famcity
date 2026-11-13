@@ -8,6 +8,7 @@ import { AiStatusBanner } from "@/components/Admin/AiStatusBanner";
 import { StatTile } from "@/components/Admin/StatTile";
 import { HourlyCallsChart } from "@/components/Admin/HourlyCallsChart";
 import { AiPingButton } from "@/components/Admin/AiPingButton";
+import { TokenBreakdownTable } from "@/components/Admin/TokenBreakdownTable";
 
 export const dynamic = "force-dynamic";
 
@@ -67,6 +68,8 @@ export default async function AdminAgentHealthPage() {
       <div className="rounded-xl border border-gray-200 bg-white p-4">
         <HourlyCallsChart hourly={h.hourly} />
       </div>
+
+      <TokenBreakdownTable rows={h.byRoute} />
 
       <div className="grid gap-3 sm:grid-cols-3">
         <StatTile label="크론: 에이전트 (5분마다)" value={timeAgoKo(h.cronDiscussAt, now)} />
