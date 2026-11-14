@@ -107,10 +107,11 @@ The app is deployed at https://famcity.vercel.app/
   - Label every API call with `anthropicFor("<route>:<purpose>")` so the dashboard's 토큰 사용처 table attributes it
 - All agent output goes through `finalizeAgentText()` (`lib/agentText.ts`) AFTER the marker parsers: it strips truncated marker blocks (e.g. a dangling `[SUMMARY]` with no `[/SUMMARY]`) and, when `stop_reason === "max_tokens"`, trims back to the last complete sentence so no comment ends mid-thought
 - Post eligibility (`hasContent`): any non-empty caption (YouTube/video/audio included), IMAGE with `media[]` rows or legacy `mediaUrl`, PDF, or YOUTUBE with `mediaUrl` (title fetched via oEmbed — `fetchYouTubeTitle()` in `lib/youtube.ts`, no API key, cached per instance — so agents react to the actual video title). Captionless Cloudinary VIDEO/AUDIO posts remain invisible (nothing real to react to)
-- Space idle pause (24h no human input) is applied AFTER the unanswered-human checks — an old human post with 0 comments still gets answered; only agent-initiated chatter pauses
+- **Human vs agent = `userId`** (humans have one; knights AND space agents never do). Never decide it by name (`AGENT_NAMES` is only the 40 knights — matching by name made user-created space agents count as humans, so they answered each other forever and the idle pause never fired). `RecentPost` comments carry a required `userId`; every comment select feeding them must include it
+- Space idle pause (24h no human input, or none at all in the recent posts) is applied AFTER the unanswered-human checks — an old human post with 0 comments still gets answered; only agent-initiated chatter pauses
 - VLM enabled: agents can look at photo attachments using Anthropic vision (image content blocks)
   - Capped at 3 queries per unique photo URL — tracked in `AgentMemory` under slug `$photo-queries` (beliefs field stores URL→count map)
-  - Only photos not yet at cap are passed to the model
+  - Only photos not yet at cap are passed to the model; a use is counted BEFORE the call, so an undownloadable photo (400 "Unable to download the file") stops being retried after 3 tries
 
 ## AI Health Dashboard (admin only)
 

@@ -452,7 +452,8 @@ type RecentPost = {
   mediaUrl: string | null;
   createdAt: Date;
   media: { url: string }[];
-  comments: { id: string; parentId: string | null; authorName: string; body: string; createdAt: Date }[];
+  /** userId is null for agents (knights and space agents) — the reliable human/agent test. */
+  comments: { id: string; parentId: string | null; authorName: string; body: string; createdAt: Date; userId: string | null }[];
 };
 
 const AGENT_NAMES = new Set(AGENTS.map((a) => a.name));
@@ -837,7 +838,7 @@ async function runAgentActionBody(agent: (typeof AGENTS)[0], denSpaceId: string,
       : "";
 
   const isHumanPost = (p: RecentPost) => p.userId !== null;
-  const isHumanComment = (c: { authorName: string }) => !AGENT_NAMES.has(c.authorName);
+  const isHumanComment = (c: { userId: string | null }) => c.userId != null; // agents have no userId
   // Any non-empty caption counts (YouTube/video/audio posts included), plus captionless
   // images (media[] rows OR legacy single mediaUrl) and PDFs, which agents can actually view.
   // Captionless YouTube posts qualify too — the video title is fetched via oEmbed at
@@ -852,7 +853,7 @@ async function runAgentActionBody(agent: (typeof AGENTS)[0], denSpaceId: string,
   const STALE_HUMAN_MS = 12 * 60 * 60 * 1000;
   const lastGlobalHumanMs = recentPosts.reduce((t, p) => {
     const pt = p.userId !== null ? p.createdAt.getTime() : 0;
-    const ct = p.comments.filter(c => !AGENT_NAMES.has(c.authorName)).reduce((m, c) => Math.max(m, c.createdAt.getTime()), 0);
+    const ct = p.comments.filter(c => c.userId != null).reduce((m, c) => Math.max(m, c.createdAt.getTime()), 0);
     return Math.max(t, pt, ct);
   }, 0);
   const isStale = Date.now() - lastGlobalHumanMs > STALE_HUMAN_MS;
@@ -1144,11 +1145,11 @@ async function runAgentActionBody(agent: (typeof AGENTS)[0], denSpaceId: string,
     // Flight posts: only reply once per human-comment cycle.
     // Skip if an agent already commented AND no new human comment has come in since.
     if (FLIGHT_SEARCH_RE.test(target.content ?? "")) {
-      const agentComments = target.comments.filter((c) => AGENT_NAMES.has(c.authorName));
+      const agentComments = target.comments.filter((c) => c.userId == null);
       if (agentComments.length > 0) {
         const lastAgentAt = agentComments[agentComments.length - 1].createdAt;
         const hasNewHumanComment = target.comments.some(
-          (c) => !AGENT_NAMES.has(c.authorName) && c.createdAt > lastAgentAt
+          (c) => c.userId != null && c.createdAt > lastAgentAt
         );
         if (!hasNewHumanComment) return;
       }
@@ -1210,7 +1211,7 @@ async function runAgentActionBody(agent: (typeof AGENTS)[0], denSpaceId: string,
 
     // Thread gap analysis: identify what angles haven't been covered yet, then steer the agent
     // toward filling one of them rather than echoing what's already been said.
-    const threadHasAgentComments = target.comments.some((c) => AGENT_NAMES.has(c.authorName));
+    const threadHasAgentComments = target.comments.some((c) => c.userId == null);
     const gaps = target.comments.length >= 2
       ? await findThreadGaps(target.content ?? null, target.comments)
       : "";
@@ -1318,14 +1319,15 @@ Join this conversation. Respond to what ${originalPoster} shared — or to somet
       { type: "text" as const, text: textPrompt },
     ];
 
+    // Count the photo use BEFORE the call: a photo Anthropic can't download (deleted/expired URL)
+    // fails the whole request, so counting only successes let it be retried forever.
+    if (imageUrls.length > 0) await incrementPhotoQueries(imageUrls).catch(() => {});
+
     const response = await anthropicFor("discuss:runAgentAction").messages.create({
       ...AGENT_REQUEST,
       max_tokens: 910,
       messages: [{ role: "user", content: contentBlocks }],
     });
-
-    // Track photo queries consumed so each photo is capped at MAX_PHOTO_QUERIES total
-    if (imageUrls.length > 0) await incrementPhotoQueries(imageUrls).catch(() => {});
 
     const rawText =
       textOf(response).trim();
@@ -1642,7 +1644,7 @@ async function fetchRecentPostsGlobal(): Promise<RecentPost[]> {
       comments: {
         orderBy: { createdAt: "asc" },
         take: 60,
-        select: { id: true, parentId: true, authorName: true, body: true, createdAt: true },
+        select: { id: true, parentId: true, authorName: true, body: true, createdAt: true, userId: true },
       },
     },
   });
@@ -1710,7 +1712,7 @@ async function runDirectTurnBody(agent: (typeof AGENTS)[0], post: RecentPost, ha
   );
   if (alreadyReplied) return;
 
-  const isHumanCommentFn = (c: { authorName: string }) => !AGENT_NAMES.has(c.authorName);
+  const isHumanCommentFn = (c: { userId: string | null }) => c.userId != null; // agents have no userId
   const lastHuman = [...post.comments].reverse().find(isHumanCommentFn);
   const threadContext = post.comments.length > 0
     ? `\n\nThread so far (${post.comments.length} comment${post.comments.length > 1 ? "s" : ""}${
@@ -1883,9 +1885,10 @@ async function runSpaceAgentActionBody(
     (p.type === "YOUTUBE" && !!p.mediaUrl);
 
   const isHumanPostSA = (p: RecentPost) => p.userId !== null;
-  // "human" in this space = not a knight agent AND not this space agent itself
-  const isHumanCommentSA = (c: { authorName: string }) =>
-    !AGENT_NAMES.has(c.authorName) && c.authorName !== spaceAgent.name;
+  // "human" = a comment with a user account. Agents (knights AND every space agent) have no userId.
+  // Matching by name used to treat OTHER space agents as humans, so space agents answered each
+  // other forever and the 24h idle pause never triggered.
+  const isHumanCommentSA = (c: { userId: string | null }) => c.userId != null;
 
   // Track latest human activity (post or comment) in this space
   const lastHumanActivityMs = recentPosts.reduce((t, p) => {
@@ -1900,7 +1903,7 @@ async function runSpaceAgentActionBody(
   // down, AFTER unanswered-human checks — an idle space must never leave a human post
   // or comment permanently unanswered just because it aged past the window.
   const SPACE_INACTIVITY_MS = 24 * 60 * 60 * 1000;
-  const spaceIsIdle = lastHumanActivityMs > 0 && Date.now() - lastHumanActivityMs > SPACE_INACTIVITY_MS;
+  const spaceIsIdle = lastHumanActivityMs === 0 || Date.now() - lastHumanActivityMs > SPACE_INACTIVITY_MS;
 
   const agentLastActionMs = agentHistory.length > 0 ? agentHistory[0].createdAt.getTime() : 0;
   // True when a human did something after this agent's last action
@@ -2079,11 +2082,11 @@ async function runSpaceAgentActionBody(
     // Flight posts: only reply once per human-comment cycle.
     // Skip if an agent already commented AND no new human comment has come in since.
     if (FLIGHT_SEARCH_RE.test(target.content ?? "")) {
-      const agentComments = target.comments.filter((c) => AGENT_NAMES.has(c.authorName));
+      const agentComments = target.comments.filter((c) => c.userId == null);
       if (agentComments.length > 0) {
         const lastAgentAt = agentComments[agentComments.length - 1].createdAt;
         const hasNewHumanComment = target.comments.some(
-          (c) => !AGENT_NAMES.has(c.authorName) && c.createdAt > lastAgentAt
+          (c) => c.userId != null && c.createdAt > lastAgentAt
         );
         if (!hasNewHumanComment) return;
       }
@@ -2139,7 +2142,7 @@ async function runSpaceAgentActionBody(
     const summaryInstruction = SUMMARY_INSTRUCTION;
 
     // Thread gap analysis: identify uncovered angles and steer the agent toward them
-    const threadHasAgentComments = target.comments.some((c) => AGENT_NAMES.has(c.authorName));
+    const threadHasAgentComments = target.comments.some((c) => c.userId == null);
     const spaceGaps = target.comments.length >= 2
       ? await findThreadGaps(target.content ?? null, target.comments)
       : "";
@@ -2181,13 +2184,14 @@ async function runSpaceAgentActionBody(
       { type: "text" as const, text: textPrompt },
     ];
 
+    // Counted before the call so an undownloadable photo stops being retried after the cap.
+    if (spaceImageUrls.length > 0) await incrementPhotoQueries(spaceImageUrls).catch(() => {});
+
     const response = await anthropicFor("discuss:spaceComment").messages.create({
       ...AGENT_REQUEST,
       max_tokens: 910,
       messages: [{ role: "user", content: spaceContentBlocks }],
     });
-
-    if (spaceImageUrls.length > 0) await incrementPhotoQueries(spaceImageUrls).catch(() => {});
 
     const rawText = textOf(response).trim();
     if (/^SKIP\b/i.test(rawText)) return; // quality gate: agent decided nothing new to add
@@ -2238,7 +2242,7 @@ async function runSpaceAgentActionBody(
     if (anyUnrespondedHumanPostSA) return;
     // Don't create new posts while humans are actively discussing — unless it's been 12h (stale)
     const anyActiveHumanDiscussion = !isStaleSpace && recentPosts.some(
-      (p) => isHumanPostSA(p) && p.comments.some((c) => !AGENT_NAMES.has(c.authorName))
+      (p) => isHumanPostSA(p) && p.comments.some((c) => c.userId != null)
     );
     if (anyActiveHumanDiscussion) return;
 
@@ -2491,10 +2495,10 @@ export async function POST(req: NextRequest) {
     const UNANS_WINDOW_MS = 2 * 60 * 60 * 1000;
     const unansweredPosts = recentPosts.filter((p) => {
       return p.comments.some((c) => {
-        if (AGENT_NAMES.has(c.authorName)) return false;
+        if (c.userId == null) return false;
         if (Date.now() - c.createdAt.getTime() > UNANS_WINDOW_MS) return false;
         // no agent replied after this human comment
-        return !p.comments.some((r) => AGENT_NAMES.has(r.authorName) && r.createdAt > c.createdAt);
+        return !p.comments.some((r) => r.userId == null && r.createdAt > c.createdAt);
       });
     });
 
