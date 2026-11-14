@@ -1,5 +1,6 @@
 import { prisma } from "@/lib/prisma";
 import { AGENTS } from "@/lib/agents";
+import { categoryOf, type TokenCategory } from "@/lib/tokenCategories";
 import { ensureAiCallLogTable, pruneAiCallLog, readHeartbeat, type AiErrorType } from "@/lib/aiCallLog";
 
 /** USD per million tokens (cache read 0.1×, 5-min cache write 1.25× of input).
@@ -43,6 +44,8 @@ export type AiHealth = {
   tableError: string | null;
   /** Token spend per code path ("discuss:runDirectTurn", "news:vote", ...), biggest first. */
   byRoute: { route: string; calls: number; inputTokens: number; outputTokens: number; costUsd: number }[];
+  /** Token spend per agent (gates included in the agent's turn), biggest first. */
+  byAgent: { agent: string; calls: number; tokens: number; costUsd: number }[];
 };
 
 const HOUR = 60 * 60 * 1000;
@@ -71,7 +74,7 @@ export async function loadAiHealth(): Promise<AiHealth> {
       prisma.aiCallLog
         .findMany({
           where: { createdAt: { gte: since } },
-          select: { createdAt: true, route: true, ok: true, errorType: true, model: true, inputTokens: true, outputTokens: true, cacheReadTokens: true, cacheWriteTokens: true },
+          select: { createdAt: true, route: true, agent: true, ok: true, errorType: true, model: true, inputTokens: true, outputTokens: true, cacheReadTokens: true, cacheWriteTokens: true },
         })
         .catch(() => []),
       prisma.aiCallLog
@@ -96,6 +99,7 @@ export async function loadAiHealth(): Promise<AiHealth> {
   let inputTokens24h = 0, outputTokens24h = 0, costUsd24h = 0, unpricedCalls24h = 0, errors24h = 0;
 
   const routeAgg = new Map<string, { calls: number; inputTokens: number; outputTokens: number; costUsd: number }>();
+  const agentAgg = new Map<string, { calls: number; tokens: number; costUsd: number }>();
   for (const l of logs) {
     // Clamp both ends: clock skew between instances can put a row slightly in the future.
     const hoursAgo = Math.max(0, Math.min(23, Math.floor((now - l.createdAt.getTime()) / HOUR)));
@@ -109,6 +113,12 @@ export async function loadAiHealth(): Promise<AiHealth> {
     const rp = priceFor(l.model);
     if (rp) agg.costUsd += (l.inputTokens * rp.input + l.outputTokens * rp.output + l.cacheReadTokens * rp.cacheRead + l.cacheWriteTokens * rp.cacheWrite) / 1e6;
     routeAgg.set(l.route, agg);
+    const agentKey = l.agent ?? (l.route.startsWith("news") ? "뉴스 (에이전트 미상)" : "에이전트 아님 (번역·분석·테스트)");
+    const aa = agentAgg.get(agentKey) ?? { calls: 0, tokens: 0, costUsd: 0 };
+    aa.calls++;
+    aa.tokens += l.inputTokens + l.outputTokens;
+    if (rp) aa.costUsd += (l.inputTokens * rp.input + l.outputTokens * rp.output + l.cacheReadTokens * rp.cacheRead + l.cacheWriteTokens * rp.cacheWrite) / 1e6;
+    agentAgg.set(agentKey, aa);
     outputTokens24h += l.outputTokens;
     const p = priceFor(l.model);
     if (p) {
@@ -155,5 +165,31 @@ export async function loadAiHealth(): Promise<AiHealth> {
     byRoute: [...routeAgg.entries()]
       .map(([route, a]) => ({ route, ...a }))
       .sort((a, b) => b.inputTokens + b.outputTokens - (a.inputTokens + a.outputTokens)),
+    byAgent: [...agentAgg.entries()].map(([agent, a]) => ({ agent, ...a })).sort((a, b) => b.tokens - a.tokens),
   };
+}
+
+export type DailyTokens = { day: string; total: number; byCategory: Record<TokenCategory, number> };
+
+type DayRouteRow = { day: string; route: string; tokens: number };
+
+/** Tokens per UTC day for the last `days` days, split into TOKEN_CATEGORIES (oldest first). */
+export async function loadDailyTokens(days = 14): Promise<DailyTokens[]> {
+  await ensureAiCallLogTable();
+  const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
+  const rows = await prisma.$queryRaw<DayRouteRow[]>`
+    SELECT to_char(date_trunc('day', "createdAt"), 'YYYY-MM-DD') AS day, route,
+           SUM("inputTokens" + "outputTokens")::int AS tokens
+    FROM "AiCallLog" WHERE "createdAt" >= ${since} GROUP BY 1, 2`;
+  const byDay = new Map<string, DailyTokens>();
+  for (const r of rows) {
+    let d = byDay.get(r.day);
+    if (!d) {
+      d = { day: r.day, total: 0, byCategory: { direct: 0, routine: 0, space: 0, gate: 0, news: 0, other: 0 } };
+      byDay.set(r.day, d);
+    }
+    d.byCategory[categoryOf(r.route)] += r.tokens;
+    d.total += r.tokens;
+  }
+  return [...byDay.values()].sort((a, b) => (a.day < b.day ? -1 : 1));
 }

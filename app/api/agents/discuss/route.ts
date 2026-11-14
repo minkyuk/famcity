@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { AGENT_REQUEST, anthropicFor, textOf } from "@/lib/anthropic";
 import { hotSessionRemainingMs, passiveModeRemainingMs } from "@/lib/agentModes";
+import { withAgent } from "@/lib/agentContext";
 import { recordHeartbeat } from "@/lib/aiCallLog";
 import { isCronAuthorized } from "@/lib/cronAuth";
 import { prisma } from "@/lib/prisma";
@@ -182,7 +183,7 @@ function isFafo(post: RecentPost): boolean {
  * Fire one agent in FAFO mode on a specific post.
  * Novelty gate is skipped (pile-on is intentional); factual gate still applies.
  */
-async function runFafoTurn(agent: (typeof AGENTS)[0], post: RecentPost): Promise<void> {
+async function runFafoTurnBody(agent: (typeof AGENTS)[0], post: RecentPost): Promise<void> {
   const avatar = agentAvatarUrl(agent.slug);
   const postCaption = post.content ? `\n"${post.content.slice(0, 400)}"` : "";
   const threadContext = post.comments.length > 0
@@ -784,7 +785,7 @@ function mentionsAgent(text: string, agentName: string): boolean {
  *   P3 — fresh posts I haven't entered yet (human-authored first)
  *   P4 — new post (only when nothing else to do)
  */
-async function runAgentAction(agent: (typeof AGENTS)[0], denSpaceId: string, recentPosts: RecentPost[], passiveMode = false) {
+async function runAgentActionBody(agent: (typeof AGENTS)[0], denSpaceId: string, recentPosts: RecentPost[], passiveMode = false) {
   const avatar = agentAvatarUrl(agent.slug);
 
   // Load agent's persistent beliefs and relationships (fail gracefully if migration hasn't run yet)
@@ -1466,7 +1467,7 @@ async function agentCanCreatePost(agentName: string): Promise<boolean> {
  * Runs separately from runAgentAction so human-post activity never blocks it.
  * The 2-hour dedup is the only gate — one post per 2h max regardless of how many agents run.
  */
-async function tryCreateDenPost(agent: (typeof AGENTS)[0], denSpaceId: string, recentPosts: RecentPost[]): Promise<void> {
+async function tryCreateDenPostBody(agent: (typeof AGENTS)[0], denSpaceId: string, recentPosts: RecentPost[]): Promise<void> {
   // Dedup: at most one new post per 2-hour window across all agents
   const recentDenPost = await prisma.post.findFirst({
     where: { spaceId: denSpaceId, userId: null, createdAt: { gt: new Date(Date.now() - 2 * 60 * 60 * 1000) } },
@@ -1686,7 +1687,7 @@ async function runOneAgentTurn(agentIdx: number, denSpaceId: string, prefetched?
  * Used by the triggerPostId fast path to guarantee the right post gets answered.
  * Applies novelty + factual gates. Skips relevance gate (human explicitly wants a reply).
  */
-async function runDirectTurn(agent: (typeof AGENTS)[0], post: RecentPost, handoffNote?: string): Promise<void> {
+async function runDirectTurnBody(agent: (typeof AGENTS)[0], post: RecentPost, handoffNote?: string): Promise<void> {
   const avatar = agentAvatarUrl(agent.slug);
   const beliefs = await loadBeliefs(agent.slug, agent.initialBeliefs ?? []).catch(() => []);
   const beliefContext = formatBeliefsForPrompt(beliefs);
@@ -1790,7 +1791,7 @@ const DEFAULT_SPACE_AGENT_BELIEFS = [
 ];
 
 /** Run one turn for a space-confined agent. Sees only posts from its space. */
-async function runSpaceAgentAction(
+async function runSpaceAgentActionBody(
   spaceAgent: { slug: string; name: string; personality: string },
   spaceId: string,
   purpose?: string | null,
@@ -2388,6 +2389,32 @@ async function runAllSpaceAgentTurns(slotMinutes: number) {
       return runSpaceAgentAction(agent, spaceId, purposeBySpace.get(spaceId));
     })
   );
+}
+
+// ── Agent-turn wrappers (token attribution per agent) ──
+/** Runs runFafoTurnBody inside withAgent() so every Claude call in the turn is logged under this agent. */
+function runFafoTurn(...args: Parameters<typeof runFafoTurnBody>): ReturnType<typeof runFafoTurnBody> {
+  return withAgent(args[0].name, () => runFafoTurnBody(...args));
+}
+
+/** Runs runAgentActionBody inside withAgent() so every Claude call in the turn is logged under this agent. */
+function runAgentAction(...args: Parameters<typeof runAgentActionBody>): ReturnType<typeof runAgentActionBody> {
+  return withAgent(args[0].name, () => runAgentActionBody(...args));
+}
+
+/** Runs tryCreateDenPostBody inside withAgent() so every Claude call in the turn is logged under this agent. */
+function tryCreateDenPost(...args: Parameters<typeof tryCreateDenPostBody>): ReturnType<typeof tryCreateDenPostBody> {
+  return withAgent(args[0].name, () => tryCreateDenPostBody(...args));
+}
+
+/** Runs runDirectTurnBody inside withAgent() so every Claude call in the turn is logged under this agent. */
+function runDirectTurn(...args: Parameters<typeof runDirectTurnBody>): ReturnType<typeof runDirectTurnBody> {
+  return withAgent(args[0].name, () => runDirectTurnBody(...args));
+}
+
+/** Runs runSpaceAgentActionBody inside withAgent() so every Claude call in the turn is logged under this agent. */
+function runSpaceAgentAction(...args: Parameters<typeof runSpaceAgentActionBody>): ReturnType<typeof runSpaceAgentActionBody> {
+  return withAgent(args[0].name, () => runSpaceAgentActionBody(...args));
 }
 
 export async function POST(req: NextRequest) {

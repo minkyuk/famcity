@@ -34,6 +34,8 @@ export type AiCallRecord = {
   cacheReadTokens: number;
   cacheWriteTokens: number;
   durationMs: number;
+  /** Agent whose turn made the call (from withAgent()), null outside an agent turn. */
+  agent: string | null;
 };
 
 /** Classify an API error from its HTTP status and the `error.type` field of the response body. */
@@ -68,9 +70,12 @@ const CREATE_TABLE_SQL = `CREATE TABLE IF NOT EXISTS "AiCallLog" (
     "cacheReadTokens" INTEGER NOT NULL DEFAULT 0,
     "cacheWriteTokens" INTEGER NOT NULL DEFAULT 0,
     "durationMs" INTEGER NOT NULL DEFAULT 0,
+    "agent" TEXT,
 
     CONSTRAINT "AiCallLog_pkey" PRIMARY KEY ("id")
 )`;
+// Added after the table first shipped; existing tables get the column here (same type db push would use).
+const ADD_AGENT_COLUMN_SQL = `ALTER TABLE "AiCallLog" ADD COLUMN IF NOT EXISTS "agent" TEXT`;
 const CREATE_INDEX_SQL = `CREATE INDEX IF NOT EXISTS "AiCallLog_createdAt_idx" ON "AiCallLog"("createdAt")`;
 
 let tableReady: Promise<void> | null = null;
@@ -80,6 +85,7 @@ export function ensureAiCallLogTable(): Promise<void> {
   if (!tableReady) {
     tableReady = (async () => {
       await prisma.$executeRawUnsafe(CREATE_TABLE_SQL);
+      await prisma.$executeRawUnsafe(ADD_AGENT_COLUMN_SQL);
       await prisma.$executeRawUnsafe(CREATE_INDEX_SQL);
     })().catch((err: unknown) => {
       tableReady = null; // retry on the next call

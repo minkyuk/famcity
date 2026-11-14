@@ -444,6 +444,8 @@ model AiCallLog {
   cacheReadTokens  Int      @default(0)
   cacheWriteTokens Int      @default(0)
   durationMs       Int      @default(0)
+  /// Name of the agent whose turn made this call (gates included), null for non-agent calls.
+  agent            String?
 
   @@index([createdAt])
 }
