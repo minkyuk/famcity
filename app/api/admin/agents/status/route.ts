@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { isAdmin } from "@/lib/admin";
-import { isCronAuthorized } from "@/lib/cronAuth";
+import { isCronAuthorized, presentedCronSecret } from "@/lib/cronAuth";
 import { loadAiHealth } from "@/lib/aiHealth";
 import { pingAgentModel } from "@/lib/aiPing";
 import { loadDailyActivity } from "@/lib/activityHistory";
@@ -13,14 +13,16 @@ import { AgentStatusQuerySchema } from "@/lib/validators";
  * Says only which side is wrong — never anything about the secret's value.
  */
 function forbiddenReason(req: NextRequest): string {
-  const secret = process.env.CRON_SECRET;
+  const secret = process.env.CRON_SECRET?.trim();
   if (!secret) return "server_has_no_CRON_SECRET (set it in Vercel and redeploy)";
-  const sent = req.headers.get("x-cron-secret") ?? req.headers.get("authorization")?.replace(/^Bearer\s+/i, "") ?? null;
+  const sent = presentedCronSecret(req);
   if (!sent) return "no_secret_sent (no x-cron-secret / Bearer header reached the server)";
-  if (sent.trim() === secret.trim()) return "secret_matches_except_whitespace (re-save it without spaces/newlines)";
   // Phones auto-capitalise the first letter of a one-word secret typed into a form.
-  if (sent.trim().toLowerCase() === secret.trim().toLowerCase()) return "secret_matches_except_letter_case (check capital letters, e.g. an auto-capitalised first letter)";
-  return "secret_mismatch (sent value differs from the deployed CRON_SECRET — re-copy it, or redeploy after changing it)";
+  if (sent.toLowerCase() === secret.toLowerCase()) return "matches_except_letter_case (check capital letters, e.g. an auto-capitalised first letter)";
+  if (sent.startsWith(secret)) return "sent_has_extra_text_after_the_secret (copied too much)";
+  if (secret.startsWith(sent)) return "sent_is_cut_short (only part of the secret was copied)";
+  if (sent.includes(secret)) return "sent_has_extra_text_around_the_secret";
+  return "different_value (not the deployed CRON_SECRET — check you copied CRON_SECRET from the famcity project)";
 }
 
 /**
@@ -32,7 +34,11 @@ export async function GET(req: NextRequest) {
   if (!isCronAuthorized(req)) {
     const session = await getServerSession(authOptions);
     if (!isAdmin(session)) {
-      return NextResponse.json({ error: "Forbidden", reason: forbiddenReason(req) }, { status: 403 });
+      return NextResponse.json(
+        // `build` says which deploy answered, so a stale deployment can't be mistaken for a bad secret.
+        { error: "Forbidden", reason: forbiddenReason(req), build: process.env.VERCEL_GIT_COMMIT_SHA?.slice(0, 7) ?? null },
+        { status: 403 }
+      );
     }
   }
 
