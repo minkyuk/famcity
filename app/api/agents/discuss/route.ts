@@ -2358,7 +2358,43 @@ async function runHotSpaceAgentTurns(spaceIds: string[], passiveMode = false, ma
 }
 
 /** Run one agent per space that has custom agents (cycles through them by slot). */
-async function runAllSpaceAgentTurns(slotMinutes: number) {
+/** Without human activity in this window, agent-to-agent chatter runs at most hourly. */
+const HUMAN_ACTIVE_WINDOW_MS = 60 * 60 * 1000;
+
+/** Space IDs (from `spaceIds`, non-empty) with a human post or comment in the last hour. Humans have a userId; agents don't. */
+async function spacesWithRecentHumanActivity(spaceIds: string[]): Promise<Set<string>> {
+  const since = new Date(Date.now() - HUMAN_ACTIVE_WINDOW_MS);
+  const [posts, comments] = await Promise.all([
+    prisma.post.findMany({
+      where: { spaceId: { in: spaceIds }, userId: { not: null }, createdAt: { gte: since } },
+      select: { spaceId: true },
+    }),
+    prisma.comment.findMany({
+      where: { userId: { not: null }, createdAt: { gte: since }, post: { spaceId: { in: spaceIds } } },
+      select: { post: { select: { spaceId: true } } },
+    }),
+  ]).catch(() => [[], []] as [{ spaceId: string | null }[], { post: { spaceId: string | null } }[]]);
+  const active = new Set<string>();
+  for (const p of posts) if (p.spaceId) active.add(p.spaceId);
+  for (const c of comments) if (c.post.spaceId) active.add(c.post.spaceId);
+  return active;
+}
+
+/** True if a human posted it or commented on it within the last hour. */
+async function postHasRecentHumanActivity(postId: string): Promise<boolean> {
+  const since = new Date(Date.now() - HUMAN_ACTIVE_WINDOW_MS);
+  const [post, comments] = await Promise.all([
+    prisma.post.count({ where: { id: postId, userId: { not: null }, createdAt: { gte: since } } }),
+    prisma.comment.count({ where: { postId, userId: { not: null }, createdAt: { gte: since } } }),
+  ]).catch(() => [0, 0]);
+  return post + comments > 0;
+}
+
+/**
+ * Space agents' routine round. Runs every 30 min, but a space with no human activity in the
+ * last hour only gets a turn on the hourly (:00) round — idle spaces chat at most once an hour.
+ */
+async function runAllSpaceAgentTurns(slotMinutes: number, hourlyRound: boolean) {
   type SpaceAgentRow = { id: string; spaceId: string; name: string; personality: string; slug: string; createdAt: Date };
   const spaceAgents: SpaceAgentRow[] = await (prisma.spaceAgent as { findMany: (opts: object) => Promise<SpaceAgentRow[]> })
     .findMany({ orderBy: { createdAt: "asc" } })
@@ -2382,10 +2418,15 @@ async function runAllSpaceAgentTurns(slotMinutes: number) {
   const now = new Date();
   const totalMinutes = now.getUTCHours() * 60 + now.getUTCMinutes();
   const slotIdx = Math.floor(totalMinutes / slotMinutes);
+  const hourIdx = Math.floor(totalMinutes / 60);
+  const humanActive = await spacesWithRecentHumanActivity(spaceIds);
 
   await Promise.all(
     [...bySpace.entries()].map(([spaceId, agents]) => {
-      const agent = agents[slotIdx % agents.length];
+      const active = humanActive.has(spaceId);
+      if (!active && !hourlyRound) return Promise.resolve(); // idle space: hourly only
+      // Idle spaces rotate by hour so every agent still gets a turn (30-min slots on :00 only hit even indices).
+      const agent = agents[(active ? slotIdx : hourIdx) % agents.length];
       return runSpaceAgentAction(agent, spaceId, purposeBySpace.get(spaceId));
     })
   );
@@ -2509,7 +2550,13 @@ export async function POST(req: NextRequest) {
         const nominee = AGENTS.find((a) => a.slug === h.toAgent);
         const post = handoffPosts.find((p) => p.id === h.postId);
         if (!nominee || !post) return Promise.resolve();
-        return runDirectTurn(nominee, post, `${h.fromAgentName} asked you to weigh in${h.reason ? `: ${h.reason}` : ""}.`).catch(() => {});
+        // Agent→agent baton: only honoured while a human is active on the thread; otherwise it's
+        // pure agent chatter, which the hourly routine already covers.
+        return postHasRecentHumanActivity(post.id).then((humanActive) =>
+          humanActive
+            ? runDirectTurn(nominee, post, `${h.fromAgentName} asked you to weigh in${h.reason ? `: ${h.reason}` : ""}.`)
+            : undefined
+        ).catch(() => {});
       })
     );
   }
@@ -2565,7 +2612,7 @@ export async function POST(req: NextRequest) {
     tasks.push(runOneAgentTurn(agentIdx, denSpaceId, recentPosts));
   }
   if (minute % 30 === 0) {
-    tasks.push(runAllSpaceAgentTurns(30));
+    tasks.push(runAllSpaceAgentTurns(30, minute % 60 === 0));
   }
   if (tasks.length === 0) {
     return NextResponse.json({ ok: true, skipped: true, reason: "off-cycle", spaceSessions: activeSpaceSessions.length });
