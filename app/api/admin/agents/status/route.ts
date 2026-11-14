@@ -21,7 +21,13 @@ function forbiddenReason(req: NextRequest): string {
   if (sent.toLowerCase() === secret.toLowerCase()) return "matches_except_letter_case (check capital letters, e.g. an auto-capitalised first letter)";
   if (sent.startsWith(secret)) return "sent_has_extra_text_after_the_secret (copied too much)";
   if (secret.startsWith(sent)) return "sent_is_cut_short (only part of the secret was copied)";
-  if (sent.includes(secret)) return "sent_has_extra_text_around_the_secret";
+  if (sent.includes(secret)) {
+    // Describe the extra text by character class only, never its content.
+    const [pre, post] = sent.split(secret);
+    const kind = (s: string) =>
+      !s ? "none" : /^[\s"'`“”‘’]+$/.test(s) ? "quotes/spaces" : /^[A-Za-z_\-]+\s*[:=]?\s*$/.test(s) ? "a label word" : "other characters";
+    return `sent_has_extra_text_around_the_secret (before: ${kind(pre)}, after: ${kind(post ?? "")})`;
+  }
   return "different_value (not the deployed CRON_SECRET — check you copied CRON_SECRET from the famcity project)";
 }
 
