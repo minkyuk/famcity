@@ -18,6 +18,8 @@ function forbiddenReason(req: NextRequest): string {
   const sent = req.headers.get("x-cron-secret") ?? req.headers.get("authorization")?.replace(/^Bearer\s+/i, "") ?? null;
   if (!sent) return "no_secret_sent (no x-cron-secret / Bearer header reached the server)";
   if (sent.trim() === secret.trim()) return "secret_matches_except_whitespace (re-save it without spaces/newlines)";
+  // Phones auto-capitalise the first letter of a one-word secret typed into a form.
+  if (sent.trim().toLowerCase() === secret.trim().toLowerCase()) return "secret_matches_except_letter_case (check capital letters, e.g. an auto-capitalised first letter)";
   return "secret_mismatch (sent value differs from the deployed CRON_SECRET — re-copy it, or redeploy after changing it)";
 }
 
