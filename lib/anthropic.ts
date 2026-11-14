@@ -1,5 +1,6 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { classifyAiError, recordAiCall } from "@/lib/aiCallLog";
+import { currentAgent } from "@/lib/agentContext";
 
 /** The model every agent route uses (discuss, news, translate, admin ping). */
 export const AGENT_MODEL = "claude-haiku-5-5";
@@ -44,7 +45,7 @@ const str = (v: unknown): string | null => (typeof v === "string" ? v : null);
  * token usage, latency) and otherwise behaves exactly like the global fetch.
  * Every SDK retry attempt passes through here, so a 529 followed by a success logs both.
  */
-function trackedFetch(route: string): FetchFn {
+function trackedFetch(route: string, fixedAgent: string | null = null): FetchFn {
   return async (input, init) => {
     const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
     const isMessages = /\/v1\/messages(\?|$)/.test(url);
@@ -55,7 +56,7 @@ function trackedFetch(route: string): FetchFn {
       try { model = str(obj(JSON.parse(init.body))?.model); } catch { /* not JSON — leave null */ }
     }
     const started = Date.now();
-    const base = { route, model, cacheReadTokens: 0, cacheWriteTokens: 0, inputTokens: 0, outputTokens: 0 };
+    const base = { route, model, agent: fixedAgent ?? currentAgent(), cacheReadTokens: 0, cacheWriteTokens: 0, inputTokens: 0, outputTokens: 0 };
 
     let res: Response;
     try {
@@ -102,8 +103,8 @@ function trackedFetch(route: string): FetchFn {
  * Anthropic client whose calls show up on the admin AI-health dashboard (/admin/agents).
  * `route` labels where the call came from (e.g. "discuss", "news", "translate").
  */
-export function createAnthropic(route: string): Anthropic {
-  return new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY, fetch: trackedFetch(route) });
+export function createAnthropic(route: string, agent: string | null = null): Anthropic {
+  return new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY, fetch: trackedFetch(route, agent) });
 }
 
 const labeledClients = new Map<string, Anthropic>();
@@ -111,12 +112,14 @@ const labeledClients = new Map<string, Anthropic>();
 /**
  * Cached client whose calls are logged under a "route:purpose" label (e.g. "discuss:isNovel"),
  * so the dashboard's token breakdown shows exactly which code path spends the tokens.
+ * `agent` pins the call to an agent when it runs outside a withAgent() turn (e.g. news).
  */
-export function anthropicFor(label: string): Anthropic {
-  let client = labeledClients.get(label);
+export function anthropicFor(label: string, agent: string | null = null): Anthropic {
+  const key = `${label}|${agent ?? ""}`;
+  let client = labeledClients.get(key);
   if (!client) {
-    client = createAnthropic(label);
-    labeledClients.set(label, client);
+    client = createAnthropic(label, agent);
+    labeledClients.set(key, client);
   }
   return client;
 }

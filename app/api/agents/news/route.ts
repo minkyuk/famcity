@@ -160,7 +160,7 @@ export async function POST(req: NextRequest) {
 
   const votingResults = await Promise.allSettled(
     voters.map(async (agent): Promise<VoteResult> => {
-      const msg = await anthropicFor("news:vote").messages.create({
+      const msg = await anthropicFor("news:vote", agent.name).messages.create({
         ...AGENT_REQUEST,
         max_tokens: 390,
         messages: [{
@@ -289,7 +289,7 @@ Respond ONLY with valid JSON, no other text:
     try {
       // Run poster paragraphs, both debate perspectives, and Korean version in parallel
       const [mainMsg, debateMsg1, debateMsg2, koreanMsg] = await Promise.all([
-        anthropicFor("news:report").messages.create({
+        anthropicFor("news:report", posterAgent.name).messages.create({
           ...AGENT_REQUEST,
           max_tokens: 780,
           messages: [{
@@ -314,7 +314,7 @@ No hashtags. Do not start with "I". Do not repeat the headline verbatim. No aste
           }],
         }),
 
-        anthropicFor("news:debate").messages.create({
+        anthropicFor("news:debate", debateAgent1.name).messages.create({
           ...AGENT_REQUEST,
           max_tokens: 290,
           messages: [{
@@ -328,7 +328,7 @@ Give your honest read on this story from your own worldview. What do you see as 
           }],
         }),
 
-        anthropicFor("news:debate").messages.create({
+        anthropicFor("news:debate", debateAgent2.name).messages.create({
           ...AGENT_REQUEST,
           max_tokens: 290,
           messages: [{
@@ -343,7 +343,7 @@ What's your perspective on this story through your own lens and values? What wou
         }),
 
         // Korean version — same agent, same source, written fresh in Korean
-        anthropicFor("news:reportKorean").messages.create({
+        anthropicFor("news:reportKorean", posterAgent.name).messages.create({
           ...AGENT_REQUEST,
           max_tokens: 650,
           messages: [{
@@ -457,7 +457,7 @@ What's your perspective on this story through your own lens and values? What wou
       const krAvatar = agentAvatarUrl(krAgent.slug);
       const krSource = feedSourceName(pick.url);
 
-      const krMsg = await anthropicFor("news:koreanFeed").messages.create({
+      const krMsg = await anthropicFor("news:koreanFeed", krAgent.name).messages.create({
         ...AGENT_REQUEST,
         max_tokens: 650,
         messages: [{

@@ -2,7 +2,9 @@ import { redirect } from "next/navigation";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { isAdmin } from "@/lib/admin";
-import { loadAiHealth } from "@/lib/aiHealth";
+import { loadAiHealth, loadDailyTokens } from "@/lib/aiHealth";
+import { DailyTokensChart } from "@/components/Admin/DailyTokensChart";
+import { AgentTokenBars } from "@/components/Admin/AgentTokenBars";
 import { timeAgoKo } from "@/lib/timeAgoKo";
 import { AiStatusBanner } from "@/components/Admin/AiStatusBanner";
 import { StatTile } from "@/components/Admin/StatTile";
@@ -33,7 +35,11 @@ export default async function AdminAgentHealthPage() {
   const session = await getServerSession(authOptions);
   if (!isAdmin(session)) redirect("/");
 
-  const [h, history] = await Promise.all([loadAiHealth(), loadDailyActivity().catch(() => [])]);
+  const [h, history, dailyTokens] = await Promise.all([
+    loadAiHealth(),
+    loadDailyActivity().catch(() => []),
+    loadDailyTokens().catch(() => []),
+  ]);
   const now = Date.now();
 
   return (
@@ -70,6 +76,10 @@ export default async function AdminAgentHealthPage() {
       <div className="rounded-xl border border-gray-200 bg-white p-4">
         <HourlyCallsChart hourly={h.hourly} />
       </div>
+
+      <DailyTokensChart days={dailyTokens} />
+
+      <AgentTokenBars rows={h.byAgent} />
 
       <TokenBreakdownTable rows={h.byRoute} />
 
