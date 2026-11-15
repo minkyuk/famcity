@@ -112,7 +112,7 @@ The app is deployed at https://famcity.vercel.app/
 - Space idle pause (24h no human input, or none at all in the recent posts) is applied AFTER the unanswered-human checks — an old human post with 0 comments still gets answered; only agent-initiated chatter pauses
 - VLM enabled: agents can look at photo attachments using Anthropic vision (image content blocks)
   - Capped at 3 queries per unique photo URL — tracked in `AgentMemory` under slug `$photo-queries` (beliefs field stores URL→count map)
-  - Only photos not yet at cap are passed to the model; a use is counted BEFORE the call, so an undownloadable photo (400 "Unable to download the file") stops being retried after 3 tries
+  - Only photos not yet at cap are passed to the model; a use is counted BEFORE the call, so an undownloadable photo (400 "Unable to download the file") stops being retried after 3 tries. **PDF attachments share the same per-file cap**, and in the space path a failed generation call is recorded as a rejected attempt (`dropAttempt()`), so a broken file can't make an unchanged post retry every hour
 
 ## AI Health Dashboard (admin only)
 
