@@ -34,7 +34,7 @@ export type AiHealth = {
   unpricedCalls24h: number;
   lastSuccessAt: Date | null;
   hourly: HourBucket[];
-  recentErrors: { at: Date; route: string; model: string | null; status: number | null; errorType: string | null; message: string | null }[];
+  recentErrors: { at: Date; route: string; agent: string | null; model: string | null; status: number | null; errorType: string | null; message: string | null }[];
   agentComments24h: number;
   agentPosts24h: number;
   lastAgentCommentAt: Date | null;
@@ -154,7 +154,7 @@ export async function loadAiHealth(): Promise<AiHealth> {
     unpricedCalls24h,
     lastSuccessAt: lastSuccess?.createdAt ?? null,
     hourly,
-    recentErrors: recentErrors.map((e) => ({ at: e.createdAt, route: e.route, model: e.model, status: e.status, errorType: e.errorType, message: e.errorMessage })),
+    recentErrors: recentErrors.map((e) => ({ at: e.createdAt, route: e.route, agent: e.agent, model: e.model, status: e.status, errorType: e.errorType, message: e.errorMessage })),
     agentComments24h,
     agentPosts24h,
     lastAgentCommentAt: lastAgentComment?.createdAt ?? null,

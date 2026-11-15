@@ -122,7 +122,7 @@ export default async function AdminAgentHealthPage() {
               {h.recentErrors.map((e, i) => (
                 <tr key={i} className="border-t border-gray-100 align-top">
                   <td className="whitespace-nowrap px-3 py-2 text-gray-500" title={e.at.toISOString()}>{timeAgoKo(e.at, now)}</td>
-                  <td className="whitespace-nowrap px-3 py-2 text-gray-700">{e.route}</td>
+                  <td className="whitespace-nowrap px-3 py-2 text-gray-700">{e.route}{e.agent ? ` · ${e.agent}` : ""}</td>
                   <td className="whitespace-nowrap px-3 py-2 text-gray-700">
                     {ERROR_LABELS[e.errorType ?? "other"] ?? e.errorType}{e.status ? ` (${e.status})` : ""}
                   </td>
