@@ -1167,7 +1167,6 @@ async function runAgentActionBody(agent: (typeof AGENTS)[0], denSpaceId: string,
             .join("\n")}`
         : "";
 
-    const hasPdf = target.type === "PDF" && !!target.mediaUrl;
     // Collect image URLs: prefer media[] array, fall back to mediaUrl for single-image posts
     // Each photo is capped at MAX_PHOTO_QUERIES total VLM uses across all agents.
     const sampledMedia = target.media.length > 3
@@ -1183,6 +1182,11 @@ async function runAgentActionBody(agent: (typeof AGENTS)[0], denSpaceId: string,
       : [];
     const imageUrls = candidateUrls.filter((url) => (photoQueryCounts[photoKey(url)] ?? 0) < MAX_PHOTO_QUERIES);
     const hasImages = imageUrls.length > 0;
+    // PDFs share the per-file cap: an undownloadable PDF otherwise fails every call on this post forever.
+    const pdfUrl = target.type === "PDF" && target.mediaUrl && (photoQueryCounts[photoKey(target.mediaUrl)] ?? 0) < MAX_PHOTO_QUERIES
+      ? target.mediaUrl
+      : null;
+    const hasPdf = pdfUrl !== null;
     const ytInfo = target.type === "YOUTUBE" && target.mediaUrl
       ? await fetchYouTubeTitle(target.mediaUrl)
       : null;
@@ -1314,15 +1318,16 @@ Join this conversation. Respond to what ${originalPoster} shared — or to somet
         type: "image" as const,
         source: { type: "url" as const, url },
       })),
-      ...(hasPdf && target.mediaUrl
-        ? [{ type: "document" as const, source: { type: "url" as const, url: target.mediaUrl } }]
+      ...(pdfUrl
+        ? [{ type: "document" as const, source: { type: "url" as const, url: pdfUrl } }]
         : []),
       { type: "text" as const, text: textPrompt },
     ];
 
     // Count the photo use BEFORE the call: a photo Anthropic can't download (deleted/expired URL)
     // fails the whole request, so counting only successes let it be retried forever.
-    if (imageUrls.length > 0) await incrementPhotoQueries(imageUrls).catch(() => {});
+    const fileUrls = [...imageUrls, ...(pdfUrl ? [pdfUrl] : [])];
+    if (fileUrls.length > 0) await incrementPhotoQueries(fileUrls).catch(() => {});
 
     const response = await anthropicFor("discuss:runAgentAction").messages.create({
       ...AGENT_REQUEST,
@@ -2123,7 +2128,11 @@ async function runSpaceAgentActionBody(
           : [])
       : [];
     const spaceImageUrls = spaceCandidateUrls.filter((url) => (spacePhotoCounts[photoKey(url)] ?? 0) < MAX_PHOTO_QUERIES);
-    const spaceHasPdf = target.type === "PDF" && !!tMediaUrl;
+    // PDFs share the per-file cap (see knight path).
+    const spacePdfUrl = target.type === "PDF" && tMediaUrl && (spacePhotoCounts[photoKey(tMediaUrl)] ?? 0) < MAX_PHOTO_QUERIES
+      ? tMediaUrl
+      : null;
+    const spaceHasPdf = spacePdfUrl !== null;
     const spaceYtInfo = target.type === "YOUTUBE" && tMediaUrl
       ? await fetchYouTubeTitle(tMediaUrl)
       : null;
@@ -2184,20 +2193,28 @@ async function runSpaceAgentActionBody(
 
     const spaceContentBlocks: SpaceContentBlock[] = [
       ...spaceImageUrls.map((url) => ({ type: "image" as const, source: { type: "url" as const, url } })),
-      ...(spaceHasPdf && tMediaUrl
-        ? [{ type: "document" as const, source: { type: "url" as const, url: tMediaUrl } }]
+      ...(spacePdfUrl
+        ? [{ type: "document" as const, source: { type: "url" as const, url: spacePdfUrl } }]
         : []),
       { type: "text" as const, text: textPrompt },
     ];
 
     // Counted before the call so an undownloadable photo stops being retried after the cap.
-    if (spaceImageUrls.length > 0) await incrementPhotoQueries(spaceImageUrls).catch(() => {});
+    const spaceFileUrls = [...spaceImageUrls, ...(spacePdfUrl ? [spacePdfUrl] : [])];
+    if (spaceFileUrls.length > 0) await incrementPhotoQueries(spaceFileUrls).catch(() => {});
 
-    const response = await anthropicFor("discuss:spaceComment").messages.create({
-      ...AGENT_REQUEST,
-      max_tokens: 910,
-      messages: [{ role: "user", content: spaceContentBlocks }],
-    });
+    let response: Awaited<ReturnType<ReturnType<typeof anthropicFor>["messages"]["create"]>>;
+    try {
+      response = await anthropicFor("discuss:spaceComment").messages.create({
+        ...AGENT_REQUEST,
+        max_tokens: 910,
+        messages: [{ role: "user", content: spaceContentBlocks }],
+      });
+    } catch {
+      // A failed call (e.g. 400 "Unable to download the file") is a rejected attempt too:
+      // don't retry this unchanged post every hour. The error itself is already in AiCallLog.
+      return dropAttempt();
+    }
 
     const rawText = textOf(response).trim();
     if (/^SKIP\b/i.test(rawText)) return dropAttempt(); // quality gate: agent decided nothing new to add
