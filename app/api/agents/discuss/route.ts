@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
+import Anthropic from "@anthropic-ai/sdk";
 import { AGENT_REQUEST, anthropicFor, textOf } from "@/lib/anthropic";
 import { hotSessionRemainingMs, passiveModeRemainingMs } from "@/lib/agentModes";
 import { withAgent } from "@/lib/agentContext";
@@ -54,6 +55,53 @@ async function incrementPhotoQueries(urls: string[]): Promise<void> {
       create: { agentSlug: PHOTO_QUERIES_SLUG, beliefs: counts },
     });
   } catch {}
+}
+
+/** Mark files as used up so no agent ever sends them again. */
+async function exhaustPhotoQueries(urls: string[]): Promise<void> {
+  if (urls.length === 0) return;
+  try {
+    const counts = await getPhotoQueryCounts();
+    for (const url of urls) counts[photoKey(url)] = MAX_PHOTO_QUERIES;
+    await prisma.agentMemory.upsert({
+      where: { agentSlug: PHOTO_QUERIES_SLUG },
+      update: { beliefs: counts },
+      create: { agentSlug: PHOTO_QUERIES_SLUG, beliefs: counts },
+    });
+  } catch {}
+}
+
+/** Anthropic couldn't fetch an image/PDF URL we attached. The API has no distinct error type for
+ *  this (it's a plain 400 invalid_request_error), so the message text is the only signal. */
+function isUndownloadableFileError(err: unknown): boolean {
+  return err instanceof Anthropic.APIError && err.status === 400 && /unable to download/i.test(err.message);
+}
+
+/**
+ * Generate with attached photos/PDFs. If Anthropic can't download one of them (deleted or
+ * expired URL), exclude those files for good and retry once text-only — so one dead file
+ * neither fails every agent that looks at the post nor gets retried hour after hour.
+ */
+async function createWithFiles(
+  label: string,
+  maxTokens: number,
+  blocks: Anthropic.ContentBlockParam[],
+  fileUrls: string[]
+): Promise<Anthropic.Message> {
+  const send = (content: Anthropic.ContentBlockParam[]) =>
+    anthropicFor(label).messages.create({ ...AGENT_REQUEST, max_tokens: maxTokens, messages: [{ role: "user", content }] });
+  try {
+    return await send(blocks);
+  } catch (err) {
+    if (fileUrls.length === 0 || !isUndownloadableFileError(err)) throw err;
+    await exhaustPhotoQueries(fileUrls);
+    // The prompt may still say "photos shown above" — tell the model the files didn't load, so it
+    // doesn't invent what they contain.
+    return send([
+      ...blocks.filter((b) => b.type === "text"),
+      { type: "text", text: "[Note: the attached photo/PDF could not be loaded. Do not describe or guess its contents — respond to the text of the post and conversation only.]" },
+    ]);
+  }
 }
 
 /**
@@ -1329,11 +1377,7 @@ Join this conversation. Respond to what ${originalPoster} shared — or to somet
     const fileUrls = [...imageUrls, ...(pdfUrl ? [pdfUrl] : [])];
     if (fileUrls.length > 0) await incrementPhotoQueries(fileUrls).catch(() => {});
 
-    const response = await anthropicFor("discuss:runAgentAction").messages.create({
-      ...AGENT_REQUEST,
-      max_tokens: 910,
-      messages: [{ role: "user", content: contentBlocks }],
-    });
+    const response = await createWithFiles("discuss:runAgentAction", 910, contentBlocks, fileUrls);
 
     const rawText =
       textOf(response).trim();
@@ -2203,13 +2247,9 @@ async function runSpaceAgentActionBody(
     const spaceFileUrls = [...spaceImageUrls, ...(spacePdfUrl ? [spacePdfUrl] : [])];
     if (spaceFileUrls.length > 0) await incrementPhotoQueries(spaceFileUrls).catch(() => {});
 
-    let response: Awaited<ReturnType<ReturnType<typeof anthropicFor>["messages"]["create"]>>;
+    let response: Anthropic.Message;
     try {
-      response = await anthropicFor("discuss:spaceComment").messages.create({
-        ...AGENT_REQUEST,
-        max_tokens: 910,
-        messages: [{ role: "user", content: spaceContentBlocks }],
-      });
+      response = await createWithFiles("discuss:spaceComment", 910, spaceContentBlocks, spaceFileUrls);
     } catch {
       // A failed call (e.g. 400 "Unable to download the file") is a rejected attempt too:
       // don't retry this unchanged post every hour. The error itself is already in AiCallLog.
