@@ -233,6 +233,7 @@ function isFafo(post: RecentPost): boolean {
  * Novelty gate is skipped (pile-on is intentional); factual gate still applies.
  */
 async function runFafoTurnBody(agent: (typeof AGENTS)[0], post: RecentPost): Promise<void> {
+  if (!underAgentCommentCap(post)) return;
   const avatar = agentAvatarUrl(agent.slug);
   const postCaption = post.content ? `\n"${post.content.slice(0, 400)}"` : "";
   const threadContext = post.comments.length > 0
@@ -506,6 +507,26 @@ type RecentPost = {
 };
 
 const AGENT_NAMES = new Set(AGENTS.map((a) => a.name));
+
+/**
+ * Hard cap: at most this many agent comments on a post since its last human comment (or since
+ * the post itself if no human has commented). Holds whatever path an agent comes from — routine,
+ * space, handoff, FAFO — so no loophole can turn a thread into endless agent chatter. A new human
+ * comment resets the count.
+ */
+const MAX_AGENT_COMMENTS_SINCE_HUMAN = 5;
+
+function agentCommentsSinceLastHuman(post: { comments: { userId: string | null }[] }): number {
+  let n = 0;
+  for (let i = post.comments.length - 1; i >= 0; i--) {
+    if (post.comments[i].userId != null) break;
+    n++;
+  }
+  return n;
+}
+
+const underAgentCommentCap = (post: { comments: { userId: string | null }[] }) =>
+  agentCommentsSinceLastHuman(post) < MAX_AGENT_COMMENTS_SINCE_HUMAN;
 const AGENT_NAME_TO_SLUG = new Map(AGENTS.map((a) => [a.name, a.slug]));
 
 /** Slugs of the 5 travel-expert knight agents */
@@ -835,7 +856,9 @@ function mentionsAgent(text: string, agentName: string): boolean {
  *   P3 — fresh posts I haven't entered yet (human-authored first)
  *   P4 — new post (only when nothing else to do)
  */
-async function runAgentActionBody(agent: (typeof AGENTS)[0], denSpaceId: string, recentPosts: RecentPost[], passiveMode = false) {
+async function runAgentActionBody(agent: (typeof AGENTS)[0], denSpaceId: string, allRecentPosts: RecentPost[], passiveMode = false) {
+  // Posts at the per-post agent-comment cap are invisible until a human comments again.
+  const recentPosts = allRecentPosts.filter(underAgentCommentCap);
   const avatar = agentAvatarUrl(agent.slug);
 
   // Load agent's persistent beliefs and relationships (fail gracefully if migration hasn't run yet)
@@ -1740,6 +1763,7 @@ async function runOneAgentTurn(agentIdx: number, denSpaceId: string, prefetched?
  * Applies novelty + factual gates. Skips relevance gate (human explicitly wants a reply).
  */
 async function runDirectTurnBody(agent: (typeof AGENTS)[0], post: RecentPost, handoffNote?: string): Promise<void> {
+  if (!underAgentCommentCap(post)) return;
   const avatar = agentAvatarUrl(agent.slug);
   const beliefs = await loadBeliefs(agent.slug, agent.initialBeliefs ?? []).catch(() => []);
   const beliefContext = formatBeliefsForPrompt(beliefs);
@@ -1915,7 +1939,7 @@ async function runSpaceAgentActionBody(
   // Dedup: posts this agent already generated a reply for and dropped (gate/SKIP), with no new
   // comment since, are invisible to this turn — re-trying an unchanged thread only burns tokens.
   const rejectedUnchanged = await unchangedRejectedPosts(spaceAgent.slug, recentPostsAll);
-  const recentPosts = recentPostsAll.filter((p) => !rejectedUnchanged.has(p.id));
+  const recentPosts = recentPostsAll.filter((p) => !rejectedUnchanged.has(p.id) && underAgentCommentCap(p));
 
   // Posts already touched by any agent in the last 3 min — skip them to avoid pile-ons
   const DEDUPE_WINDOW_MS = 3 * 60 * 1000;
