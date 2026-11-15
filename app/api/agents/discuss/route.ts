@@ -3,6 +3,7 @@ import { getServerSession } from "next-auth";
 import { AGENT_REQUEST, anthropicFor, textOf } from "@/lib/anthropic";
 import { hotSessionRemainingMs, passiveModeRemainingMs } from "@/lib/agentModes";
 import { withAgent } from "@/lib/agentContext";
+import { rememberRejectedAttempt, unchangedRejectedPosts } from "@/lib/attemptMemory";
 import { recordHeartbeat } from "@/lib/aiCallLog";
 import { isCronAuthorized } from "@/lib/cronAuth";
 import { prisma } from "@/lib/prisma";
@@ -1852,7 +1853,7 @@ async function runSpaceAgentActionBody(
       ? `\n\nYour recent comments (don't repeat yourself):\n${agentHistory.slice(0, 4).map((c) => `- "${c.body}"`).join("\n")}`
       : "";
 
-  const recentPosts = await prisma.post.findMany({
+  const recentPostsAll = await prisma.post.findMany({
     take: 30,
     where: { isPrivate: false, spaceId },
     orderBy: { createdAt: "desc" },
@@ -1862,6 +1863,10 @@ async function runSpaceAgentActionBody(
       comments: { orderBy: { createdAt: "asc" }, take: 60, select: { id: true, parentId: true, authorName: true, body: true, createdAt: true, userId: true } },
     },
   });
+  // Dedup: posts this agent already generated a reply for and dropped (gate/SKIP), with no new
+  // comment since, are invisible to this turn — re-trying an unchanged thread only burns tokens.
+  const rejectedUnchanged = await unchangedRejectedPosts(spaceAgent.slug, recentPostsAll);
+  const recentPosts = recentPostsAll.filter((p) => !rejectedUnchanged.has(p.id));
 
   // Posts already touched by any agent in the last 3 min — skip them to avoid pile-ons
   const DEDUPE_WINDOW_MS = 3 * 60 * 1000;
@@ -1952,7 +1957,7 @@ async function runSpaceAgentActionBody(
     (p) =>
       hasContent(p) &&
       (
-        (isHumanPostSA(p) && !agentLastCommentTime.has(p.id)) || // human post untouched by this agent
+        (isHumanPostSA(p) && !p.comments.some((c) => c.userId == null)) || // human post no agent has answered yet
         (p.comments.length > 0 && isHumanCommentSA(p.comments[p.comments.length - 1])) // last comment is by a human
       )
   );
@@ -2078,6 +2083,7 @@ async function runSpaceAgentActionBody(
     let chosen = pool[pool.length - 1];
     for (const entry of pool) { r -= entry.weight; if (r <= 0) { chosen = entry; break; } }
     const target = chosen.post;
+    const dropAttempt = () => rememberRejectedAttempt(spaceAgent.slug, target.id, target.comments.length);
 
     // Flight posts: only reply once per human-comment cycle.
     // Skip if an agent already commented AND no new human comment has come in since.
@@ -2194,27 +2200,27 @@ async function runSpaceAgentActionBody(
     });
 
     const rawText = textOf(response).trim();
-    if (/^SKIP\b/i.test(rawText)) return; // quality gate: agent decided nothing new to add
+    if (/^SKIP\b/i.test(rawText)) return dropAttempt(); // quality gate: agent decided nothing new to add
     const { text: afterSummaryC, summary: commentSummary } = parseSummary(rawText);
     const { text: afterBeliefSA, update } = parseBeliefUpdate(afterSummaryC);
     if (update) await updateBelief(spaceAgent.slug, update.topic, update.belief, update.confidence).catch(() => {});
     // Strip any truncated marker block and finish at a sentence boundary if the cap was hit
     const text = finalizeAgentText(afterBeliefSA, response.stop_reason);
-    if (!text || text.length < 10) return;
+    if (!text || text.length < 10) return dropAttempt();
 
     // Novelty + factual accuracy gates in parallel — FAFO mode skips novelty check
     const [novelSA, humbleSA] = await Promise.all([
       !spaceFafo && target.comments.length > 0 ? isNovel(text, target.comments) : Promise.resolve(true),
       isFactuallyHumble(text, target.content ?? null),
     ]);
-    if (!novelSA || !humbleSA) return;
+    if (!novelSA || !humbleSA) return dropAttempt();
 
     // Relevance gate: for tutoring/debate spaces — skipped in FAFO mode, during a hot session,
     // and whenever we're replying to a human (a person waiting on an answer should never be
     // silently dropped for being "off-topic" — the gate is only to curb agent-to-agent drift).
     const respondingToHuman = focalComment ? isHumanCommentSA(focalComment) : isHumanPostSA(target);
     if (!spaceFafo && !hotSession && !respondingToHuman && (isTutoringPurpose(purpose) || isDebatePurpose(purpose)) &&
-        !(await isOnTopicAndHelpful(text, target.content ?? null, isTutoringPurpose(purpose)))) return;
+        !(await isOnTopicAndHelpful(text, target.content ?? null, isTutoringPurpose(purpose)))) return dropAttempt();
 
     // Flight posts: append live search results only if no results already in thread
     let finalText = text;
@@ -2227,7 +2233,7 @@ async function runSpaceAgentActionBody(
     // Race-condition guard: re-check DB in case another agent posted results while we were generating
     if (FLIGHT_SEARCH_RE.test(target.content ?? "")) {
       const freshComments = await prisma.comment.findMany({ where: { postId: target.id }, select: { body: true } });
-      if (hasFlightResults(freshComments)) return;
+      if (hasFlightResults(freshComments)) return dropAttempt();
     }
 
     const spaceAgentComment = await prisma.comment.create({
