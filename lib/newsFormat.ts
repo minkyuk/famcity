@@ -39,8 +39,13 @@ function decodeEntities(s: string): string {
  * "&lt;p&gt;…"). The headline is shown verbatim in the post, so it has to be plain text.
  */
 export function cleanFeedText(raw: string): string {
-  const unescaped = decodeEntities(raw.replace(/<!\[CDATA\[|\]\]>/g, ""));
-  return decodeEntities(unescaped.replace(/<[^>]*>/g, " ")).replace(/\s+/g, " ").trim();
+  // Tag-shaped only (<p>, </a>, <img src=…>): a headline's "<1%" or "a < b" is text, not markup.
+  const stripTags = (s: string) => s.replace(/<!--[\s\S]*?-->/g, " ").replace(/<\/?[a-z][a-z0-9]*(\s[^<>]*)?\/?>/gi, " ");
+  // Feeds either wrap HTML in CDATA or escape it (&lt;p&gt;…), so: strip, decode, strip what the
+  // decode revealed, then decode what that HTML had escaped itself. The last decode is not
+  // stripped again — a "<" it produces was meant as a character.
+  const once = stripTags(decodeEntities(stripTags(raw.replace(/<!\[CDATA\[|\]\]>/g, ""))));
+  return decodeEntities(once).replace(/\s+/g, " ").trim();
 }
 
 /** Only http(s) links are shown; a feed's <guid> fallback is often not a URL. */
@@ -55,20 +60,28 @@ export const KOREAN_NEWS_BADGE = "🇰🇷 한국 뉴스";
 const NON_WORD = new RegExp("[^\\p{L}\\p{N}]+", "u");
 const HANGUL = /[\uAC00-\uD7A3]/;
 
+/** Trailing particles ("대통령은" / "대통령이") — removed so the same word matches across titles. */
+const KOREAN_PARTICLE = /(에서|으로|부터|까지|은|는|이|가|을|를|의|에|도|로|과|와)$/;
+
 /** Words that identify a story. Korean words are short, so two syllables count; Latin words need five letters. */
 export function storyKeywords(title: string): Set<string> {
-  return new Set(
-    title.toLowerCase().split(NON_WORD).filter((w) => (HANGUL.test(w) ? w.length >= 2 : w.length > 4)),
+  const words = title.toLowerCase().split(NON_WORD).map((w) =>
+    HANGUL.test(w) && w.length >= 3 ? w.replace(KOREAN_PARTICLE, "") : w,
   );
+  return new Set(words.filter((w) => (HANGUL.test(w) ? w.length >= 2 : w.length > 4)));
 }
 
+/**
+ * Same story when three keywords are shared. A title with only two keywords matches when both
+ * are shared; two out of three is not enough ("서울 지하철 파업" vs "서울 지하철 화재").
+ */
 export function isSameStory(a: string, b: string): boolean {
+  if (a.trim().toLowerCase() === b.trim().toLowerCase()) return true;
   const ka = storyKeywords(a);
   const kb = storyKeywords(b);
-  if (ka.size === 0 || kb.size === 0) return a.trim().toLowerCase() === b.trim().toLowerCase();
   let overlap = 0;
   for (const w of ka) if (kb.has(w)) overlap++;
-  return overlap >= 3 || (ka.size <= 4 && overlap >= 2);
+  return overlap >= 3 || (overlap === 2 && Math.min(ka.size, kb.size) === 2);
 }
 
 /** The headline a stored news post was written about (its first line, without the 📰 mark and badge). */
@@ -178,10 +191,26 @@ export function parseBrief(lang: NewsLang, raw: string): Brief {
   return out;
 }
 
-/** A brief is usable when it has the TL;DR and at least four of the 5W1H facts. */
+const isNotStated = (v: string | undefined) => {
+  const t = (v ?? "").trim().toLowerCase().replace(/[."']/g, "");
+  return !t || t.startsWith(NOT_STATED.en.toLowerCase()) || t.startsWith(NOT_STATED.ko);
+};
+
+/**
+ * A brief is usable when it has a TL;DR, says what happened, and states at least three of the
+ * 5W1H facts for real — "Not stated in the source" lines are shown, but they don't count.
+ */
 export function briefIsUsable(b: Brief): boolean {
-  const facts = (["who", "what", "when", "where", "why", "how"] as const).filter((f) => b[f]).length;
-  return !!b.tldr && facts >= 4;
+  const facts = (["who", "what", "when", "where", "why", "how"] as const).filter((f) => !isNotStated(b[f])).length;
+  return !isNotStated(b.tldr) && !isNotStated(b.what) && facts >= 3;
+}
+
+/**
+ * A brief is label lines, not prose: when generation hit the token cap, the last line is the
+ * unfinished one, so it is dropped (trimming to the last "." would cut inside "3.5%").
+ */
+export function dropUnfinishedLine(text: string, stopReason: string | null | undefined): string {
+  return stopReason === "max_tokens" ? text.split("\n").slice(0, -1).join("\n") : text;
 }
 
 type Persona = { name: string; personality: string };
@@ -236,6 +265,7 @@ export function splitBilingual(input: string): { en: string; ko: string } {
   if (koAt === -1) return { en: raw.replace(/\[\s*EN\s*\]/i, "").trim(), ko: "" };
   const strip = (s: string) => s.replace(/\[\s*(EN|KO)\s*\]/gi, "").trim();
   if (enAt !== -1 && enAt < koAt) return { en: strip(raw.slice(enAt, koAt)), ko: strip(raw.slice(koAt)) };
+  if (enAt > koAt) return { en: strip(raw.slice(enAt)), ko: strip(raw.slice(koAt, enAt)) }; // Korean written first
   return { en: strip(raw.slice(0, koAt)), ko: strip(raw.slice(koAt)) };
 }
 

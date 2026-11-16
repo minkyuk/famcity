@@ -12,7 +12,7 @@ import { authOptions } from "@/lib/auth";
 import { finalizeAgentText } from "@/lib/agentText";
 import { fetchArticleText } from "@/lib/articleText";
 import {
-  assembleNewsPost, briefIsUsable, briefPrompt, cleanFeedLink, cleanFeedText, godViewPrompt, headlineOfPost,
+  assembleNewsPost, briefIsUsable, briefPrompt, cleanFeedLink, cleanFeedText, dropUnfinishedLine, godViewPrompt, headlineOfPost,
   humanViewPrompt, isSameStory, KOREAN_NEWS_BADGE, MIN_VOTES_TO_POST, parseBrief, toPerspective,
   type Brief, type NewsLang, type NewsStory,
 } from "@/lib/newsFormat";
@@ -47,11 +47,13 @@ const KOREAN_SLUGS = new Set([
 
 const pickRandom = <T,>(items: T[]): T => items[Math.floor(Math.random() * items.length)];
 
-async function getOrCreateNewsSpace(): Promise<string> {
+/** `create: false` (dry run) only looks the space up, so a dry run never writes anything. */
+async function getNewsSpace(create: boolean): Promise<string | null> {
   const existing = await prisma.space.findFirst({
     where: { isSystem: true, name: "Family News" },
   });
   if (existing) return existing.id;
+  if (!create) return null;
 
   let inviteCode = generateInviteCode();
   while (await prisma.space.findUnique({ where: { inviteCode } })) {
@@ -82,13 +84,22 @@ function extractJson(text: string): unknown {
   return JSON.parse(match[0]);
 }
 
-async function ask(label: string, agent: Agent, prompt: string, maxTokens: number): Promise<string> {
+function isVote(v: unknown): v is { index: number; reason: string } {
+  if (typeof v !== "object" || v === null) return false;
+  const o = v as Record<string, unknown>; // a non-null object from model JSON, read field by field
+  return typeof o.index === "number" && typeof o.reason === "string";
+}
+
+/** `shape: "lines"` is the labelled brief; `"prose"` is a perspective, trimmed to its last full sentence if cut off. */
+async function ask(label: string, agent: Agent, prompt: string, maxTokens: number, shape: "lines" | "prose"): Promise<string> {
   const msg = await anthropicFor(label, agent.name).messages.create({
     ...AGENT_REQUEST,
     max_tokens: maxTokens,
     messages: [{ role: "user", content: prompt }],
   });
-  return finalizeAgentText(textOf(msg), msg.stop_reason);
+  return shape === "lines"
+    ? finalizeAgentText(dropUnfinishedLine(textOf(msg), msg.stop_reason))
+    : finalizeAgentText(textOf(msg), msg.stop_reason);
 }
 
 /**
@@ -108,10 +119,10 @@ async function composeStory(o: {
 }): Promise<string | null> {
   const both = o.langs === "both";
   const [enRaw, koRaw, godRaw, humanRaw] = await Promise.allSettled([
-    both ? ask("news:report", o.reporter, briefPrompt("en", o.story), 520) : Promise.resolve(""),
-    ask(both ? "news:reportKorean" : "news:koreanFeed", o.reporter, briefPrompt("ko", o.story), 700),
-    ask("news:godView", o.godAgent, godViewPrompt(o.godAgent, o.story, o.langs, FAITH_GUARDRAIL), both ? 560 : 360),
-    ask("news:humanView", o.humanAgent, humanViewPrompt(o.humanAgent, o.story, o.langs, FAITH_GUARDRAIL), both ? 620 : 400),
+    both ? ask("news:report", o.reporter, briefPrompt("en", o.story), 650, "lines") : Promise.resolve(""),
+    ask(both ? "news:reportKorean" : "news:koreanFeed", o.reporter, briefPrompt("ko", o.story), 900, "lines"),
+    ask("news:godView", o.godAgent, godViewPrompt(o.godAgent, o.story, o.langs, FAITH_GUARDRAIL), both ? 560 : 360, "prose"),
+    ask("news:humanView", o.humanAgent, humanViewPrompt(o.humanAgent, o.story, o.langs, FAITH_GUARDRAIL), both ? 620 : 400, "prose"),
   ]);
   const text = (r: PromiseSettledResult<string>) => (r.status === "fulfilled" ? r.value : "");
   const brief = (lang: NewsLang, raw: string): Brief | null => {
@@ -238,14 +249,10 @@ Respond ONLY with valid JSON, no other text:
         }],
       });
 
-      const parsed = extractJson(textOf(msg) || "{}") as { votes?: unknown[] }; // shape is checked field by field below
+      const parsed = extractJson(textOf(msg) || "{}") as { votes?: unknown }; // model JSON: every field is checked below
       const seen = new Set<number>();
-      const votes = (parsed.votes ?? [])
-        .filter((v): v is { index: number; reason: string } =>
-          typeof v === "object" && v !== null &&
-          typeof (v as Record<string, unknown>).index === "number" && // narrowing an unknown JSON value
-          typeof (v as Record<string, unknown>).reason === "string"
-        )
+      const votes = (Array.isArray(parsed.votes) ? parsed.votes : [])
+        .filter(isVote)
         .filter((v) => Number.isInteger(v.index) && v.index >= 0 && v.index < candidates.length)
         // One voter, one vote per story: naming the same story twice must not count as two.
         .filter((v) => (seen.has(v.index) ? false : (seen.add(v.index), true)))
@@ -376,7 +383,8 @@ export async function POST(req: NextRequest) {
     else void recordHeartbeat("news", "user"); // don't delay a user-triggered run
   }
 
-  const spaceId = await getOrCreateNewsSpace();
+  const spaceId = await getNewsSpace(!dry);
+  if (!spaceId) return NextResponse.json({ ok: true, dry: true, posted: 0, results: [], reason: "no_news_space", posts: [] });
 
   const recentPosts = await prisma.post.findMany({
     where: { spaceId, createdAt: { gte: new Date(Date.now() - DEDUP_WINDOW_MS) } },
