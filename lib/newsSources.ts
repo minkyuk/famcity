@@ -37,8 +37,8 @@ export const GLOBAL_SOURCES: NewsSource[] = [
 
 export const KOREAN_SOURCES: NewsSource[] = [
   { name: "연합뉴스", url: "https://www.yna.co.kr/rss/news.xml", lean: "center" },
-  { name: "KBS", url: "http://world.kbs.co.kr/rss/rss_news.htm?lang=k", lean: "center" },
   { name: "SBS", url: "https://news.sbs.co.kr/news/headlineRssFeed.do?plink=RSSREADER", lean: "center" },
+  { name: "뉴시스", url: "https://www.newsis.com/RSS/sokbo.xml", lean: "center" },
 
   { name: "한겨레", url: "https://www.hani.co.kr/rss/", lean: "left" },
   { name: "경향신문", url: "https://www.khan.co.kr/rss/rssdata/total_news.xml", lean: "left" },
@@ -77,16 +77,45 @@ function sameEvent(a: { title: string; keys: Set<string> }, b: { title: string; 
  *    been picked least so far, and among equals the outlet with the fewest other stories.
  * 3. Stories only one outlet carries are added one per outlet, then two per outlet, and so on,
  *    with no leaning taking more than a third of the list while others still have stories.
+ *
+ * `known` carries what a model said about the headlines (see groupPrompt): `linked` are groups of
+ * indexes into `stories` that are the same event even though the words differ, and `exclude` are
+ * indexes of stories already posted — the whole event they belong to is dropped.
  */
-export function pickBalanced<T extends Balanceable>(stories: T[], max: number): Balanced<T>[] {
-  type Group = { members: { item: T; keys: Set<string> }[] };
-  const groups: Group[] = [];
-  for (const item of stories) {
-    const entry = { item, keys: storyKeywords(item.title) };
-    const group = groups.find((g) => g.members.some((m) => sameEvent({ title: m.item.title, keys: m.keys }, { title: item.title, keys: entry.keys })));
-    if (!group) groups.push({ members: [entry] });
-    else if (!group.members.some((m) => m.item.sourceName === item.sourceName)) group.members.push(entry);
+export function pickBalanced<T extends Balanceable>(
+  stories: T[],
+  max: number,
+  known: { linked?: number[][]; exclude?: number[] } = {},
+): Balanced<T>[] {
+  // Union-find over story indexes: keyword matches and the model's links both join events.
+  const parent = stories.map((_, i) => i);
+  const find = (i: number): number => {
+    while (parent[i] !== i) { parent[i] = parent[parent[i]]; i = parent[i]; }
+    return i;
+  };
+  const entries = stories.map((item) => ({ title: item.title, keys: storyKeywords(item.title) }));
+  for (let i = 1; i < stories.length; i++) {
+    for (let j = 0; j < i; j++) {
+      if (find(i) !== find(j) && sameEvent(entries[i], entries[j])) parent[find(i)] = find(j);
+    }
   }
+  for (const group of known.linked ?? []) {
+    const valid = group.filter((i) => Number.isInteger(i) && i >= 0 && i < stories.length);
+    for (let k = 1; k < valid.length; k++) parent[find(valid[k])] = find(valid[0]);
+  }
+  const dropped = new Set((known.exclude ?? []).filter((i) => i >= 0 && i < stories.length).map(find));
+
+  type Group = { members: { item: T }[] };
+  const byRoot = new Map<number, Group>();
+  const groups: Group[] = [];
+  stories.forEach((item, i) => {
+    const root = find(i);
+    if (dropped.has(root)) return;
+    let group = byRoot.get(root);
+    if (!group) { group = { members: [] }; byRoot.set(root, group); groups.push(group); }
+    // One report per outlet: an outlet repeating itself adds nothing.
+    if (!group.members.some((m) => m.item.sourceName === item.sourceName)) group.members.push({ item });
+  });
 
   const offered = new Map<string, number>();
   for (const item of stories) offered.set(item.sourceName, (offered.get(item.sourceName) ?? 0) + 1);

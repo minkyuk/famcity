@@ -14,6 +14,7 @@ import { finalizeAgentText } from "@/lib/agentText";
 import { fetchArticleText } from "@/lib/articleText";
 import {
   assembleNewsPost, briefIsUsable, briefPrompt, cleanFeedLink, cleanFeedText, clip, dropUnfinishedLine, godViewPrompt,
+  groupPrompt, parseGroups,
   headlineOfPost, humanViewPrompt, isSameStory, KOREAN_NEWS_BADGE, koreanPickPrompt, MIN_VOTES_TO_POST, parseBrief,
   parsePick, toHumanView, toPerspective,
   type Brief, type NewsLang, type NewsStory,
@@ -44,6 +45,48 @@ async function loadFeed(source: NewsSource, limit: number, reports: FeedReport[]
   return { source, items, report };
 }
 
+/** Keeps the order, at most `perOutlet` stories from each outlet. */
+function shortlist<T extends { sourceName: string }>(stories: T[], perOutlet: number): T[] {
+  const taken = new Map<string, number>();
+  return stories.filter((s) => {
+    const n = taken.get(s.sourceName) ?? 0;
+    taken.set(s.sourceName, n + 1);
+    return n < perOutlet;
+  });
+}
+
+/**
+ * Asks which headlines are the same event (as each other, or as something already posted).
+ * Fails soft: on any error nothing is linked and keyword matching alone decides.
+ */
+async function linkSameEvents(
+  scope: string,
+  stories: { title: string; sourceName: string }[],
+  postedHeadlines: string[],
+  reports: FeedReport[],
+): Promise<{ linked: number[][]; exclude: number[] }> {
+  if (stories.length < 2 && postedHeadlines.length === 0) return { linked: [], exclude: [] };
+  try {
+    const msg = await anthropicFor("news:group").messages.create({
+      ...AGENT_REQUEST,
+      max_tokens: 400,
+      messages: [{ role: "user", content: groupPrompt(stories.map((s) => s.title), postedHeadlines.slice(0, POSTED_FOR_GROUPING)) }],
+    });
+    const { linked, posted } = parseGroups(textOf(msg), stories.length);
+    const name = (i: number) => `${stories[i].sourceName}: ${stories[i].title.slice(0, 60)}`;
+    reports.push({
+      feed: `same-event check (${scope})`,
+      ok: true,
+      items: stories.length,
+      note: `same event: ${linked.map((g) => g.map(name).join(" = ")).join(" || ") || "none"} · already posted: ${posted.map(name).join(" | ") || "none"}`,
+    });
+    return { linked, exclude: posted };
+  } catch (err) {
+    reports.push({ feed: `same-event check (${scope})`, ok: false, items: stories.length, error: err instanceof Error ? err.message : String(err) });
+    return { linked: [], exclude: [] };
+  }
+}
+
 /** A picked story with the other outlets' reports of the same event attached. */
 function withOthers<T extends NewsStory>(pick: { story: T; others: T[] }): T {
   return { ...pick.story, others: pick.others.map((o) => ({ sourceName: o.sourceName, link: o.link, description: o.description })) };
@@ -61,6 +104,10 @@ const VOTER_COUNT = Math.min(6, AGENTS.length);
 const MAX_STORIES_PER_RUN = 3;
 /** How many fresh Korean stories the pick call chooses from. */
 const KOREAN_PICK_POOL = 15;
+/** Each outlet's top stories go to the same-event check; more than this only adds tokens. */
+const SHORTLIST_PER_OUTLET = 4;
+/** How many already-posted headlines the same-event check is shown. */
+const POSTED_FOR_GROUPING = 40;
 
 /**
  * Every agent is a Christian. The evidence-to-faith agents write the human-standards view
@@ -237,8 +284,9 @@ async function postVotedStories(recentHeadlines: string[], publish: Publish, rep
 
   // Drop already-posted stories, then spread the candidates across outlets and leanings; reports
   // of the same event by several outlets become one candidate that cites them all.
-  const fresh = pool.filter((c) => !recentHeadlines.some((t) => isSameStory(t, c.title)));
-  const candidates: Candidate[] = pickBalanced(fresh, MAX_CANDIDATES).map(withOthers);
+  const fresh = shortlist(pool.filter((c) => !recentHeadlines.some((t) => isSameStory(t, c.title))), SHORTLIST_PER_OUTLET);
+  const sameEvents = await linkSameEvents("global", fresh, recentHeadlines, reports);
+  const candidates: Candidate[] = pickBalanced(fresh, MAX_CANDIDATES, sameEvents).map(withOthers);
   if (candidates.length === 0) return { results: [], reason: "no_new_stories", tally: [] };
 
   // --- Voting round: VOTER_COUNT random agents each pick their top 2 stories ---
@@ -382,21 +430,25 @@ async function postKoreanStory(recentHeadlines: string[], publish: Publish, repo
         const title = cleanFeedText(item.title);
         const description = cleanFeedText(item.description);
         const publishedAt = parsePubDate(item.pubDate);
-        if (!title || description.length < 30) { tooShort++; continue; }
+        const link = cleanFeedLink(item.link);
+        // Some outlets' feeds carry headlines only. Those are kept when there is a link: the
+        // article itself then has to supply the text (checked after the pick).
+        if (!title || (description.length < 30 && !link)) { tooShort++; continue; }
         if (publishedAt && now - publishedAt.getTime() > FALLBACK_MS) { old++; continue; }
         if (recentHeadlines.some((t) => isSameStory(t, title))) { alreadyPosted++; continue; }
-        stories.push({ sourceName: source.name, lean: source.lean, title, description, link: cleanFeedLink(item.link), publishedAt });
+        stories.push({ sourceName: source.name, lean: source.lean, title, description: description.length >= 30 ? description : "", link, publishedAt });
       }
-      if (items.length > 0) report.note = `${tooShort} without a usable summary, ${old} older than a day, ${alreadyPosted} already posted`;
+      if (items.length > 0) report.note = `${tooShort} without a summary or link, ${old} older than a day, ${alreadyPosted} already posted`;
       return stories;
     });
     // Newest of every outlet first, then each outlet's second story, and so on — so the wire
     // service that publishes most often doesn't fill the whole list.
     const interleaved: (NewsStory & { lean: Lean })[] = [];
-    for (let i = 0; perFeed.some((stories) => i < stories.length); i++) {
+    for (let i = 0; i < SHORTLIST_PER_OUTLET && perFeed.some((stories) => i < stories.length); i++) {
       for (const stories of perFeed) if (i < stories.length) interleaved.push(stories[i]);
     }
-    const pool: NewsStory[] = pickBalanced(interleaved, KOREAN_PICK_POOL).map(withOthers);
+    const sameEvents = await linkSameEvents("korean", interleaved, recentHeadlines, reports);
+    const pool: NewsStory[] = pickBalanced(interleaved, KOREAN_PICK_POOL, sameEvents).map(withOthers);
     if (pool.length === 0) return null;
 
     const koreanAgents = AGENTS.filter((a) => KOREAN_SLUGS.has(a.slug));
@@ -416,6 +468,8 @@ async function postKoreanStory(recentHeadlines: string[], publish: Publish, repo
     const pick = pool[picked];
 
     const story = await withArticleText(pick);
+    // A headline-only feed item whose article couldn't be read has no facts to report.
+    if (!story.description && !story.articleText && !story.others?.some((o) => o.description)) return null;
     const content = await composeStory({ story, reporter, godAgent: reporter, humanAgent, langs: "ko", badge: KOREAN_NEWS_BADGE });
     if (!content) return null;
 
