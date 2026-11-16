@@ -19,7 +19,14 @@ export type NewsStory = {
   publishedAt: Date | null;
   /** Body text fetched from the article page (best effort) — gives the brief more than the feed's one-line summary. */
   articleText?: string | null;
+  /** The same event as reported by other outlets: cited in the post and used to cross-check the facts. */
+  others?: OtherReport[];
 };
+
+export type OtherReport = { sourceName: string; link: string | null; description: string };
+
+/** At most this many other outlets are cited and quoted to the model per story. */
+const MAX_OTHER_REPORTS = 3;
 
 const ENTITIES: Record<string, string> = {
   amp: "&", lt: "<", gt: ">", quot: '"', apos: "'", nbsp: " ", hellip: "…", mdash: "—", ndash: "–",
@@ -73,12 +80,19 @@ const HANGUL = /[\uAC00-\uD7A3]/;
 /** Trailing particles ("대통령은" / "대통령이") — removed so the same word matches across titles. */
 const KOREAN_PARTICLE = /(에서|으로|부터|까지|은|는|이|가|을|를|의|에|도|로|과|와)$/;
 
+/** Long enough to pass the five-letter rule, but they say nothing about which story it is. */
+const FILLER_WORDS = new Set([
+  "after", "about", "their", "there", "which", "while", "where", "would", "could", "should", "these", "those",
+  "other", "being", "under", "since", "until", "against", "between", "among", "before", "during", "first",
+  "again", "still", "every", "might", "amid",
+]);
+
 /** Words that identify a story. Korean words are short, so two syllables count; Latin words need five letters. */
 export function storyKeywords(title: string): Set<string> {
   const words = title.toLowerCase().split(NON_WORD).map((w) =>
     HANGUL.test(w) && w.length >= 3 ? w.replace(KOREAN_PARTICLE, "") : w,
   );
-  return new Set(words.filter((w) => (HANGUL.test(w) ? w.length >= 2 : w.length > 4)));
+  return new Set(words.filter((w) => (HANGUL.test(w) ? w.length >= 2 : w.length > 4 && !FILLER_WORDS.has(w))));
 }
 
 /**
@@ -105,12 +119,15 @@ export function headlineOfPost(content: string): string {
  * The Korean feed is a raw "latest" wire: company filings and notices sit next to real news, so
  * the first item is often trivial. One short call picks the story worth telling a family — or none.
  */
-export function koreanPickPrompt(stories: { title: string; description: string }[]): string {
-  const list = stories.map((s, i) => `${i}. ${s.title} — ${s.description.slice(0, 80)}`).join("\n");
+export function koreanPickPrompt(stories: { title: string; description: string; sourceName?: string; others?: OtherReport[] }[]): string {
+  const list = stories.map((s, i) => {
+    const outlets = [s.sourceName, ...(s.others ?? []).map((o) => o.sourceName)].filter(Boolean);
+    return `${i}. ${s.title}${outlets.length > 0 ? ` (${outlets.join(", ")})` : ""} — ${s.description.slice(0, 80)}`;
+  }).join("\n");
   return `아래는 방금 들어온 한국 뉴스입니다. 한국어를 쓰는 한 가족에게 오늘 전할 만한, 사회 전체에 의미가 큰 소식 하나를 고르세요.
 
 고르지 말 것: 개별 기업의 공시·주식 취득·실적 발표, 인사·부고·게시판, 스포츠 경기 결과, 연예 소식, 날씨 예보, 홍보성 기사.
-그런 소식밖에 없으면 NONE 이라고 답하세요.
+여러 매체가 함께 다룬 소식이 있으면 그것을 우선하세요. 고를 만한 소식이 없으면 NONE 이라고 답하세요.
 
 ${list}
 
@@ -177,9 +194,14 @@ export function formatPublished(d: Date | null): string | null {
 /** Prompt for the factual brief. No persona: this part reports, it doesn't opine. */
 export function briefPrompt(lang: NewsLang, story: NewsStory): string {
   const published = formatPublished(story.publishedAt);
-  const text = story.articleText
+  const own = story.articleText
     ? `${story.description.slice(0, 500)}\n${story.articleText}`
     : story.description.slice(0, 700);
+  const others = (story.others ?? []).slice(0, MAX_OTHER_REPORTS);
+  // Other outlets' summaries count as source text too: no outlet's framing is taken on trust.
+  const text = others.length === 0 ? own : `${own}\n\n${lang === "ko"
+    ? "같은 사건에 대한 다른 매체의 요약 (사실 확인과 보충에 쓰고, 매체마다 내용이 다르면 어느 매체가 그렇게 전하는지 밝히세요):"
+    : "OTHER OUTLETS ON THE SAME STORY (use their summaries to confirm and add facts; where outlets differ, say which outlet reports what):"}\n${others.map((o) => `- ${o.sourceName}: ${o.description.slice(0, 300)}`).join("\n")}`;
   if (lang === "ko") {
     return `가족을 위한 사실 중심 뉴스 브리핑을 한국어로 작성하세요. 아래 출처 본문에 적힌 사실만 사용하세요 (마지막 두 줄 "도움"·"부담"만 예외로, 그 사실에서 바로 따라오는 결과를 정리합니다). 본문에 없는 이름, 숫자, 날짜, 장소, 원인, 동기를 절대 추가하지 마세요. 본문에 없는 항목은 정확히 "${NOT_STATED.ko}"이라고만 쓰고 다른 설명을 붙이지 마세요. 본문에 제목과 관계없는 줄(광고, 다른 기사 안내)이 섞여 있으면 무시하세요.
 
@@ -192,7 +214,7 @@ export function briefPrompt(lang: NewsLang, story: NewsStory): string {
 - 사실을 바로 서술하세요. "본문에 따르면", "출처는 ~라고 전한다" 같은 표현이나 본문에 대한 평가, 괄호 속 원문 인용을 쓰지 마세요.
 - 확인되지 않은 주장은 누가 한 주장인지 밝히세요 (예: "소송은 ~라고 주장한다", "경찰은 ~라고 밝혔다").
 - 외국 인명·기관명은 한글로 쓰고, 처음 한 번만 원어를 괄호로 덧붙이세요.
-- "도움"과 "부담" 두 줄은 이 소식의 득실을 객관적으로 정리하는 곳입니다. 줄마다 구체적인 대상(집단·기업·국가)을 최대 세 곳 쓰고, 대상 뒤에 " — "와 함께 어떻게 도움이 되거나 부담이 되는지 적으세요 (예: "예금자 — 예금 이자 상승; 수출 기업 — 환율 효과"). 이 두 줄은 110자까지 쓸 수 있습니다. 위 사실에서 바로 따라오는 결과만 쓰고, 본문에 없는 숫자나 추측을 덧붙이지 말며, 칭찬이나 비난 없이 서술하세요. 확실하지 않은 효과는 "~할 수 있음"으로 쓰세요. 억지로 채우지 마세요: 뚜렷하게 득을 보는(또는 부담을 지는) 쪽이 없으면 정확히 "${NO_CLEAR_PARTY.ko}"이라고 쓰세요.
+- "도움"과 "부담" 두 줄은 이 소식의 득실을 객관적으로 정리하는 곳입니다. 줄마다 구체적인 대상(집단·기업·국가)을 최대 세 곳 쓰고, 대상 뒤에 " — "와 함께 어떻게 도움이 되거나 부담이 되는지 적으세요 (예: "예금자 — 예금 이자 상승; 수출 기업 — 환율 효과"). 이 두 줄은 110자까지 쓸 수 있습니다. 위 사실에서 바로 따라오는 결과만 쓰고, 본문에 없는 숫자나 추측을 덧붙이지 말며, 칭찬이나 비난 없이 서술하세요. 확실하지 않은 효과는 "~할 수 있음"으로 쓰세요. 거의 모든 소식은 누군가의 입지(돈·권한·안전·평판)를 유리하게 하고 다른 누군가에게는 불리하게 하므로 양쪽을 구체적으로 찾으세요. 위 사실만으로는 정말 대상을 짚을 수 없을 때에만 정확히 "${NO_CLEAR_PARTY.ko}"이라고 쓰세요.
 
 아래 아홉 줄을 이 순서대로, 한 줄에 하나씩, 일반 텍스트로만 쓰세요 (마크다운·별표 금지):
 요약: 가장 중요한 사실 (핵심 수치가 있으면 그것부터)
@@ -215,7 +237,7 @@ Rules:
 - Each line is ONE short sentence (25 words at most) with only the most important point. The TLDR alone may be two sentences.
 - State the facts directly. Do not write "the text says" or "according to the source", do not comment on what the source leaves out, and do not quote the text in parentheses.
 - Keep unproven claims attributed to whoever made them ("the lawsuit alleges…", "police say…").
-- HELPS and HURTS are the objective balance sheet of this news. On each line name up to three specific parties (groups, companies, countries) and, after a dash, the concrete way it helps or costs them ("Savers — higher interest on deposits; Exporters — a weaker currency"). These two lines may run to 40 words. Direct consequences of the facts above only: no speculation beyond them, no numbers that are not in the text, no praise or blame; say "may" where the effect is not certain. Do not force a side: if nobody clearly gains (or loses), write exactly "${NO_CLEAR_PARTY.en}".
+- HELPS and HURTS are the objective balance sheet of this news. On each line name up to three specific parties (groups, companies, countries) and, after a dash, the concrete way it helps or costs them ("Savers — higher interest on deposits; Exporters — a weaker currency"). These two lines may run to 40 words. Direct consequences of the facts above only: no speculation beyond them, no numbers that are not in the text, no praise or blame; say "may" where the effect is not certain. Nearly every story strengthens someone's position and weakens someone else's — in money, power, safety or reputation — so look for both sides concretely; only when you truly cannot name a party from the facts, write exactly "${NO_CLEAR_PARTY.en}".
 
 Write exactly these nine lines in this order, one per line, plain text only (no markdown, no asterisks):
 TLDR: the most important fact (lead with the key number if there is one)
@@ -370,11 +392,14 @@ const isNoParty = (v: string | undefined) => {
 
 /**
  * The objective balance sheet: who this news helps and who it costs. Shown as its own block so
- * the two sides can be compared at a glance; left out when the story has no clear party on
- * either side (nothing is forced).
+ * the two sides can be compared at a glance. Nothing is forced: a side with no clear party says
+ * so, and when neither side has one the block says that in a single line.
  */
 function balanceBlock(lang: NewsLang, b: Brief | null): string {
-  if (!b || (isNoParty(b.helps) && isNoParty(b.hurts))) return "";
+  if (!b || (!b.helps && !b.hurts)) return ""; // the model wrote neither line: nothing to show
+  if (isNoParty(b.helps) && isNoParty(b.hurts)) {
+    return `${BALANCE_TITLE[lang]}\n${lang === "ko" ? "이 소식으로 뚜렷하게 득을 보거나 부담을 지는 쪽은 확인되지 않음" : "No party clearly gains or loses from this news"}`;
+  }
   return [
     BALANCE_TITLE[lang],
     `${DISPLAY[lang].helps}: ${b.helps?.trim() || NO_CLEAR_PARTY[lang]}`,
@@ -410,7 +435,9 @@ export function assembleNewsPost(p: {
   footer?: string;
 }): string {
   const { story, en, ko, godView, humanView } = p;
-  const source = story.link ? `${story.sourceName} — ${story.link}` : story.sourceName;
+  const cite = (o: { sourceName: string; link: string | null }) => (o.link ? `${o.sourceName} — ${o.link}` : o.sourceName);
+  const source = cite(story);
+  const also = (story.others ?? []).slice(0, MAX_OTHER_REPORTS).map(cite).join(" · ");
   const block = (...lines: (string | false | null | undefined)[]) => lines.filter(Boolean).join("\n");
 
   const head = block(
@@ -419,13 +446,13 @@ export function assembleNewsPost(p: {
     ko?.tldr && `${DISPLAY.ko.tldr}: ${ko.tldr}`,
   );
 
-  const enSection = en && block(...briefLines("en", en), `Source: ${source}`);
+  const enSection = en && block(...briefLines("en", en), `Source: ${source}`, also && `Also reported by: ${also}`);
   const enViews = [
     godView?.en && `✝️ God-centered view — ${godView.agent}\n${godView.en}`,
     godView?.en && humanView?.en && `⚖️ Human view — ${humanView.agent}\n${humanView.en}`,
   ].filter(Boolean).join("\n\n");
 
-  const koBody = ko && block(...briefLines("ko", ko), `출처: ${source}`);
+  const koBody = ko && block(...briefLines("ko", ko), `출처: ${source}`, also && `함께 보도한 매체: ${also}`);
   const koViews = [
     godView?.ko && `✝️ 하나님 중심의 관점 — ${godView.agent}\n${godView.ko}`,
     godView?.ko && humanView?.ko && `⚖️ 사람의 관점 — ${humanView.agent}\n${humanView.ko}`,
