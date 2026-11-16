@@ -101,6 +101,38 @@ export function headlineOfPost(content: string): string {
   return first.endsWith(` · ${KOREAN_NEWS_BADGE}`) ? first.slice(0, -` · ${KOREAN_NEWS_BADGE}`.length).trim() : first;
 }
 
+/**
+ * The Korean feed is a raw "latest" wire: company filings and notices sit next to real news, so
+ * the first item is often trivial. One short call picks the story worth telling a family — or none.
+ */
+export function koreanPickPrompt(stories: { title: string; description: string }[]): string {
+  const list = stories.map((s, i) => `${i}. ${s.title} — ${s.description.slice(0, 80)}`).join("\n");
+  return `아래는 방금 들어온 한국 뉴스입니다. 한국어를 쓰는 한 가족에게 오늘 전할 만한, 사회 전체에 의미가 큰 소식 하나를 고르세요.
+
+고르지 말 것: 개별 기업의 공시·주식 취득·실적 발표, 인사·부고·게시판, 스포츠 경기 결과, 연예 소식, 날씨 예보, 홍보성 기사.
+그런 소식밖에 없으면 NONE 이라고 답하세요.
+
+${list}
+
+번호 하나만 답하세요 (예: 3). 고를 것이 없으면 NONE.`;
+}
+
+/** Index chosen by koreanPickPrompt's reply; null for NONE, an out-of-range number, or anything unreadable. */
+export function parsePick(raw: string, count: number): number | null {
+  const m = raw.trim().match(/^\D{0,12}(\d{1,2})\b/);
+  if (!m || /none/i.test(raw)) return null;
+  const index = Number(m[1]);
+  return index >= 0 && index < count ? index : null;
+}
+
+/** Cuts at a word boundary and marks the cut, for one-line fields such as the vote reason. */
+export function clip(text: string, max: number): string {
+  if (text.length <= max) return text;
+  const cut = text.slice(0, max);
+  const lastSpace = cut.lastIndexOf(" ");
+  return `${(lastSpace > max * 0.6 ? cut.slice(0, lastSpace) : cut).replace(/[\s,;:—-]+$/, "")}…`;
+}
+
 /** A story is posted only when at least this many voters chose it. */
 export const MIN_VOTES_TO_POST = 2;
 

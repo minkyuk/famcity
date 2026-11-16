@@ -12,8 +12,9 @@ import { authOptions } from "@/lib/auth";
 import { finalizeAgentText } from "@/lib/agentText";
 import { fetchArticleText } from "@/lib/articleText";
 import {
-  assembleNewsPost, briefIsUsable, briefPrompt, cleanFeedLink, cleanFeedText, dropUnfinishedLine, godViewPrompt, headlineOfPost,
-  humanViewPrompt, isSameStory, KOREAN_NEWS_BADGE, MIN_VOTES_TO_POST, parseBrief, toPerspective,
+  assembleNewsPost, briefIsUsable, briefPrompt, cleanFeedLink, cleanFeedText, clip, dropUnfinishedLine, godViewPrompt,
+  headlineOfPost, humanViewPrompt, isSameStory, KOREAN_NEWS_BADGE, koreanPickPrompt, MIN_VOTES_TO_POST, parseBrief,
+  parsePick, toPerspective,
   type Brief, type NewsLang, type NewsStory,
 } from "@/lib/newsFormat";
 
@@ -50,6 +51,8 @@ const DEDUP_WINDOW_MS = FALLBACK_MS;
 const MAX_CANDIDATES = 8;
 const VOTER_COUNT = Math.min(6, AGENTS.length);
 const MAX_STORIES_PER_RUN = 3;
+/** How many fresh Korean stories the pick call chooses from. */
+const KOREAN_PICK_POOL = 15;
 
 /**
  * Every agent is a Christian. The evidence-to-faith agents write the human-standards view
@@ -318,7 +321,7 @@ Respond ONLY with valid JSON, no other text:
     const passed = ballots.filter((b) => !votedFor.has(b.agent.name)).map((b) => b.agent.name);
     const footer = [
       `🗳️ Selected by: ${entry.voters.map((v) => v.name).join(", ")} (${voteCount} of ${ballots.length} voters)`,
-      entry.voters[0]?.reason ? `Why: ${entry.voters[0].reason.slice(0, 200)}` : "",
+      entry.voters[0]?.reason ? `Why: ${clip(entry.voters[0].reason, 200)}` : "",
       passed.length > 0 ? `Passed on: ${passed.join(", ")}` : "",
     ].filter(Boolean).join("\n");
 
@@ -347,9 +350,9 @@ Respond ONLY with valid JSON, no other text:
 /** One story from the Korean feeds, written in Korean only. Best effort — never fails the run. */
 async function postKoreanStory(recentHeadlines: string[], publish: Publish, reports: FeedReport[]): Promise<Posted | null> {
   try {
-    const feeds = await Promise.all(KOREAN_NEWS_FEEDS.map((url) => loadFeed(url, 15, reports)));
+    const feeds = await Promise.all(KOREAN_NEWS_FEEDS.map((url) => loadFeed(url, 30, reports)));
 
-    let pick: NewsStory | null = null;
+    const pool: NewsStory[] = [];
     for (const { url, items, report } of feeds) {
       let tooShort = 0;
       let alreadyPosted = 0;
@@ -357,16 +360,30 @@ async function postKoreanStory(recentHeadlines: string[], publish: Publish, repo
         const title = cleanFeedText(item.title);
         const description = cleanFeedText(item.description);
         if (!title || description.length < 30) { tooShort++; continue; }
-        if (recentHeadlines.some((t) => isSameStory(t, title))) { alreadyPosted++; continue; }
-        pick ??= { sourceName: feedSourceName(url), title, description, link: cleanFeedLink(item.link), publishedAt: parsePubDate(item.pubDate) };
+        if (recentHeadlines.some((t) => isSameStory(t, title)) || pool.some((p) => isSameStory(p.title, title))) { alreadyPosted++; continue; }
+        if (pool.length < KOREAN_PICK_POOL) {
+          pool.push({ sourceName: feedSourceName(url), title, description, link: cleanFeedLink(item.link), publishedAt: parsePubDate(item.pubDate) });
+        }
       }
-      if (items.length > 0) report.note = `${tooShort} without a usable summary, ${alreadyPosted} already posted`;
+      if (items.length > 0) report.note = `${tooShort} without a usable summary, ${alreadyPosted} already posted or repeated`;
     }
-    if (!pick) return null;
+    if (pool.length === 0) return null;
 
     const koreanAgents = AGENTS.filter((a) => KOREAN_SLUGS.has(a.slug));
     const reporter = pickRandom(koreanAgents.filter((a) => !EVIDENCE_LENS_SLUGS.has(a.slug)));
     const humanAgent = pickRandom(koreanAgents.filter((a) => EVIDENCE_LENS_SLUGS.has(a.slug)));
+
+    // The feed's first item is whatever came in last, often a company filing. Choose the story
+    // that matters; if the call fails or finds nothing worth telling, skip this round.
+    const pickMsg = await anthropicFor("news:koreanPick", reporter.name).messages.create({
+      ...AGENT_REQUEST,
+      max_tokens: 10,
+      messages: [{ role: "user", content: koreanPickPrompt(pool) }],
+    });
+    const picked = parsePick(textOf(pickMsg), pool.length);
+    reports.push({ feed: "korean pick", ok: picked !== null, items: pool.length, note: picked === null ? "nothing worth posting" : pool[picked].title });
+    if (picked === null) return null;
+    const pick = pool[picked];
 
     const story = await withArticleText(pick);
     const content = await composeStory({ story, reporter, godAgent: reporter, humanAgent, langs: "ko", badge: KOREAN_NEWS_BADGE });
