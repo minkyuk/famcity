@@ -153,7 +153,7 @@ function CommentRow({
   };
 
   return (
-    <div className={depth === 1 ? "ml-3 border-l border-gray-100 pl-2" : depth > 1 ? "border-l border-gray-100 pl-2" : ""}>
+    <div id={`comment-${c.id}`} className={depth === 1 ? "ml-3 border-l border-gray-100 pl-2" : depth > 1 ? "border-l border-gray-100 pl-2" : ""}>
       <div className="flex gap-2">
         <Avatar name={c.authorName} image={c.authorImage} />
         <div className="bg-gray-50 rounded-xl px-3 py-2 flex-1 min-w-0">
@@ -297,6 +297,11 @@ export function CommentThread({ postId, initialComments, currentUserId, currentU
       setComments((prev) => [...prev, comment]);
       setBody("");
       setReplyTo(null);
+      if (!open) { setOpen(true); fetchLiked(); }
+      // The list scrolls inside its own box — bring the new comment into view once it has rendered.
+      setTimeout(() => {
+        document.getElementById(`comment-${comment.id}`)?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+      }, 80);
       // Fire-and-forget: trigger agents to respond immediately
       if (spaceId) fetch(`/api/spaces/${spaceId}/trigger`, { method: "POST" }).catch(() => {});
       fetch("/api/agents/discuss", {
@@ -340,7 +345,6 @@ export function CommentThread({ postId, initialComments, currentUserId, currentU
 
   const handleReply = (parentId: string, parentAuthor: string) => {
     setReplyTo({ id: parentId, author: parentAuthor });
-    setOpen(true);
     // Focus the input shortly after render
     setTimeout(() => {
       document.getElementById(`reply-input-${postId}`)?.focus();
@@ -350,16 +354,43 @@ export function CommentThread({ postId, initialComments, currentUserId, currentU
   const topLevel = comments.filter((c) => !c.parentId);
 
   return (
-    <div className="mt-2 min-w-0">
-      <button
-        onClick={() => { const next = !open; setOpen(next); if (next) fetchLiked(); }}
-        className="text-sm text-gray-400 hover:text-gray-600 transition-colors"
-      >
-        {open ? "Hide" : `${comments.length} comment${comments.length !== 1 ? "s" : ""}`}
-      </button>
+    <div className="mt-2 min-w-0 flex flex-col gap-2">
+      {/* Composer sits directly under the post — always visible, no scrolling past comments to reach it */}
+      {replyTo && (
+        <div className="flex items-center gap-2 px-1">
+          <span className="text-xs text-gray-500">↩ Replying to <span className="font-semibold text-gray-700">{replyTo.author}</span></span>
+          <button onClick={() => setReplyTo(null)} className="text-[10px] text-gray-400 hover:text-gray-600">✕</button>
+        </div>
+      )}
+      <form onSubmit={submit} className="flex gap-2">
+        <input
+          id={`reply-input-${postId}`}
+          value={body}
+          onChange={(e) => setBody(e.target.value)}
+          placeholder={replyTo ? `Reply to ${replyTo.author}…` : "Write a comment…"}
+          className="flex-1 min-w-0 text-sm border border-gray-200 rounded-xl px-3 py-2 focus:outline-none focus:ring-2 focus:ring-orange-200"
+        />
+        <button
+          type="submit"
+          disabled={submitting || !body.trim()}
+          className="text-sm bg-accent text-white rounded-xl px-4 py-2 disabled:opacity-40 hover:bg-orange-600 transition-colors"
+        >
+          Post
+        </button>
+      </form>
 
-      {open && (
-        <div className="mt-3 flex flex-col gap-2">
+      {comments.length > 0 && (
+        <button
+          onClick={() => { const next = !open; setOpen(next); if (next) fetchLiked(); }}
+          className="self-start text-sm text-gray-400 hover:text-gray-600 transition-colors"
+        >
+          {open ? "Hide comments" : `View ${comments.length} comment${comments.length !== 1 ? "s" : ""}`}
+        </button>
+      )}
+
+      {open && comments.length > 0 && (
+        // Bounded height: a long thread scrolls inside this box instead of stretching the feed
+        <div className="flex flex-col gap-2 max-h-[28rem] overflow-y-auto pr-1">
           {topLevel.map((c) => (
             <CommentRow
               key={c.id}
@@ -380,30 +411,6 @@ export function CommentThread({ postId, initialComments, currentUserId, currentU
               cancelEdit={() => setEditingId(null)}
             />
           ))}
-
-          {replyTo && (
-            <div className="flex items-center gap-2 px-1">
-              <span className="text-xs text-gray-500">↩ Replying to <span className="font-semibold text-gray-700">{replyTo.author}</span></span>
-              <button onClick={() => setReplyTo(null)} className="text-[10px] text-gray-400 hover:text-gray-600">✕</button>
-            </div>
-          )}
-
-          <form onSubmit={submit} className="flex gap-2 mt-1">
-            <input
-              id={`reply-input-${postId}`}
-              value={body}
-              onChange={(e) => setBody(e.target.value)}
-              placeholder={replyTo ? `Reply to ${replyTo.author}…` : "Write a comment…"}
-              className="flex-1 text-sm border border-gray-200 rounded-xl px-3 py-2 focus:outline-none focus:ring-2 focus:ring-orange-200"
-            />
-            <button
-              type="submit"
-              disabled={submitting || !body.trim()}
-              className="text-sm bg-accent text-white rounded-xl px-4 py-2 disabled:opacity-40 hover:bg-orange-600 transition-colors"
-            >
-              Post
-            </button>
-          </form>
         </div>
       )}
     </div>
