@@ -311,10 +311,10 @@ ${en}
 FORMAT B — the story is not contested. One line only: how most people across the spectrum see it, and the practical question it leaves (two sentences at most).
 ${enCommon}
 
-Use only the facts in the news text above; add no statistics or events. No hashtags, no markdown.
+Use only the facts in the news text above; add no statistics or events. No hashtags, no markdown. Write only the labelled lines — no introduction before the first label and nothing after the last.
 
 ${langs === "ko"
-    ? `한국어로만 작성하세요. 형식 A는 "${ko.replace(/\n/g, " / ")}", 형식 B는 "${koCommon}" 입니다. 둘 중 하나만 쓰세요.`
+    ? `한국어로만, 머리말이나 설명 없이 형식의 줄만 작성하세요. 형식 A는 "${ko.replace(/\n/g, " / ")}", 형식 B는 "${koCommon}" 입니다. 둘 중 하나만 쓰세요.`
     : `Write the chosen format in English, then the same content in natural Korean, exactly like this:\n[EN]\n<format A or B in English>\n[KO]\n<같은 형식의 한국어: 형식 A는 "${ko.replace(/\n/g, " / ")}", 형식 B는 "${koCommon}">\nEach label starts its own line.`}${guardrail}`;
 }
 
@@ -328,6 +328,19 @@ export function splitBilingual(input: string): { en: string; ko: string } {
   if (enAt !== -1 && enAt < koAt) return { en: strip(raw.slice(enAt, koAt)), ko: strip(raw.slice(koAt)) };
   if (enAt > koAt) return { en: strip(raw.slice(enAt)), ko: strip(raw.slice(koAt, enAt)) }; // Korean written first
   return { en: strip(raw.slice(0, koAt)), ko: strip(raw.slice(koAt)) };
+}
+
+const HUMAN_VIEW_LABEL = /^\s*(Progressive|Conservative|Weighing it|Common ground|진보|보수|정리|공통된 시각)\s*[:：]/m;
+
+/** The human view is labelled lines only; a lead-in the model wrote before the first label is dropped. */
+export function toHumanView(agent: string, raw: string, langs: "both" | "ko"): Perspective | null {
+  const view = toPerspective(agent, raw, langs);
+  if (!view) return null;
+  const fromFirstLabel = (text: string) => {
+    const at = text.search(HUMAN_VIEW_LABEL);
+    return at > 0 ? text.slice(at).trim() : text;
+  };
+  return { agent, en: fromFirstLabel(view.en), ko: fromFirstLabel(view.ko) };
 }
 
 function briefLines(lang: NewsLang, b: Brief): string[] {

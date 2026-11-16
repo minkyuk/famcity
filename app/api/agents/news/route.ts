@@ -14,7 +14,7 @@ import { fetchArticleText } from "@/lib/articleText";
 import {
   assembleNewsPost, briefIsUsable, briefPrompt, cleanFeedLink, cleanFeedText, clip, dropUnfinishedLine, godViewPrompt,
   headlineOfPost, humanViewPrompt, isSameStory, KOREAN_NEWS_BADGE, koreanPickPrompt, MIN_VOTES_TO_POST, parseBrief,
-  parsePick, toPerspective,
+  parsePick, toHumanView, toPerspective,
   type Brief, type NewsLang, type NewsStory,
 } from "@/lib/newsFormat";
 
@@ -161,7 +161,7 @@ async function composeStory(o: {
     en,
     ko,
     godView: toPerspective(o.godAgent.name, text(godRaw), o.langs),
-    humanView: toPerspective(o.humanAgent.name, text(humanRaw), o.langs),
+    humanView: toHumanView(o.humanAgent.name, text(humanRaw), o.langs),
     footer: o.footer,
   });
 }
@@ -171,15 +171,24 @@ async function withArticleText<T extends NewsStory>(story: T): Promise<T> {
   return { ...story, articleText: await fetchArticleText(story.link, story.title) };
 }
 
-function pickPerspectiveAgents(voters: Voter[], reporter: Agent): { godAgent: Agent; humanAgent: Agent } {
+/**
+ * `taken` holds the agents who already wrote a perspective in this run, so three stories don't
+ * all carry the same two voices; it is updated here.
+ */
+function pickPerspectiveAgents(voters: Voter[], reporter: Agent, taken: Set<string>): { godAgent: Agent; humanAgent: Agent } {
   const others = AGENTS.filter((a) => a.name !== reporter.name);
   const voterSlugs = new Set(voters.map((v) => v.slug));
-  const evidenceLens = others.filter((a) => EVIDENCE_LENS_SLUGS.has(a.slug));
-  const faithLens = others.filter((a) => !EVIDENCE_LENS_SLUGS.has(a.slug));
-  // Prefer agents who voted for the story — they already chose to engage with it.
+  const choose = (lens: Agent[]): Agent => {
+    const fresh = lens.filter((a) => !taken.has(a.name));
+    const from = fresh.length > 0 ? fresh : lens;
+    // Prefer agents who voted for the story — they already chose to engage with it.
+    const agent = from.find((a) => voterSlugs.has(a.slug)) ?? pickRandom(from);
+    taken.add(agent.name);
+    return agent;
+  };
   return {
-    godAgent: faithLens.find((a) => voterSlugs.has(a.slug)) ?? pickRandom(faithLens),
-    humanAgent: evidenceLens.find((a) => voterSlugs.has(a.slug)) ?? pickRandom(evidenceLens),
+    godAgent: choose(others.filter((a) => !EVIDENCE_LENS_SLUGS.has(a.slug))),
+    humanAgent: choose(others.filter((a) => EVIDENCE_LENS_SLUGS.has(a.slug))),
   };
 }
 
@@ -304,6 +313,7 @@ Respond ONLY with valid JSON, no other text:
   const stories = await Promise.all(selected.map((t) => withArticleText(t.candidate)));
 
   const usedReporters = new Set<string>();
+  const usedPerspectiveAgents = new Set<string>();
   const results: Posted[] = [];
 
   for (const [i, entry] of selected.entries()) {
@@ -315,7 +325,7 @@ Respond ONLY with valid JSON, no other text:
       AGENTS.find((a) => !usedReporters.has(a.name) && entry.voters.some((v) => v.name === a.name)) ??
       pickRandom(AGENTS.filter((a) => !usedReporters.has(a.name)));
     usedReporters.add(reporter.name);
-    const { godAgent, humanAgent } = pickPerspectiveAgents(entry.voters, reporter);
+    const { godAgent, humanAgent } = pickPerspectiveAgents(entry.voters, reporter, usedPerspectiveAgents);
 
     const votedFor = new Set(entry.voters.map((v) => v.name));
     const passed = ballots.filter((b) => !votedFor.has(b.agent.name)).map((b) => b.agent.name);
