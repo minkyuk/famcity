@@ -63,7 +63,7 @@ export function cleanFeedLink(raw: string): string | null {
     const url = new URL(link);
     // Feed tracking tags make the link long and say nothing to the reader.
     for (const key of [...url.searchParams.keys()]) {
-      if (/^(utm_|at_|ns_)|^(cmpid|ocid|src|ref|tsrc)$/i.test(key)) url.searchParams.delete(key);
+      if (/^(utm_|at_|ns_)|^(cmpid|ocid|src|ref|tsrc|traffic_source|partner|smid)$/i.test(key)) url.searchParams.delete(key);
     }
     return url.toString();
   } catch {
@@ -116,13 +116,47 @@ export function headlineOfPost(content: string): string {
 }
 
 /**
+ * Outlets headline the same event in different words ("California files lawsuit against OpenAI…"
+ * / "California sues OpenAI over hacking risks"), which keyword matching misses. With many outlets
+ * that would post one event several times, so one short call reads the headlines and says which
+ * are the same event — as each other, and as something already posted.
+ */
+export function groupPrompt(headlines: string[], posted: string[]): string {
+  return `Below are news headlines from different outlets (numbered)${posted.length > 0 ? ", followed by headlines that were already posted (P-numbered)" : ""}.
+
+1. Which numbered headlines report the SAME EVENT as each other? Group them only when it is clearly the same event — the same people, the same action, the same occasion. The same topic, country or person is not enough.
+2. Which numbered headlines report the same event as an already-posted headline?
+
+Answer ONLY with JSON, no other text: {"groups": [[0, 5, 12], [3, 9]], "posted": [4, 7]}
+Use [] where there is nothing to report.
+
+Headlines:
+${headlines.map((h, i) => `${i}. ${h.slice(0, 140)}`).join("\n")}${posted.length > 0 ? `\n\nAlready posted:\n${posted.map((h, i) => `P${i}. ${h.slice(0, 140)}`).join("\n")}` : ""}`;
+}
+
+/** Reads groupPrompt's reply. Anything malformed or out of range is ignored — a bad answer groups nothing. */
+export function parseGroups(raw: string, count: number): { linked: number[][]; posted: number[] } {
+  const none = { linked: [], posted: [] };
+  const match = plain(raw).match(/\{[\s\S]*\}/);
+  if (!match) return none;
+  let parsed: unknown;
+  try { parsed = JSON.parse(match[0]); } catch { return none; }
+  if (typeof parsed !== "object" || parsed === null) return none;
+  const o = parsed as Record<string, unknown>; // a non-null object from model JSON, read field by field
+  const indexes = (v: unknown): number[] =>
+    Array.isArray(v) ? [...new Set(v.filter((n): n is number => Number.isInteger(n) && n >= 0 && n < count))] : [];
+  const linked = (Array.isArray(o.groups) ? o.groups : []).map(indexes).filter((g) => g.length >= 2);
+  return { linked, posted: indexes(o.posted) };
+}
+
+/**
  * The Korean feed is a raw "latest" wire: company filings and notices sit next to real news, so
  * the first item is often trivial. One short call picks the story worth telling a family — or none.
  */
 export function koreanPickPrompt(stories: { title: string; description: string; sourceName?: string; others?: OtherReport[] }[]): string {
   const list = stories.map((s, i) => {
     const outlets = [s.sourceName, ...(s.others ?? []).map((o) => o.sourceName)].filter(Boolean);
-    return `${i}. ${s.title}${outlets.length > 0 ? ` (${outlets.join(", ")})` : ""} — ${s.description.slice(0, 80)}`;
+    return `${i}. ${s.title}${outlets.length > 0 ? ` (${outlets.join(", ")})` : ""}${s.description ? ` — ${s.description.slice(0, 80)}` : ""}`;
   }).join("\n");
   return `아래는 방금 들어온 한국 뉴스입니다. 한국어를 쓰는 한 가족에게 오늘 전할 만한, 사회 전체에 의미가 큰 소식 하나를 고르세요.
 

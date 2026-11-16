@@ -9,7 +9,8 @@ export interface RssItem {
 /** Fetch and parse an RSS feed, returning up to `limit` items. No dependencies — pure fetch + regex. */
 export async function fetchRss(url: string, limit = 10): Promise<RssItem[]> {
   const res = await fetch(url, {
-    headers: { "User-Agent": "FamCity/1.0 RSS Reader" },
+    // A plain reader identity: some outlets answer 403 to an unfamiliar product name.
+    headers: { "User-Agent": "Mozilla/5.0 (compatible; RSS reader)", Accept: "application/rss+xml, application/xml, text/xml, */*" },
     next: { revalidate: 0 },
     signal: AbortSignal.timeout(8000), // one stalled feed must not hold up a run that reads twenty
   });
