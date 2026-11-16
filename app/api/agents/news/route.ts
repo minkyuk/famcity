@@ -5,7 +5,8 @@ import { AGENT_REQUEST, anthropicFor, textOf } from "@/lib/anthropic";
 import { recordHeartbeat } from "@/lib/aiCallLog";
 import { prisma } from "@/lib/prisma";
 import { AGENTS, agentAvatarUrl, FAITH_GUARDRAIL } from "@/lib/agents";
-import { fetchRss, feedSourceName, NEWS_FEEDS, KOREAN_NEWS_FEEDS, type RssItem } from "@/lib/rss";
+import { fetchRss, type RssItem } from "@/lib/rss";
+import { GLOBAL_SOURCES, KOREAN_SOURCES, pickBalanced, type Lean, type NewsSource } from "@/lib/newsSources";
 import { generateInviteCode } from "@/lib/invite";
 import { isCronAuthorized } from "@/lib/cronAuth";
 import { authOptions } from "@/lib/auth";
@@ -19,7 +20,8 @@ import {
 } from "@/lib/newsFormat";
 
 type Agent = (typeof AGENTS)[number];
-type Candidate = NewsStory & { ageMs: number };
+/** `lean` only balances the candidate list (see lib/newsSources.ts); it never reaches a prompt or a post. */
+type Candidate = NewsStory & { ageMs: number; lean: Lean };
 type Voter = { name: string; slug: string; reason: string };
 type Posted = { source: string; agent: string; headline: string; votes: number };
 /** Saves a post — or, in a dry run, just collects it. */
@@ -28,17 +30,23 @@ type Publish = (author: Agent, content: string, metadata: Prisma.InputJsonObject
 type FeedReport = { feed: string; ok: boolean; items: number; error?: string; note?: string };
 
 /** A feed that fails is skipped, never fatal: the run goes on with the feeds that answered. */
-async function loadFeed(url: string, limit: number, reports: FeedReport[]): Promise<{ url: string; items: RssItem[]; report: FeedReport }> {
+async function loadFeed(source: NewsSource, limit: number, reports: FeedReport[]): Promise<{ source: NewsSource; items: RssItem[]; report: FeedReport }> {
+  const feed = `${source.name} — ${source.url}`;
   let report: FeedReport;
   let items: RssItem[] = [];
   try {
-    items = await fetchRss(url, limit);
-    report = { feed: url, ok: true, items: items.length };
+    items = await fetchRss(source.url, limit);
+    report = { feed, ok: true, items: items.length };
   } catch (err) {
-    report = { feed: url, ok: false, items: 0, error: err instanceof Error ? err.message : String(err) };
+    report = { feed, ok: false, items: 0, error: err instanceof Error ? err.message : String(err) };
   }
   reports.push(report);
-  return { url, items, report };
+  return { source, items, report };
+}
+
+/** A picked story with the other outlets' reports of the same event attached. */
+function withOthers<T extends NewsStory>(pick: { story: T; others: T[] }): T {
+  return { ...pick.story, others: pick.others.map((o) => ({ sourceName: o.sourceName, link: o.link, description: o.description })) };
 }
 
 const BREAKING_MS = 2 * 60 * 60 * 1000;
@@ -196,11 +204,12 @@ type VotedOutcome = { results: Posted[]; reason?: string; tally: { title: string
 
 /** Global stories: agents vote, and only stories at least MIN_VOTES_TO_POST of them chose are posted. */
 async function postVotedStories(recentHeadlines: string[], publish: Publish, reports: FeedReport[]): Promise<VotedOutcome> {
-  const feeds = await Promise.all(NEWS_FEEDS.map((url) => loadFeed(url, 20, reports)));
+  const feeds = await Promise.all(GLOBAL_SOURCES.map((source) => loadFeed(source, 20, reports)));
 
   const now = Date.now();
   const all: Candidate[] = [];
-  for (const { url, items } of feeds) {
+  for (const { source, items, report } of feeds) {
+    let usable = 0;
     for (const item of items) {
       const title = cleanFeedText(item.title);
       const description = cleanFeedText(item.description);
@@ -208,8 +217,10 @@ async function postVotedStories(recentHeadlines: string[], publish: Publish, rep
       if (!title || description.length < 80 || !publishedAt) continue;
       const ageMs = now - publishedAt.getTime();
       if (ageMs < 0 || ageMs > FALLBACK_MS) continue;
-      all.push({ sourceName: feedSourceName(url), title, description, link: cleanFeedLink(item.link), publishedAt, ageMs });
+      usable++;
+      all.push({ sourceName: source.name, lean: source.lean, title, description, link: cleanFeedLink(item.link), publishedAt, ageMs });
     }
+    if (items.length > 0) report.note = `${usable} usable (dated within 24h, with a summary)`;
   }
 
   // Sort: finance/global first within each age tier, then by recency
@@ -224,14 +235,10 @@ async function postVotedStories(recentHeadlines: string[], publish: Publish, rep
   const recent = all.filter((c) => c.ageMs <= RECENT_MS);
   const pool = breaking.length >= 2 ? breaking : recent.length >= 2 ? recent : all;
 
-  // Drop already-posted stories and duplicates within this run
-  const candidates: Candidate[] = [];
-  for (const c of pool) {
-    if (candidates.length >= MAX_CANDIDATES) break;
-    if (recentHeadlines.some((t) => isSameStory(t, c.title))) continue;
-    if (candidates.some((k) => isSameStory(k.title, c.title))) continue;
-    candidates.push(c);
-  }
+  // Drop already-posted stories, then spread the candidates across outlets and leanings; reports
+  // of the same event by several outlets become one candidate that cites them all.
+  const fresh = pool.filter((c) => !recentHeadlines.some((t) => isSameStory(t, c.title)));
+  const candidates: Candidate[] = pickBalanced(fresh, MAX_CANDIDATES).map(withOthers);
   if (candidates.length === 0) return { results: [], reason: "no_new_stories", tally: [] };
 
   // --- Voting round: VOTER_COUNT random agents each pick their top 2 stories ---
@@ -241,7 +248,9 @@ async function postVotedStories(recentHeadlines: string[], publish: Publish, rep
     .map((c, i) => {
       const tag = isFinanceGlobal(c.title, c.description) ? " [GLOBAL/FINANCE]" : "";
       const age = c.ageMs < BREAKING_MS ? " [BREAKING]" : c.ageMs < RECENT_MS ? " [RECENT]" : "";
-      return `${i}. ${c.title}${tag}${age} (${c.sourceName})\n   ${c.description.slice(0, 150)}`;
+      const outlets = [c.sourceName, ...(c.others ?? []).map((o) => o.sourceName)];
+      const shared = outlets.length > 1 ? ` [${outlets.length} OUTLETS]` : "";
+      return `${i}. ${c.title}${tag}${age}${shared} (${outlets.join(", ")})\n   ${c.description.slice(0, 150)}`;
     })
     .join("\n\n");
 
@@ -265,7 +274,7 @@ Judge each story on all four criteria and vote for the 2 that score best overall
 3. Critical importance — Is this urgent, high-stakes, or likely to have lasting real-world consequences?
 4. Novelty — Is this genuinely new information, not a story that has been unfolding for weeks already?
 
-Prefer stories tagged [GLOBAL/FINANCE] or [BREAKING]. Skip anything that feels like background noise or a recurring slow-burn story.
+Prefer stories tagged [GLOBAL/FINANCE] or [BREAKING], and stories that several outlets are reporting. Skip anything that feels like background noise or a recurring slow-burn story.
 
 Stories:
 ${storyList}
@@ -345,6 +354,7 @@ Respond ONLY with valid JSON, no other text:
         deduplicated: true,
         source: story.sourceName,
         ...(story.link ? { link: story.link } : {}),
+        ...(story.others?.length ? { alsoReportedBy: story.others.map((o) => o.sourceName) } : {}),
       });
       results.push({ source: story.sourceName, agent: reporter.name, headline: story.title, votes: voteCount });
     } catch {
@@ -360,23 +370,33 @@ Respond ONLY with valid JSON, no other text:
 /** One story from the Korean feeds, written in Korean only. Best effort — never fails the run. */
 async function postKoreanStory(recentHeadlines: string[], publish: Publish, reports: FeedReport[]): Promise<Posted | null> {
   try {
-    const feeds = await Promise.all(KOREAN_NEWS_FEEDS.map((url) => loadFeed(url, 30, reports)));
+    const feeds = await Promise.all(KOREAN_SOURCES.map((source) => loadFeed(source, 30, reports)));
 
-    const pool: NewsStory[] = [];
-    for (const { url, items, report } of feeds) {
+    const now = Date.now();
+    const perFeed = feeds.map(({ source, items, report }) => {
       let tooShort = 0;
       let alreadyPosted = 0;
+      let old = 0;
+      const stories: (NewsStory & { lean: Lean })[] = [];
       for (const item of items) {
         const title = cleanFeedText(item.title);
         const description = cleanFeedText(item.description);
+        const publishedAt = parsePubDate(item.pubDate);
         if (!title || description.length < 30) { tooShort++; continue; }
-        if (recentHeadlines.some((t) => isSameStory(t, title)) || pool.some((p) => isSameStory(p.title, title))) { alreadyPosted++; continue; }
-        if (pool.length < KOREAN_PICK_POOL) {
-          pool.push({ sourceName: feedSourceName(url), title, description, link: cleanFeedLink(item.link), publishedAt: parsePubDate(item.pubDate) });
-        }
+        if (publishedAt && now - publishedAt.getTime() > FALLBACK_MS) { old++; continue; }
+        if (recentHeadlines.some((t) => isSameStory(t, title))) { alreadyPosted++; continue; }
+        stories.push({ sourceName: source.name, lean: source.lean, title, description, link: cleanFeedLink(item.link), publishedAt });
       }
-      if (items.length > 0) report.note = `${tooShort} without a usable summary, ${alreadyPosted} already posted or repeated`;
+      if (items.length > 0) report.note = `${tooShort} without a usable summary, ${old} older than a day, ${alreadyPosted} already posted`;
+      return stories;
+    });
+    // Newest of every outlet first, then each outlet's second story, and so on — so the wire
+    // service that publishes most often doesn't fill the whole list.
+    const interleaved: (NewsStory & { lean: Lean })[] = [];
+    for (let i = 0; perFeed.some((stories) => i < stories.length); i++) {
+      for (const stories of perFeed) if (i < stories.length) interleaved.push(stories[i]);
     }
+    const pool: NewsStory[] = pickBalanced(interleaved, KOREAN_PICK_POOL).map(withOthers);
     if (pool.length === 0) return null;
 
     const koreanAgents = AGENTS.filter((a) => KOREAN_SLUGS.has(a.slug));

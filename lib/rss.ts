@@ -6,35 +6,12 @@ export interface RssItem {
   source?: string;
 }
 
-/** Map feed URL to a human-readable source name */
-const FEED_SOURCE_NAMES: Record<string, string> = {
-  "feeds.bbci.co.uk": "BBC News",
-  "aljazeera.com": "Al Jazeera",
-  "rss.cnn.com": "CNN",
-  "feeds.foxnews.com": "Fox News",
-  "sciencedaily.com": "Science Daily",
-  "feeds.reuters.com": "Reuters",
-  "rss.reuters.com": "Reuters",
-  "feeds.finance.yahoo.com": "Yahoo Finance",
-  "finance.yahoo.com": "Yahoo Finance",
-  "cnbc.com": "CNBC",
-  "marketwatch.com": "MarketWatch",
-  "yna.co.kr": "연합뉴스",
-  "imnews.imbc.com": "MBC 뉴스",
-};
-
-export function feedSourceName(url: string): string {
-  for (const [domain, name] of Object.entries(FEED_SOURCE_NAMES)) {
-    if (url.includes(domain)) return name;
-  }
-  try { return new URL(url).hostname.replace(/^www\./, ""); } catch { return url; }
-}
-
 /** Fetch and parse an RSS feed, returning up to `limit` items. No dependencies — pure fetch + regex. */
 export async function fetchRss(url: string, limit = 10): Promise<RssItem[]> {
   const res = await fetch(url, {
     headers: { "User-Agent": "FamCity/1.0 RSS Reader" },
     next: { revalidate: 0 },
+    signal: AbortSignal.timeout(8000), // one stalled feed must not hold up a run that reads twenty
   });
   if (!res.ok) throw new Error(`RSS fetch failed: ${res.status}`);
   const xml = await res.text();
@@ -60,31 +37,7 @@ function extract(xml: string, tag: string): string {
   return m ? m[1].trim() : "";
 }
 
-// Good free RSS feeds — no API key needed
-// Mix of top global news + financial/markets coverage
-export const NEWS_FEEDS = [
-  // Reuters — top global news
-  "https://feeds.reuters.com/reuters/topNews",
-  // Reuters — business & finance
-  "https://feeds.reuters.com/reuters/businessNews",
-  // BBC World
-  "https://feeds.bbci.co.uk/news/world/rss.xml",
-  // BBC Business
-  "https://feeds.bbci.co.uk/news/business/rss.xml",
-  // CNBC — markets
-  "https://www.cnbc.com/id/10000664/device/rss/rss.html",
-  // Yahoo Finance
-  "https://finance.yahoo.com/news/rssindex",
-];
-
-// Korean-language news feeds
-export const KOREAN_NEWS_FEEDS = [
-  // Yonhap News Agency — Korea's primary national news wire. The path is lowercase: the old
-  // "/RSS/news.xml" answers 404, which silently stopped Korean news until a dry run showed it.
-  "https://www.yna.co.kr/rss/news.xml",
-  // MBC News
-  "https://imnews.imbc.com/rss/news/news_00.xml",
-];
+// News feeds (global and Korean) live in lib/newsSources.ts, with each outlet's name and leaning.
 
 export const SCIENCE_FEEDS = [
   "https://www.sciencedaily.com/rss/all.xml",
