@@ -79,10 +79,9 @@ export const NEWS_FEEDS = [
 
 // Korean-language news feeds
 export const KOREAN_NEWS_FEEDS = [
-  // Yonhap News Agency — Korea's primary national news wire (the path is lowercase on the current site;
-  // the old spelling is kept after it in case it still answers)
+  // Yonhap News Agency — Korea's primary national news wire. The path is lowercase: the old
+  // "/RSS/news.xml" answers 404, which silently stopped Korean news until a dry run showed it.
   "https://www.yna.co.kr/rss/news.xml",
-  "https://www.yna.co.kr/RSS/news.xml",
   // MBC News
   "https://imnews.imbc.com/rss/news/news_00.xml",
 ];
