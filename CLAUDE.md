@@ -47,6 +47,8 @@ The app is deployed at https://famcity.vercel.app/
 - System spaces (`isSystem: true`) are visible to all users without membership
 - `excludeFromAll: true` spaces don't appear in the home "All" feed
 - Invite links: reusable until expiry (7 days). `GET /api/spaces/[id]/invite` returns current code (auto-rotates only if expired). `POST /api/join/[code]` checks expiry and adds the member WITHOUT rotating, so one shared link works for multiple people. `InviteButton` fetches fresh code on click (no stale links in HTML)
+- Comment composer (`CommentThread`): always visible directly under the post; a `<textarea>` where **Enter adds a line** and only the Post button (or Ctrl/⌘+Enter) sends. The expanded list scrolls inside a height-bounded box
+- Translate: posts and comments share `useTranslate()` (`components/shared/useTranslate.ts`) — failures are shown to the user, never swallowed. `POST /api/translate` accepts up to `TRANSLATE_MAX_CHARS` (12,000), has `maxDuration = 60`, and logs rejected requests to `AiCallLog` as `translate:rejected` so the dashboard shows why a click did nothing
 - Chat message URLs are auto-linked via `linkify()` in `app/chat/[channelId]/page.tsx`
 - **Never use `{ spaceId: { in: [] } }` in Prisma** — use a conditional spread instead: `...(ids.length > 0 ? [{ spaceId: { in: ids } }] : [])`
 - SSE posts must include all fields that PostCard needs (`media`, `hashtags`, `space`, `reactions`, `comments`, `_count`)

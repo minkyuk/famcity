@@ -26,6 +26,7 @@ import { ReactionBar } from "./ReactionBar";
 import { CommentThread } from "./CommentThread";
 import { HashtagPills } from "./HashtagPills";
 import { UserPopup } from "@/components/shared/UserPopup";
+import { useTranslate } from "@/components/shared/useTranslate";
 import { getAgentRank } from "@/lib/agents";
 import type { Post, Reaction, Comment, PostMedia, PostHashtag, Hashtag } from "@prisma/client";
 
@@ -122,9 +123,6 @@ export function PostCard({ post, currentUserId, currentUserName, isAdmin, onDele
   const [showPopup, setShowPopup] = useState(false);
   const avatarRef = useRef<HTMLButtonElement>(null);
   const [copied, setCopied] = useState(false);
-  const [translation, setTranslation] = useState<string | null>(null);
-  const [translating, setTranslating] = useState(false);
-  const [showTranslation, setShowTranslation] = useState(false);
 
   // Fetch spaces lazily when edit mode opens
   useEffect(() => {
@@ -181,25 +179,8 @@ export function PostCard({ post, currentUserId, currentUserName, isAdmin, onDele
     });
   };
 
-  const handleTranslate = async () => {
-    if (translation) { setShowTranslation((s) => !s); return; }
-    setTranslating(true);
-    try {
-      const res = await fetch("/api/translate", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text: localPost.content }),
-      });
-      if (!res.ok) throw new Error();
-      const data = await res.json();
-      setTranslation(data.translated);
-      setShowTranslation(true);
-    } catch {
-      // silently fail
-    } finally {
-      setTranslating(false);
-    }
-  };
+  const { translation, translating, show: showTranslation, error: translateError, toggle: handleTranslate } =
+    useTranslate(localPost.content ?? "");
 
   const isKorean = (t: string) => (t.match(/[\uAC00-\uD7A3]/g) ?? []).length / t.replace(/\s/g, "").length > 0.3;
 
@@ -343,8 +324,9 @@ export function PostCard({ post, currentUserId, currentUserName, isAdmin, onDele
           >
             {translating ? "번역 중…" : isKorean(localPost.content) ? "🌐 Translate to English" : "🌐 한국어로 번역"}
           </button>
+          {translateError && <p className="text-[11px] text-red-500 mt-1">{translateError}</p>}
           {showTranslation && translation && (
-            <p className="text-sm text-gray-500 italic mt-1 leading-relaxed border-l-2 border-gray-100 pl-2">
+            <p className="text-sm text-gray-500 italic mt-1 leading-relaxed border-l-2 border-gray-100 pl-2 whitespace-pre-wrap">
               {translation}
             </p>
           )}

@@ -6,6 +6,7 @@ import { formatDistanceToNow } from "date-fns";
 import { useToast } from "@/components/shared/Toast";
 import type { Comment } from "@prisma/client";
 import { getAgentRank } from "@/lib/agents";
+import { useTranslate } from "@/components/shared/useTranslate";
 
 function linkify(text: string): React.ReactNode {
   const re = /https?:\/\/[^\s)>\]]+/g;
@@ -24,50 +25,8 @@ function linkify(text: string): React.ReactNode {
 
 const isKorean = (t: string) => (t.match(/[\uAC00-\uD7A3]/g) ?? []).length / Math.max(t.replace(/\s/g, "").length, 1) > 0.3;
 
-function TranslateButton({ text }: { text: string }) {
-  const [translation, setTranslation] = useState<string | null>(null);
-  const [translating, setTranslating] = useState(false);
-  const [show, setShow] = useState(false);
-
-  if (text.length <= 15) return null;
-
-  const handleTranslate = async () => {
-    if (translation) { setShow((s) => !s); return; }
-    setTranslating(true);
-    try {
-      const res = await fetch("/api/translate", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text }),
-      });
-      if (!res.ok) throw new Error();
-      const data = await res.json();
-      setTranslation(data.translated);
-      setShow(true);
-    } catch {
-      // silently fail
-    } finally {
-      setTranslating(false);
-    }
-  };
-
-  return (
-    <div>
-      <button
-        onClick={handleTranslate}
-        disabled={translating}
-        className="text-[10px] text-blue-400 hover:text-blue-600 transition-colors disabled:opacity-50 underline underline-offset-2"
-      >
-        {translating ? "…" : isKorean(text) ? "🌐 Translate" : "🌐 번역"}
-      </button>
-      {show && translation && (
-        <p className="text-xs text-gray-500 italic mt-1 leading-relaxed border-l-2 border-gray-100 pl-2">
-          {translation}
-        </p>
-      )}
-    </div>
-  );
-}
+/** Rows for a growing textarea: one per line, between `min` and `max`. */
+const rowsFor = (text: string, min: number, max: number) => Math.min(max, Math.max(min, text.split("\n").length));
 
 interface CommentThreadProps {
   postId: string;
@@ -141,6 +100,7 @@ function CommentRow({
   const canDelete = isOwn || isAdmin;
   const [likeCount, setLikeCount] = useState(c.likes ?? 0);
   const [liked, setLiked] = useState(() => likedIds.has(c.id));
+  const translate = useTranslate(c.body);
 
   const handleLike = async () => {
     try {
@@ -188,10 +148,11 @@ function CommentRow({
 
           {editingId === c.id ? (
             <div className="mt-1 flex flex-col gap-1">
-              <input
+              <textarea
                 value={editBody}
                 onChange={(e) => setEditBody(e.target.value)}
-                className="text-sm border border-gray-200 rounded-lg px-2 py-1 focus:outline-none focus:ring-2 focus:ring-orange-200 w-full"
+                rows={rowsFor(editBody, 1, 8)}
+                className="text-sm border border-gray-200 rounded-lg px-2 py-1 focus:outline-none focus:ring-2 focus:ring-orange-200 w-full resize-none"
               />
               <div className="flex gap-2 justify-end">
                 <button onClick={cancelEdit} className="text-xs text-gray-400 hover:text-gray-600">Cancel</button>
@@ -211,7 +172,15 @@ function CommentRow({
               </div>
               {c.summary && <CommentSummary summary={c.summary} />}
               <div className="flex items-center gap-3 mt-1">
-                <TranslateButton text={c.body} />
+                {c.body.length > 15 && (
+                  <button
+                    onClick={translate.toggle}
+                    disabled={translate.translating}
+                    className="text-[10px] text-blue-400 hover:text-blue-600 transition-colors disabled:opacity-50 underline underline-offset-2"
+                  >
+                    {translate.translating ? "…" : isKorean(c.body) ? "🌐 Translate" : "🌐 번역"}
+                  </button>
+                )}
                 <button
                   onClick={() => onReply(c.id, c.authorName)}
                   className="text-[10px] text-gray-400 hover:text-orange-500 transition-colors"
@@ -225,6 +194,12 @@ function CommentRow({
                   {liked ? "♥" : "♡"}{likeCount > 0 ? ` ${likeCount}` : ""}
                 </button>
               </div>
+              {translate.error && <p className="text-[10px] text-red-500 mt-1">{translate.error}</p>}
+              {translate.show && translate.translation && (
+                <p className="text-xs text-gray-500 italic mt-1 leading-relaxed border-l-2 border-gray-200 pl-2 whitespace-pre-wrap">
+                  {translate.translation}
+                </p>
+              )}
             </>
           )}
         </div>
@@ -362,18 +337,24 @@ export function CommentThread({ postId, initialComments, currentUserId, currentU
           <button onClick={() => setReplyTo(null)} className="text-[10px] text-gray-400 hover:text-gray-600">✕</button>
         </div>
       )}
-      <form onSubmit={submit} className="flex gap-2">
-        <input
+      <form onSubmit={submit} className="flex items-end gap-2">
+        {/* Enter adds a new line; only the Post button (or Ctrl/⌘+Enter) sends */}
+        <textarea
           id={`reply-input-${postId}`}
           value={body}
           onChange={(e) => setBody(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) e.currentTarget.form?.requestSubmit();
+          }}
+          rows={rowsFor(body, 1, 6)}
+          maxLength={1000}
           placeholder={replyTo ? `Reply to ${replyTo.author}…` : "Write a comment…"}
-          className="flex-1 min-w-0 text-sm border border-gray-200 rounded-xl px-3 py-2 focus:outline-none focus:ring-2 focus:ring-orange-200"
+          className="flex-1 min-w-0 text-sm border border-gray-200 rounded-xl px-3 py-2 resize-none focus:outline-none focus:ring-2 focus:ring-orange-200"
         />
         <button
           type="submit"
           disabled={submitting || !body.trim()}
-          className="text-sm bg-accent text-white rounded-xl px-4 py-2 disabled:opacity-40 hover:bg-orange-600 transition-colors"
+          className="shrink-0 text-sm bg-accent text-white rounded-xl px-4 py-2 disabled:opacity-40 hover:bg-orange-600 transition-colors"
         >
           Post
         </button>

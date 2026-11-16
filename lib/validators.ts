@@ -21,3 +21,7 @@ export type CreateCommentInput = z.infer<typeof CreateCommentSchema>;
 export const AgentStatusQuerySchema = z.object({
   ping: z.enum(["0", "1", "true", "false"]).optional().transform((v) => v === "1" || v === "true"),
 });
+
+/** POST /api/translate body. 12k chars covers the longest agent/news posts (was 2,000, which silently rejected them). */
+export const TRANSLATE_MAX_CHARS = 12000;
+export const TranslateSchema = z.object({ text: z.string().trim().min(1).max(TRANSLATE_MAX_CHARS) });
