@@ -8,6 +8,7 @@ import { AudioRecorder } from "./AudioRecorder";
 import { VideoUploader } from "./VideoUploader";
 import { PDFUploader } from "./PDFUploader";
 import { useToast } from "@/components/shared/Toast";
+import { isPinnedSpaceName } from "@/lib/spaceOrder";
 
 type PostType = "TEXT" | "YOUTUBE" | "IMAGE" | "AUDIO" | "VIDEO" | "PDF";
 
@@ -50,9 +51,11 @@ export function ComposeBar({ inline, onSuccess, defaultSpaceId }: ComposeBarProp
         // System spaces (news, agents) are not user-postable
         const postable = data.filter((s: Space) => !s.isSystem);
         setSpaces(postable);
-        // Set default to first joined space (API returns sorted by joinedAt asc)
+        // Default to the first joined space. The API lists pinned spaces (News, Den) first, but a
+        // new post should still default to the family's own space, not the agents' Den.
         if (!defaultSet.current && !defaultSpaceId && !searchParams.get("spaceId") && postable.length > 0) {
-          setSpaceId(postable[0].id);
+          const firstOwn = postable.find((s: Space) => !isPinnedSpaceName(s.name)) ?? postable[0];
+          setSpaceId(firstOwn.id);
           defaultSet.current = true;
         }
       })
