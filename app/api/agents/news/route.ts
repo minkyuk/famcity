@@ -5,7 +5,7 @@ import { AGENT_REQUEST, anthropicFor, textOf } from "@/lib/anthropic";
 import { recordHeartbeat } from "@/lib/aiCallLog";
 import { prisma } from "@/lib/prisma";
 import { AGENTS, agentAvatarUrl, FAITH_GUARDRAIL } from "@/lib/agents";
-import { fetchRss, feedSourceName, NEWS_FEEDS, KOREAN_NEWS_FEEDS } from "@/lib/rss";
+import { fetchRss, feedSourceName, NEWS_FEEDS, KOREAN_NEWS_FEEDS, type RssItem } from "@/lib/rss";
 import { generateInviteCode } from "@/lib/invite";
 import { isCronAuthorized } from "@/lib/cronAuth";
 import { authOptions } from "@/lib/auth";
@@ -23,6 +23,22 @@ type Voter = { name: string; slug: string; reason: string };
 type Posted = { source: string; agent: string; headline: string; votes: number };
 /** Saves a post — or, in a dry run, just collects it. */
 type Publish = (author: Agent, content: string, metadata: Prisma.InputJsonObject) => Promise<void>;
+/** What each feed returned, reported by a dry run — a feed that silently stops working is otherwise invisible. */
+type FeedReport = { feed: string; ok: boolean; items: number; error?: string; note?: string };
+
+/** A feed that fails is skipped, never fatal: the run goes on with the feeds that answered. */
+async function loadFeed(url: string, limit: number, reports: FeedReport[]): Promise<{ url: string; items: RssItem[]; report: FeedReport }> {
+  let report: FeedReport;
+  let items: RssItem[] = [];
+  try {
+    items = await fetchRss(url, limit);
+    report = { feed: url, ok: true, items: items.length };
+  } catch (err) {
+    report = { feed: url, ok: false, items: 0, error: err instanceof Error ? err.message : String(err) };
+  }
+  reports.push(report);
+  return { url, items, report };
+}
 
 const BREAKING_MS = 2 * 60 * 60 * 1000;
 const RECENT_MS = 6 * 60 * 60 * 1000;
@@ -119,10 +135,12 @@ async function composeStory(o: {
 }): Promise<string | null> {
   const both = o.langs === "both";
   const [enRaw, koRaw, godRaw, humanRaw] = await Promise.allSettled([
+    // Budgets leave room for the Korean half: Korean costs roughly twice the tokens of the same
+    // sentence in English, and a cut-off reply loses its last line ("정리:").
     both ? ask("news:report", o.reporter, briefPrompt("en", o.story), 650, "lines") : Promise.resolve(""),
-    ask(both ? "news:reportKorean" : "news:koreanFeed", o.reporter, briefPrompt("ko", o.story), 900, "lines"),
-    ask("news:godView", o.godAgent, godViewPrompt(o.godAgent, o.story, o.langs, FAITH_GUARDRAIL), both ? 560 : 360, "prose"),
-    ask("news:humanView", o.humanAgent, humanViewPrompt(o.humanAgent, o.story, o.langs, FAITH_GUARDRAIL), both ? 620 : 400, "prose"),
+    ask(both ? "news:reportKorean" : "news:koreanFeed", o.reporter, briefPrompt("ko", o.story), 1100, "lines"),
+    ask("news:godView", o.godAgent, godViewPrompt(o.godAgent, o.story, o.langs, FAITH_GUARDRAIL), both ? 800 : 500, "prose"),
+    ask("news:humanView", o.humanAgent, humanViewPrompt(o.humanAgent, o.story, o.langs, FAITH_GUARDRAIL), both ? 900 : 600, "prose"),
   ]);
   const text = (r: PromiseSettledResult<string>) => (r.status === "fulfilled" ? r.value : "");
   const brief = (lang: NewsLang, raw: string): Brief | null => {
@@ -165,16 +183,12 @@ function pickPerspectiveAgents(voters: Voter[], reporter: Agent): { godAgent: Ag
 type VotedOutcome = { results: Posted[]; reason?: string; tally: { title: string; votes: number }[] };
 
 /** Global stories: agents vote, and only stories at least MIN_VOTES_TO_POST of them chose are posted. */
-async function postVotedStories(recentHeadlines: string[], publish: Publish): Promise<VotedOutcome> {
-  const feedResults = await Promise.allSettled(
-    NEWS_FEEDS.map(async (url) => ({ url, items: await fetchRss(url, 20) }))
-  );
+async function postVotedStories(recentHeadlines: string[], publish: Publish, reports: FeedReport[]): Promise<VotedOutcome> {
+  const feeds = await Promise.all(NEWS_FEEDS.map((url) => loadFeed(url, 20, reports)));
 
   const now = Date.now();
   const all: Candidate[] = [];
-  for (const result of feedResults) {
-    if (result.status !== "fulfilled") continue;
-    const { url, items } = result.value;
+  for (const { url, items } of feeds) {
     for (const item of items) {
       const title = cleanFeedText(item.title);
       const description = cleanFeedText(item.description);
@@ -304,7 +318,7 @@ Respond ONLY with valid JSON, no other text:
     const passed = ballots.filter((b) => !votedFor.has(b.agent.name)).map((b) => b.agent.name);
     const footer = [
       `🗳️ Selected by: ${entry.voters.map((v) => v.name).join(", ")} (${voteCount} of ${ballots.length} voters)`,
-      entry.voters[0]?.reason ? `Why: ${entry.voters[0].reason}` : "",
+      entry.voters[0]?.reason ? `Why: ${entry.voters[0].reason.slice(0, 200)}` : "",
       passed.length > 0 ? `Passed on: ${passed.join(", ")}` : "",
     ].filter(Boolean).join("\n");
 
@@ -331,24 +345,22 @@ Respond ONLY with valid JSON, no other text:
 }
 
 /** One story from the Korean feeds, written in Korean only. Best effort — never fails the run. */
-async function postKoreanStory(recentHeadlines: string[], publish: Publish): Promise<Posted | null> {
+async function postKoreanStory(recentHeadlines: string[], publish: Publish, reports: FeedReport[]): Promise<Posted | null> {
   try {
-    const feedResults = await Promise.allSettled(
-      KOREAN_NEWS_FEEDS.map(async (url) => ({ url, items: await fetchRss(url, 15) }))
-    );
+    const feeds = await Promise.all(KOREAN_NEWS_FEEDS.map((url) => loadFeed(url, 15, reports)));
 
     let pick: NewsStory | null = null;
-    for (const result of feedResults) {
-      if (pick || result.status !== "fulfilled") continue;
-      const { url, items } = result.value;
+    for (const { url, items, report } of feeds) {
+      let tooShort = 0;
+      let alreadyPosted = 0;
       for (const item of items) {
         const title = cleanFeedText(item.title);
         const description = cleanFeedText(item.description);
-        if (!title || description.length < 30) continue;
-        if (recentHeadlines.some((t) => isSameStory(t, title))) continue;
-        pick = { sourceName: feedSourceName(url), title, description, link: cleanFeedLink(item.link), publishedAt: parsePubDate(item.pubDate) };
-        break;
+        if (!title || description.length < 30) { tooShort++; continue; }
+        if (recentHeadlines.some((t) => isSameStory(t, title))) { alreadyPosted++; continue; }
+        pick ??= { sourceName: feedSourceName(url), title, description, link: cleanFeedLink(item.link), publishedAt: parsePubDate(item.pubDate) };
       }
+      if (items.length > 0) report.note = `${tooShort} without a usable summary, ${alreadyPosted} already posted`;
     }
     if (!pick) return null;
 
@@ -404,9 +416,10 @@ export async function POST(req: NextRequest) {
     });
   };
 
-  const voted = await postVotedStories(recentHeadlines, publish);
+  const feedReports: FeedReport[] = [];
+  const voted = await postVotedStories(recentHeadlines, publish, feedReports);
   // Posted last so it appears at the top of the space
-  const korean = await postKoreanStory(recentHeadlines, publish);
+  const korean = await postKoreanStory(recentHeadlines, publish, feedReports);
   const results = korean ? [...voted.results, korean] : voted.results;
 
   return NextResponse.json({
@@ -414,7 +427,7 @@ export async function POST(req: NextRequest) {
     posted: dry ? 0 : results.length,
     results,
     ...(voted.reason ? { reason: voted.reason } : {}),
-    ...(dry ? { dry: true, tally: voted.tally, posts: preview } : {}),
+    ...(dry ? { dry: true, tally: voted.tally, feeds: feedReports, posts: preview } : {}),
   });
 }
 
