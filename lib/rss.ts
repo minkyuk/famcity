@@ -19,6 +19,8 @@ const FEED_SOURCE_NAMES: Record<string, string> = {
   "finance.yahoo.com": "Yahoo Finance",
   "cnbc.com": "CNBC",
   "marketwatch.com": "MarketWatch",
+  "yna.co.kr": "연합뉴스",
+  "imnews.imbc.com": "MBC 뉴스",
 };
 
 export function feedSourceName(url: string): string {

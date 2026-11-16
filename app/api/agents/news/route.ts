@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
+import type { Prisma } from "@prisma/client";
 import { AGENT_REQUEST, anthropicFor, textOf } from "@/lib/anthropic";
 import { recordHeartbeat } from "@/lib/aiCallLog";
 import { prisma } from "@/lib/prisma";
@@ -9,7 +10,42 @@ import { generateInviteCode } from "@/lib/invite";
 import { isCronAuthorized } from "@/lib/cronAuth";
 import { authOptions } from "@/lib/auth";
 import { finalizeAgentText } from "@/lib/agentText";
+import { fetchArticleText } from "@/lib/articleText";
+import {
+  assembleNewsPost, briefIsUsable, briefPrompt, cleanFeedLink, cleanFeedText, godViewPrompt, headlineOfPost,
+  humanViewPrompt, isSameStory, KOREAN_NEWS_BADGE, MIN_VOTES_TO_POST, parseBrief, toPerspective,
+  type Brief, type NewsLang, type NewsStory,
+} from "@/lib/newsFormat";
 
+type Agent = (typeof AGENTS)[number];
+type Candidate = NewsStory & { ageMs: number };
+type Voter = { name: string; slug: string; reason: string };
+type Posted = { source: string; agent: string; headline: string; votes: number };
+/** Saves a post — or, in a dry run, just collects it. */
+type Publish = (author: Agent, content: string, metadata: Prisma.InputJsonObject) => Promise<void>;
+
+const BREAKING_MS = 2 * 60 * 60 * 1000;
+const RECENT_MS = 6 * 60 * 60 * 1000;
+const FALLBACK_MS = 24 * 60 * 60 * 1000;
+/** Stories are taken from the last 24h of the feeds, so the "already posted" check looks back just as far. */
+const DEDUP_WINDOW_MS = FALLBACK_MS;
+
+/** Fewer candidates and more voters than before, so the votes concentrate and a real consensus can form. */
+const MAX_CANDIDATES = 8;
+const VOTER_COUNT = Math.min(6, AGENTS.length);
+const MAX_STORIES_PER_RUN = 3;
+
+/**
+ * Every agent is a Christian. The evidence-to-faith agents write the human-standards view
+ * (they came to Christ by weighing arguments); the others write the God-centered view.
+ */
+const EVIDENCE_LENS_SLUGS = new Set(["rex", "sage", "jules", "yuna", "tae"]);
+const KOREAN_SLUGS = new Set([
+  "biscuit", "cosmo", "echo", "fern", "archie", "hana", "sora", "miri", "duri", "narae",
+  "yuna", "tae", "planck", "heisenberg",
+]);
+
+const pickRandom = <T,>(items: T[]): T => items[Math.floor(Math.random() * items.length)];
 
 async function getOrCreateNewsSpace(): Promise<string> {
   const existing = await prisma.space.findFirst({
@@ -26,22 +62,9 @@ async function getOrCreateNewsSpace(): Promise<string> {
   })).id;
 }
 
-function parsePubDate(s: string): Date {
-  try { const d = new Date(s); return isNaN(d.getTime()) ? new Date(0) : d; } catch { return new Date(0); }
-}
-
-function titleKeywords(title: string): Set<string> {
-  return new Set(
-    title.toLowerCase().split(/\W+/).filter((w) => w.length > 4)
-  );
-}
-
-function isSameStory(a: string, b: string): boolean {
-  const ka = titleKeywords(a);
-  const kb = titleKeywords(b);
-  let overlap = 0;
-  for (const w of ka) if (kb.has(w)) overlap++;
-  return overlap >= 3 || (ka.size <= 4 && overlap >= 2);
+function parsePubDate(s: string): Date | null {
+  const d = new Date(s);
+  return isNaN(d.getTime()) ? null : d;
 }
 
 const FINANCE_GLOBAL_RE = /\b(market|stock|equity|bond|yield|economy|gdp|inflation|deflation|interest rate|fed|federal reserve|treasury|dollar|euro|yen|trade|tariff|deficit|surplus|budget|debt|recession|growth|employment|jobs|unemployment|earnings|revenue|profit|loss|billion|trillion|million|percent|geopolit|war|conflict|sanction|summit|election|policy|central bank|nato|un\b|imf|world bank|china|russia|ukraine|europe|asia|middle east|opec|oil price|commodity|crypto|bitcoin)\b/i;
@@ -59,52 +82,96 @@ function extractJson(text: string): unknown {
   return JSON.parse(match[0]);
 }
 
-export async function POST(req: NextRequest) {
-  if (!isCronAuthorized(req)) {
-    const session = await getServerSession(authOptions);
-    if (!session?.user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-  // Heartbeat for the admin AI-health dashboard: proves the cron is actually firing.
-  if (isCronAuthorized(req)) await recordHeartbeat("news", "cron");
-  else void recordHeartbeat("news", "user"); // don't delay a user-triggered run
-
-  const spaceId = await getOrCreateNewsSpace();
-
-  // Dedup window: stories posted in the last 6 hours
-  const since = new Date(Date.now() - 6 * 60 * 60 * 1000);
-  const recentPosts = await prisma.post.findMany({
-    where: { spaceId, createdAt: { gte: since } },
-    select: { content: true },
-    orderBy: { createdAt: "desc" },
+async function ask(label: string, agent: Agent, prompt: string, maxTokens: number): Promise<string> {
+  const msg = await anthropicFor(label, agent.name).messages.create({
+    ...AGENT_REQUEST,
+    max_tokens: maxTokens,
+    messages: [{ role: "user", content: prompt }],
   });
-  const recentTitles: string[] = recentPosts
-    .map((p) => (p.content ?? "").split("\n")[0])
-    .filter(Boolean);
+  return finalizeAgentText(textOf(msg), msg.stop_reason);
+}
 
-  // Fetch all feeds in parallel
+/**
+ * Writes one news post: the factual brief (TL;DR + who/what/when/where/why/how, from the source
+ * only), then the God-centered view, then the human-standards view. `langs: "both"` is the
+ * English + Korean layout; `"ko"` is the Korean-feed story. Returns null when the brief the post
+ * needs could not be produced — a news post without its facts is not posted.
+ */
+async function composeStory(o: {
+  story: NewsStory;
+  reporter: Agent;
+  godAgent: Agent;
+  humanAgent: Agent;
+  langs: "both" | "ko";
+  badge?: string;
+  footer?: string;
+}): Promise<string | null> {
+  const both = o.langs === "both";
+  const [enRaw, koRaw, godRaw, humanRaw] = await Promise.allSettled([
+    both ? ask("news:report", o.reporter, briefPrompt("en", o.story), 520) : Promise.resolve(""),
+    ask(both ? "news:reportKorean" : "news:koreanFeed", o.reporter, briefPrompt("ko", o.story), 700),
+    ask("news:godView", o.godAgent, godViewPrompt(o.godAgent, o.story, o.langs, FAITH_GUARDRAIL), both ? 560 : 360),
+    ask("news:humanView", o.humanAgent, humanViewPrompt(o.humanAgent, o.story, o.langs, FAITH_GUARDRAIL), both ? 620 : 400),
+  ]);
+  const text = (r: PromiseSettledResult<string>) => (r.status === "fulfilled" ? r.value : "");
+  const brief = (lang: NewsLang, raw: string): Brief | null => {
+    const b = parseBrief(lang, raw);
+    return briefIsUsable(b) ? b : null;
+  };
+
+  const en = both ? brief("en", text(enRaw)) : null;
+  const ko = brief("ko", text(koRaw));
+  if (both ? !en : !ko) return null;
+
+  return assembleNewsPost({
+    story: o.story,
+    badge: o.badge,
+    en,
+    ko,
+    godView: toPerspective(o.godAgent.name, text(godRaw), o.langs),
+    humanView: toPerspective(o.humanAgent.name, text(humanRaw), o.langs),
+    footer: o.footer,
+  });
+}
+
+async function withArticleText<T extends NewsStory>(story: T): Promise<T> {
+  if (!story.link) return story;
+  return { ...story, articleText: await fetchArticleText(story.link, story.title) };
+}
+
+function pickPerspectiveAgents(voters: Voter[], reporter: Agent): { godAgent: Agent; humanAgent: Agent } {
+  const others = AGENTS.filter((a) => a.name !== reporter.name);
+  const voterSlugs = new Set(voters.map((v) => v.slug));
+  const evidenceLens = others.filter((a) => EVIDENCE_LENS_SLUGS.has(a.slug));
+  const faithLens = others.filter((a) => !EVIDENCE_LENS_SLUGS.has(a.slug));
+  // Prefer agents who voted for the story — they already chose to engage with it.
+  return {
+    godAgent: faithLens.find((a) => voterSlugs.has(a.slug)) ?? pickRandom(faithLens),
+    humanAgent: evidenceLens.find((a) => voterSlugs.has(a.slug)) ?? pickRandom(evidenceLens),
+  };
+}
+
+type VotedOutcome = { results: Posted[]; reason?: string; tally: { title: string; votes: number }[] };
+
+/** Global stories: agents vote, and only stories at least MIN_VOTES_TO_POST of them chose are posted. */
+async function postVotedStories(recentHeadlines: string[], publish: Publish): Promise<VotedOutcome> {
   const feedResults = await Promise.allSettled(
-    NEWS_FEEDS.map(async (url) => {
-      const items = await fetchRss(url, 20);
-      return { url, items };
-    })
+    NEWS_FEEDS.map(async (url) => ({ url, items: await fetchRss(url, 20) }))
   );
 
   const now = Date.now();
-  const BREAKING_MS  = 2 * 60 * 60 * 1000;
-  const RECENT_MS    = 6 * 60 * 60 * 1000;
-  const FALLBACK_MS  = 24 * 60 * 60 * 1000;
-
-  type Candidate = { url: string; title: string; description: string; ageMs: number };
   const all: Candidate[] = [];
-
   for (const result of feedResults) {
     if (result.status !== "fulfilled") continue;
     const { url, items } = result.value;
     for (const item of items) {
-      if (!item.title || !item.description || item.description.trim().length < 80) continue;
-      const ageMs = now - parsePubDate(item.pubDate).getTime();
+      const title = cleanFeedText(item.title);
+      const description = cleanFeedText(item.description);
+      const publishedAt = parsePubDate(item.pubDate);
+      if (!title || description.length < 80 || !publishedAt) continue;
+      const ageMs = now - publishedAt.getTime();
       if (ageMs < 0 || ageMs > FALLBACK_MS) continue;
-      all.push({ url, title: item.title, description: item.description, ageMs });
+      all.push({ sourceName: feedSourceName(url), title, description, link: cleanFeedLink(item.link), publishedAt, ageMs });
     }
   }
 
@@ -117,49 +184,34 @@ export async function POST(req: NextRequest) {
   });
 
   const breaking = all.filter((c) => c.ageMs <= BREAKING_MS);
-  const recent   = all.filter((c) => c.ageMs <= RECENT_MS);
-  const pool     = breaking.length >= 2 ? breaking : recent.length >= 2 ? recent : all;
+  const recent = all.filter((c) => c.ageMs <= RECENT_MS);
+  const pool = breaking.length >= 2 ? breaking : recent.length >= 2 ? recent : all;
 
-  // Remove already-posted stories
-  const notReposted = pool.filter(
-    (c) => !recentTitles.some((t) => isSameStory(t, c.title))
-  );
-
-  // Dedup within this run — collect up to 12 unique candidates for voting
+  // Drop already-posted stories and duplicates within this run
   const candidates: Candidate[] = [];
-  const usedTitles: string[] = [];
-  for (const c of notReposted) {
-    if (candidates.length >= 12) break;
-    if (usedTitles.some((t) => isSameStory(t, c.title))) continue;
+  for (const c of pool) {
+    if (candidates.length >= MAX_CANDIDATES) break;
+    if (recentHeadlines.some((t) => isSameStory(t, c.title))) continue;
+    if (candidates.some((k) => isSameStory(k.title, c.title))) continue;
     candidates.push(c);
-    usedTitles.push(c.title);
   }
+  if (candidates.length === 0) return { results: [], reason: "no_new_stories", tally: [] };
 
-  if (candidates.length === 0) {
-    return NextResponse.json({ ok: true, posted: 0, reason: "no_new_stories" });
-  }
-
-  // --- Voting round: 4 random agents each pick their top 2 stories ---
-  const VOTER_COUNT = Math.min(4, AGENTS.length);
-  const voterIndices = new Set<number>();
-  while (voterIndices.size < VOTER_COUNT) {
-    voterIndices.add(Math.floor(Math.random() * AGENTS.length));
-  }
-  const voters = [...voterIndices].map((i) => AGENTS[i]);
+  // --- Voting round: VOTER_COUNT random agents each pick their top 2 stories ---
+  const voters = [...AGENTS].sort(() => Math.random() - 0.5).slice(0, VOTER_COUNT);
 
   const storyList = candidates
     .map((c, i) => {
       const tag = isFinanceGlobal(c.title, c.description) ? " [GLOBAL/FINANCE]" : "";
       const age = c.ageMs < BREAKING_MS ? " [BREAKING]" : c.ageMs < RECENT_MS ? " [RECENT]" : "";
-      return `${i}. ${c.title}${tag}${age} (${feedSourceName(c.url)})\n   ${c.description.slice(0, 150)}`;
+      return `${i}. ${c.title}${tag}${age} (${c.sourceName})\n   ${c.description.slice(0, 150)}`;
     })
     .join("\n\n");
 
-  type VoteEntry = { index: number; reason: string };
-  type VoteResult = { agentName: string; agentSlug: string; votes: VoteEntry[] };
+  type Ballot = { agent: Agent; votes: { index: number; reason: string }[] };
 
-  const votingResults = await Promise.allSettled(
-    voters.map(async (agent): Promise<VoteResult> => {
+  const ballotResults = await Promise.allSettled(
+    voters.map(async (agent): Promise<Ballot> => {
       const msg = await anthropicFor("news:vote", agent.name).messages.create({
         ...AGENT_REQUEST,
         max_tokens: 390,
@@ -167,7 +219,7 @@ export async function POST(req: NextRequest) {
           role: "user",
           content: `${agent.personality}
 
-Review these ${candidates.length} news stories. You have exactly 2 votes.
+Review these ${candidates.length} news stories. You have exactly 2 votes, for two different stories.
 
 Judge each story on all four criteria and vote for the 2 that score best overall:
 
@@ -186,322 +238,176 @@ Respond ONLY with valid JSON, no other text:
         }],
       });
 
-      const raw = (textOf(msg) || "{}");
-      const parsed = extractJson(raw) as { votes?: unknown[] };
-      const votes: VoteEntry[] = (parsed.votes ?? [])
+      const parsed = extractJson(textOf(msg) || "{}") as { votes?: unknown[] }; // shape is checked field by field below
+      const seen = new Set<number>();
+      const votes = (parsed.votes ?? [])
         .filter((v): v is { index: number; reason: string } =>
-          typeof (v as Record<string, unknown>).index === "number" &&
+          typeof v === "object" && v !== null &&
+          typeof (v as Record<string, unknown>).index === "number" && // narrowing an unknown JSON value
           typeof (v as Record<string, unknown>).reason === "string"
         )
-        .filter((v) => v.index >= 0 && v.index < candidates.length)
+        .filter((v) => Number.isInteger(v.index) && v.index >= 0 && v.index < candidates.length)
+        // One voter, one vote per story: naming the same story twice must not count as two.
+        .filter((v) => (seen.has(v.index) ? false : (seen.add(v.index), true)))
         .slice(0, 2);
 
-      return { agentName: agent.name, agentSlug: agent.slug, votes };
+      return { agent, votes };
     })
   );
+  const ballots = ballotResults.flatMap((r) => (r.status === "fulfilled" ? [r.value] : []));
 
   // Tally votes
-  type TallyEntry = { candidate: Candidate; voteCount: number; voters: { name: string; slug: string; reason: string }[] };
-  const tally: TallyEntry[] = candidates.map((c) => ({ candidate: c, voteCount: 0, voters: [] }));
-
-  for (const result of votingResults) {
-    if (result.status !== "fulfilled") continue;
-    const { agentName, agentSlug, votes } = result.value;
-    for (const { index, reason } of votes) {
-      if (tally[index]) {
-        tally[index].voteCount++;
-        tally[index].voters.push({ name: agentName, slug: agentSlug, reason });
-      }
-    }
+  const tally = candidates.map((candidate) => ({ candidate, voters: [] as Voter[] }));
+  for (const { agent, votes } of ballots) {
+    for (const { index, reason } of votes) tally[index].voters.push({ name: agent.name, slug: agent.slug, reason });
   }
 
-  // Sort: votes desc → finance/global priority → recency; pick top 3
+  // Sort: votes desc → finance/global priority → recency
   tally.sort((a, b) => {
-    if (b.voteCount !== a.voteCount) return b.voteCount - a.voteCount;
+    if (b.voters.length !== a.voters.length) return b.voters.length - a.voters.length;
     const aFG = isFinanceGlobal(a.candidate.title, a.candidate.description) ? 0 : 1;
     const bFG = isFinanceGlobal(b.candidate.title, b.candidate.description) ? 0 : 1;
     if (aFG !== bFG) return aFG - bFG;
     return a.candidate.ageMs - b.candidate.ageMs;
   });
-  const selected = tally.slice(0, 3).filter((t) => t.voteCount > 0 || candidates.length <= 3);
+  const tallySummary = tally.map((t) => ({ title: t.candidate.title, votes: t.voters.length }));
 
-  if (selected.length === 0) {
-    return NextResponse.json({ ok: true, posted: 0, reason: "no_votes" });
-  }
+  // A story needs real agreement. One agent's pick is not a selection, so a run with no
+  // story at the threshold posts nothing and waits for the next round.
+  const selected = tally.slice(0, MAX_STORIES_PER_RUN).filter((t) => t.voters.length >= MIN_VOTES_TO_POST);
+  if (selected.length === 0) return { results: [], reason: "no_consensus", tally: tallySummary };
 
-  // Both debaters are Christians. Contrast comes from the lens: evidence-to-faith agents read the story
-  // through evidence and reason; the rest through grace and justice.
-  const EVIDENCE_LENS_SLUGS = new Set(["rex", "sage", "jules", "yuna", "tae"]);
+  const stories = await Promise.all(selected.map((t) => withArticleText(t.candidate)));
 
-  function pickDebateAgents(
-    voters: { name: string; slug: string; reason: string }[],
-    posterAgent: typeof AGENTS[0]
-  ): [typeof AGENTS[0], typeof AGENTS[0]] {
-    const notPoster = (a: typeof AGENTS[0]) => a.name !== posterAgent.name;
-    const evidenceLens = AGENTS.filter((a) => EVIDENCE_LENS_SLUGS.has(a.slug) && notPoster(a));
-    const faithful = AGENTS.filter((a) => !EVIDENCE_LENS_SLUGS.has(a.slug) && notPoster(a));
-    const voterSlugs = new Set(voters.map((v) => v.slug));
+  const usedReporters = new Set<string>();
+  const results: Posted[] = [];
 
-    // Prefer voter agents — they already have reasons; otherwise pick from contrasting groups
-    const agent1 =
-      evidenceLens.find((a) => voterSlugs.has(a.slug)) ??
-      evidenceLens[Math.floor(Math.random() * evidenceLens.length)];
+  for (const [i, entry] of selected.entries()) {
+    const story = stories[i];
+    const voteCount = entry.voters.length;
 
-    const agent2 =
-      faithful.find((a) => voterSlugs.has(a.slug) && a.name !== agent1.name) ??
-      faithful.find((a) => a.name !== agent1.name) ??
-      AGENTS.filter((a) => notPoster(a) && a.name !== agent1.name)[
-        Math.floor(Math.random() * (AGENTS.length - 2))
-      ];
+    // Reporter: prefer an agent who voted for the story and hasn't reported yet in this run
+    const reporter =
+      AGENTS.find((a) => !usedReporters.has(a.name) && entry.voters.some((v) => v.name === a.name)) ??
+      pickRandom(AGENTS.filter((a) => !usedReporters.has(a.name)));
+    usedReporters.add(reporter.name);
+    const { godAgent, humanAgent } = pickPerspectiveAgents(entry.voters, reporter);
 
-    return [agent1, agent2];
-  }
-
-  // Post each selected story
-  const usedAgentIndices = new Set<number>();
-  const results: { source: string; agent: string; headline: string; votes: number }[] = [];
-
-  for (const entry of selected) {
-    const candidate = entry.candidate;
-
-    // Pick a poster agent (prefer one who voted for it; otherwise random unused)
-    let posterAgent = AGENTS.find((a) =>
-      entry.voters.some((v) => v.name === a.name) &&
-      !usedAgentIndices.has(AGENTS.indexOf(a))
-    );
-    if (!posterAgent) {
-      let idx: number;
-      do { idx = Math.floor(Math.random() * AGENTS.length); }
-      while (usedAgentIndices.has(idx) && usedAgentIndices.size < AGENTS.length);
-      posterAgent = AGENTS[idx];
-    }
-    usedAgentIndices.add(AGENTS.indexOf(posterAgent));
-
-    const [debateAgent1, debateAgent2] = pickDebateAgents(entry.voters, posterAgent);
-    const avatar = agentAvatarUrl(posterAgent.slug);
-    const sourceName = feedSourceName(candidate.url);
-    const ageLabel = candidate.ageMs < BREAKING_MS ? "breaking" : candidate.ageMs < RECENT_MS ? "recent" : "today";
-
-    // Build non-voter list for this story
-    const voterNameSet = new Set(entry.voters.map(v => v.name));
-    const nonVotersForStory = voters.filter(v => !voterNameSet.has(v.name));
+    const votedFor = new Set(entry.voters.map((v) => v.name));
+    const passed = ballots.filter((b) => !votedFor.has(b.agent.name)).map((b) => b.agent.name);
+    const footer = [
+      `🗳️ Selected by: ${entry.voters.map((v) => v.name).join(", ")} (${voteCount} of ${ballots.length} voters)`,
+      entry.voters[0]?.reason ? `Why: ${entry.voters[0].reason}` : "",
+      passed.length > 0 ? `Passed on: ${passed.join(", ")}` : "",
+    ].filter(Boolean).join("\n");
 
     try {
-      // Run poster paragraphs, both debate perspectives, and Korean version in parallel
-      const [mainMsg, debateMsg1, debateMsg2, koreanMsg] = await Promise.all([
-        anthropicFor("news:report", posterAgent.name).messages.create({
-          ...AGENT_REQUEST,
-          max_tokens: 780,
-          messages: [{
-            role: "user",
-            content: `${posterAgent.personality}
-
-Here is a ${ageLabel} news item:
-
-SOURCE: ${sourceName}
-HEADLINE: ${candidate.title}
-SUMMARY: ${candidate.description.slice(0, 600)}
-
-Write exactly three paragraphs separated by blank lines:
-
-Paragraph 1 — factual report: 2–3 sentences. Lead with the most important number, figure, or statistic (percentage change, dollar amount, vote count, casualty figure, rate — whatever is most concrete). Name the specific people, countries, or organizations involved. Attribute naturally: "According to ${sourceName}, …". Do not generalize — use the exact figures given.
-
-Paragraph 2 — who benefits and who loses: 2 sentences. Name exactly who gains from this news (specific industries, groups, or countries) and exactly who bears the cost or loses out. Be as specific as the article allows.
-
-Paragraph 3 — your take: 1 sentence in your own voice. What should ordinary families pay attention to?
-
-No hashtags. Do not start with "I". Do not repeat the headline verbatim. No asterisks or markdown.`,
-          }],
-        }),
-
-        anthropicFor("news:debate", debateAgent1.name).messages.create({
-          ...AGENT_REQUEST,
-          max_tokens: 290,
-          messages: [{
-            role: "user",
-            content: `${debateAgent1.personality}
-
-News: ${candidate.title}
-${candidate.description.slice(0, 400)}
-
-Give your honest read on this story from your own worldview. What do you see as the real upside — who genuinely benefits and why? And where do you see the hidden cost, the risk, or who gets left behind? Be direct and specific. 2–3 sentences. No hashtags. No asterisks. Do not start with "I".${FAITH_GUARDRAIL}`,
-          }],
-        }),
-
-        anthropicFor("news:debate", debateAgent2.name).messages.create({
-          ...AGENT_REQUEST,
-          max_tokens: 290,
-          messages: [{
-            role: "user",
-            content: `${debateAgent2.personality}
-
-News: ${candidate.title}
-${candidate.description.slice(0, 400)}
-
-What's your perspective on this story through your own lens and values? What would you point to as a genuine win here, and what would you push back on or flag as a concern families should watch closely? 2–3 sentences. No hashtags. No asterisks. Do not start with "I".${FAITH_GUARDRAIL}`,
-          }],
-        }),
-
-        // Korean version — same agent, same source, written fresh in Korean
-        anthropicFor("news:reportKorean", posterAgent.name).messages.create({
-          ...AGENT_REQUEST,
-          max_tokens: 650,
-          messages: [{
-            role: "user",
-            content: `${posterAgent.personality}
-
-한국어를 사용하는 가족을 위해 아래 ${ageLabel === "breaking" ? "속보" : ageLabel === "recent" ? "최근" : "오늘의"} 뉴스를 보도하세요.
-
-출처: ${sourceName}
-제목: ${candidate.title}
-요약: ${candidate.description.slice(0, 600)}
-
-정확히 세 단락을 빈 줄로 구분하여 작성하세요:
-
-1단락 — 사실 보도: 2~3문장. 가장 중요한 수치, 금액, 통계로 시작하세요. 관련 인물, 국가, 기관을 구체적으로 명시하세요. "${sourceName}에 따르면, …"처럼 자연스럽게 출처를 인용하세요.
-
-2단락 — 이득과 손해: 2문장. 이 뉴스로 혜택을 받는 측(특정 산업, 집단, 국가)과 손해를 보는 측을 구체적으로 명시하세요.
-
-3단락 — 한마디: 1문장. 일반 가정에서 주목해야 할 점은 무엇인가요?
-
-해시태그 없음. "저는" 또는 "나는"으로 시작하지 마세요. 별표나 마크다운 사용 금지.`,
-          }],
-        }),
-      ]);
-
-      const mainText = finalizeAgentText(textOf(mainMsg), mainMsg.stop_reason);
-      const debateText1 = finalizeAgentText(textOf(debateMsg1), debateMsg1.stop_reason);
-      const debateText2 = finalizeAgentText(textOf(debateMsg2), debateMsg2.stop_reason);
-      const koreanText = finalizeAgentText(textOf(koreanMsg), koreanMsg.stop_reason);
-
-      if (!mainText || mainText.length < 80) continue;
-
-      // Build vote attribution (summarized reason + who voted vs passed)
-      const reasonSummary = entry.voters[0]?.reason ?? "";
-      const voterLine = entry.voters.length > 0
-        ? [
-            `Selected by: ${entry.voters.map(v => v.name).join(", ")} (${entry.voteCount} of ${VOTER_COUNT} votes)`,
-            reasonSummary ? `Why: ${reasonSummary}` : "",
-            nonVotersForStory.length > 0 ? `Passed on: ${nonVotersForStory.map(v => v.name).join(", ")}` : "",
-          ].filter(Boolean).join("\n")
-        : "";
-
-      // Assemble full post: English content → Korean section → vote attribution
-      const debateSection = [
-        debateText1 ? `${debateAgent1.name}: ${debateText1}` : "",
-        debateText2 ? `${debateAgent2.name}: ${debateText2}` : "",
-      ].filter(Boolean).join("\n\n");
-
-      const koreanSection = koreanText ? `---\n🇰🇷 한국어\n\n${koreanText}` : "";
-
-      const rawText = [mainText, debateSection, koreanSection, voterLine].filter(Boolean).join("\n\n");
-
-      await prisma.post.create({
-        data: {
-          authorName: posterAgent.name,
-          authorImage: avatar,
-          spaceId,
-          content: rawText,
-          type: "TEXT",
-          metadata: {
-            votes: entry.voteCount,
-            voters: entry.voters,
-            qualityGated: true,
-            deduplicated: true,
-          },
-        },
+      const content = await composeStory({ story, reporter, godAgent, humanAgent, langs: "both", footer });
+      if (!content) continue;
+      await publish(reporter, content, {
+        votes: voteCount,
+        voters: entry.voters,
+        qualityGated: true,
+        deduplicated: true,
+        source: story.sourceName,
+        ...(story.link ? { link: story.link } : {}),
       });
-
-      results.push({ source: sourceName, agent: posterAgent.name, headline: candidate.title, votes: entry.voteCount });
+      results.push({ source: story.sourceName, agent: reporter.name, headline: story.title, votes: voteCount });
     } catch {
-      // Skip on failure
+      // Skip this story on failure; the others still post
     }
 
-    await new Promise((r) => setTimeout(r, 800));
+    await new Promise((r) => setTimeout(r, 500));
   }
 
-  // --- Korean news: one story from Korean feeds, posted last (appears at top) ---
-  const KOREAN_SLUGS = new Set([
-    "biscuit", "cosmo", "echo", "fern", "archie", "hana", "sora", "miri", "duri", "narae",
-    "yuna", "tae", "planck", "heisenberg",
-  ]);
-  const koreanAgents = AGENTS.filter((a) => KOREAN_SLUGS.has(a.slug));
+  return { results, tally: tallySummary };
+}
 
+/** One story from the Korean feeds, written in Korean only. Best effort — never fails the run. */
+async function postKoreanStory(recentHeadlines: string[], publish: Publish): Promise<Posted | null> {
   try {
-    const koreanFeedResults = await Promise.allSettled(
-      KOREAN_NEWS_FEEDS.map(async (url) => {
-        const items = await fetchRss(url, 15);
-        return { url, items };
-      })
+    const feedResults = await Promise.allSettled(
+      KOREAN_NEWS_FEEDS.map(async (url) => ({ url, items: await fetchRss(url, 15) }))
     );
 
-    const koreanCandidates: { url: string; title: string; description: string }[] = [];
-    const usedKoreanTitles: string[] = [...recentTitles];
-
-    for (const result of koreanFeedResults) {
-      if (result.status !== "fulfilled") continue;
+    let pick: NewsStory | null = null;
+    for (const result of feedResults) {
+      if (pick || result.status !== "fulfilled") continue;
       const { url, items } = result.value;
       for (const item of items) {
-        if (!item.title || !item.description || item.description.trim().length < 30) continue;
-        if (usedKoreanTitles.some((t) => isSameStory(t, item.title))) continue;
-        koreanCandidates.push({ url, title: item.title, description: item.description });
-        usedKoreanTitles.push(item.title);
-        if (koreanCandidates.length >= 5) break;
-      }
-      if (koreanCandidates.length >= 5) break;
-    }
-
-    if (koreanCandidates.length > 0) {
-      const pick = koreanCandidates[0];
-      const krAgent = koreanAgents[Math.floor(Math.random() * koreanAgents.length)];
-      const krAvatar = agentAvatarUrl(krAgent.slug);
-      const krSource = feedSourceName(pick.url);
-
-      const krMsg = await anthropicFor("news:koreanFeed", krAgent.name).messages.create({
-        ...AGENT_REQUEST,
-        max_tokens: 650,
-        messages: [{
-          role: "user",
-          content: `${krAgent.personality}
-
-아래 뉴스를 가족에게 전달하는 뉴스 리포터로서 보도하세요.
-
-출처: ${krSource}
-제목: ${pick.title}
-내용: ${pick.description.slice(0, 600)}
-
-세 단락을 빈 줄로 구분하여 작성하세요:
-
-1단락 — 사실 보도: 2~3문장. 가장 중요한 수치나 구체적인 사실로 시작하세요. "${krSource}에 따르면, …" 형식으로 자연스럽게 인용하세요.
-
-2단락 — 이득과 손해: 2문장. 누가 혜택을 받고 누가 손해를 보는지 구체적으로 명시하세요.
-
-3단락 — 한마디: 1문장. 가족이 주목해야 할 핵심은?
-
-해시태그 없음. "저는" 또는 "나는"으로 시작하지 마세요. 별표나 마크다운 사용 금지.`,
-        }],
-      });
-
-      const krText = finalizeAgentText(textOf(krMsg), krMsg.stop_reason);
-      if (krText && krText.length >= 60) {
-        await prisma.post.create({
-          data: {
-            authorName: krAgent.name,
-            authorImage: krAvatar,
-            spaceId,
-            content: `🇰🇷 한국 뉴스\n\n${krText}`,
-            type: "TEXT",
-            metadata: { koreanNews: true, source: krSource },
-          },
-        });
-        results.push({ source: krSource, agent: krAgent.name, headline: pick.title, votes: 0 });
+        const title = cleanFeedText(item.title);
+        const description = cleanFeedText(item.description);
+        if (!title || description.length < 30) continue;
+        if (recentHeadlines.some((t) => isSameStory(t, title))) continue;
+        pick = { sourceName: feedSourceName(url), title, description, link: cleanFeedLink(item.link), publishedAt: parsePubDate(item.pubDate) };
+        break;
       }
     }
+    if (!pick) return null;
+
+    const koreanAgents = AGENTS.filter((a) => KOREAN_SLUGS.has(a.slug));
+    const reporter = pickRandom(koreanAgents.filter((a) => !EVIDENCE_LENS_SLUGS.has(a.slug)));
+    const humanAgent = pickRandom(koreanAgents.filter((a) => EVIDENCE_LENS_SLUGS.has(a.slug)));
+
+    const story = await withArticleText(pick);
+    const content = await composeStory({ story, reporter, godAgent: reporter, humanAgent, langs: "ko", badge: KOREAN_NEWS_BADGE });
+    if (!content) return null;
+
+    await publish(reporter, content, { koreanNews: true, source: story.sourceName, ...(story.link ? { link: story.link } : {}) });
+    return { source: story.sourceName, agent: reporter.name, headline: story.title, votes: 0 };
   } catch {
-    // Korean news is best-effort — don't fail the whole run
+    return null;
+  }
+}
+
+export async function POST(req: NextRequest) {
+  const cronAuthorized = isCronAuthorized(req);
+  if (!cronAuthorized) {
+    const session = await getServerSession(authOptions);
+    if (!session?.user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+  // Dry run (cron secret only): runs the whole pipeline and returns the posts instead of saving
+  // them, so the format can be checked against live feeds without touching the family's feed.
+  const dry = cronAuthorized && req.nextUrl.searchParams.get("dry") === "1";
+
+  // Heartbeat for the admin AI-health dashboard: proves the cron is actually firing.
+  if (!dry) {
+    if (cronAuthorized) await recordHeartbeat("news", "cron");
+    else void recordHeartbeat("news", "user"); // don't delay a user-triggered run
   }
 
-  return NextResponse.json({ ok: true, posted: results.length, results });
+  const spaceId = await getOrCreateNewsSpace();
+
+  const recentPosts = await prisma.post.findMany({
+    where: { spaceId, createdAt: { gte: new Date(Date.now() - DEDUP_WINDOW_MS) } },
+    select: { content: true },
+    orderBy: { createdAt: "desc" },
+  });
+  const recentHeadlines = recentPosts.map((p) => headlineOfPost(p.content ?? "")).filter(Boolean);
+
+  const preview: { agent: string; content: string }[] = [];
+  const publish: Publish = async (author, content, metadata) => {
+    if (dry) {
+      preview.push({ agent: author.name, content });
+      return;
+    }
+    await prisma.post.create({
+      data: { authorName: author.name, authorImage: agentAvatarUrl(author.slug), spaceId, content, type: "TEXT", metadata },
+    });
+  };
+
+  const voted = await postVotedStories(recentHeadlines, publish);
+  // Posted last so it appears at the top of the space
+  const korean = await postKoreanStory(recentHeadlines, publish);
+  const results = korean ? [...voted.results, korean] : voted.results;
+
+  return NextResponse.json({
+    ok: true,
+    posted: dry ? 0 : results.length,
+    results,
+    ...(voted.reason ? { reason: voted.reason } : {}),
+    ...(dry ? { dry: true, tally: voted.tally, posts: preview } : {}),
+  });
 }
 
 export async function GET(req: NextRequest) {
