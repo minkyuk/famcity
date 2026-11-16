@@ -136,7 +136,7 @@ export function clip(text: string, max: number): string {
 /** A story is posted only when at least this many voters chose it. */
 export const MIN_VOTES_TO_POST = 2;
 
-const BRIEF_FIELDS = ["tldr", "who", "what", "when", "where", "why", "how", "impact"] as const;
+const BRIEF_FIELDS = ["tldr", "who", "what", "when", "where", "why", "how", "helps", "hurts"] as const;
 export type BriefField = (typeof BRIEF_FIELDS)[number];
 export type Brief = Partial<Record<BriefField, string>>;
 
@@ -145,22 +145,29 @@ const ALIASES: Record<NewsLang, Record<BriefField, string[]>> = {
   en: {
     tldr: ["TLDR", "TL;DR", "TL; DR", "SUMMARY"],
     who: ["WHO"], what: ["WHAT"], when: ["WHEN"], where: ["WHERE"], why: ["WHY"], how: ["HOW"],
-    impact: ["IMPACT"],
+    helps: ["HELPS", "GAINS", "BENEFITS", "WINNERS"],
+    hurts: ["HURTS", "LOSES", "COSTS", "LOSERS"],
   },
   ko: {
     tldr: ["요약", "TL;DR", "TLDR"],
     who: ["누가"], what: ["무엇을", "무엇"], when: ["언제"], where: ["어디서", "어디에서"], why: ["왜"], how: ["어떻게"],
-    impact: ["영향"],
+    helps: ["도움", "도움이 되는 쪽", "이득", "수혜"],
+    hurts: ["부담", "부담이 되는 쪽", "손해", "피해"],
   },
 };
 
 /** Label shown in the post. */
 const DISPLAY: Record<NewsLang, Record<BriefField, string>> = {
-  en: { tldr: "TL;DR", who: "Who", what: "What", when: "When", where: "Where", why: "Why", how: "How", impact: "Impact" },
-  ko: { tldr: "요약", who: "누가", what: "무엇을", when: "언제", where: "어디서", why: "왜", how: "어떻게", impact: "영향" },
+  en: { tldr: "TL;DR", who: "Who", what: "What", when: "When", where: "Where", why: "Why", how: "How", helps: "➕ Helps", hurts: "➖ Hurts" },
+  ko: { tldr: "요약", who: "누가", what: "무엇을", when: "언제", where: "어디서", why: "왜", how: "어떻게", helps: "➕ 도움이 되는 쪽", hurts: "➖ 부담이 되는 쪽" },
 };
 
 export const NOT_STATED: Record<NewsLang, string> = { en: "Not stated in the source", ko: "출처에 없음" };
+/** What the balance lines say when a story has no clear winner (or loser) — the model is told not to force one. */
+export const NO_CLEAR_PARTY: Record<NewsLang, string> = { en: "No clear party", ko: "뚜렷한 대상 없음" };
+/** Labels from the earlier format: recognised so a stray "IMPACT:" line isn't glued onto the line before it. */
+const RETIRED_LABELS: Record<NewsLang, string[]> = { en: ["IMPACT"], ko: ["영향"] };
+const BALANCE_TITLE: Record<NewsLang, string> = { en: "📊 Who gains, who loses", ko: "📊 득실 — 누구에게 도움이 되고 누구에게 부담인가" };
 
 export function formatPublished(d: Date | null): string | null {
   if (!d || d.getTime() <= 0) return null;
@@ -174,7 +181,7 @@ export function briefPrompt(lang: NewsLang, story: NewsStory): string {
     ? `${story.description.slice(0, 500)}\n${story.articleText}`
     : story.description.slice(0, 700);
   if (lang === "ko") {
-    return `가족을 위한 사실 중심 뉴스 브리핑을 한국어로 작성하세요. 아래 출처 본문에 적힌 사실만 사용하세요. 본문에 없는 이름, 숫자, 날짜, 장소, 원인, 동기를 절대 추가하지 마세요. 본문에 없는 항목은 정확히 "${NOT_STATED.ko}"이라고만 쓰고 다른 설명을 붙이지 마세요. 본문에 제목과 관계없는 줄(광고, 다른 기사 안내)이 섞여 있으면 무시하세요.
+    return `가족을 위한 사실 중심 뉴스 브리핑을 한국어로 작성하세요. 아래 출처 본문에 적힌 사실만 사용하세요 (마지막 두 줄 "도움"·"부담"만 예외로, 그 사실에서 바로 따라오는 결과를 정리합니다). 본문에 없는 이름, 숫자, 날짜, 장소, 원인, 동기를 절대 추가하지 마세요. 본문에 없는 항목은 정확히 "${NOT_STATED.ko}"이라고만 쓰고 다른 설명을 붙이지 마세요. 본문에 제목과 관계없는 줄(광고, 다른 기사 안내)이 섞여 있으면 무시하세요.
 
 출처: ${story.sourceName}${published ? `\n게시 시각: ${published}` : ""}
 제목: ${story.title}
@@ -185,8 +192,9 @@ export function briefPrompt(lang: NewsLang, story: NewsStory): string {
 - 사실을 바로 서술하세요. "본문에 따르면", "출처는 ~라고 전한다" 같은 표현이나 본문에 대한 평가, 괄호 속 원문 인용을 쓰지 마세요.
 - 확인되지 않은 주장은 누가 한 주장인지 밝히세요 (예: "소송은 ~라고 주장한다", "경찰은 ~라고 밝혔다").
 - 외국 인명·기관명은 한글로 쓰고, 처음 한 번만 원어를 괄호로 덧붙이세요.
+- "도움"과 "부담" 두 줄은 이 소식의 득실을 객관적으로 정리하는 곳입니다. 줄마다 구체적인 대상(집단·기업·국가)을 최대 세 곳 쓰고, 대상 뒤에 " — "와 함께 어떻게 도움이 되거나 부담이 되는지 적으세요 (예: "예금자 — 예금 이자 상승; 수출 기업 — 환율 효과"). 이 두 줄은 110자까지 쓸 수 있습니다. 위 사실에서 바로 따라오는 결과만 쓰고, 본문에 없는 숫자나 추측을 덧붙이지 말며, 칭찬이나 비난 없이 서술하세요. 확실하지 않은 효과는 "~할 수 있음"으로 쓰세요. 억지로 채우지 마세요: 뚜렷하게 득을 보는(또는 부담을 지는) 쪽이 없으면 정확히 "${NO_CLEAR_PARTY.ko}"이라고 쓰세요.
 
-아래 여덟 줄을 이 순서대로, 한 줄에 하나씩, 일반 텍스트로만 쓰세요 (마크다운·별표 금지):
+아래 아홉 줄을 이 순서대로, 한 줄에 하나씩, 일반 텍스트로만 쓰세요 (마크다운·별표 금지):
 요약: 가장 중요한 사실 (핵심 수치가 있으면 그것부터)
 누가: 관련된 사람, 기관, 국가
 무엇을: 무슨 일이 일어났는지
@@ -194,9 +202,10 @@ export function briefPrompt(lang: NewsLang, story: NewsStory): string {
 어디서: 일어난 곳
 왜: 본문에 나온 원인이나 이유
 어떻게: 어떤 방식으로 일어났거나 진행되는지
-영향: 누가 이득을 보고 누가 부담을 지는지, 본문이 뒷받침하는 범위에서만`;
+도움: 이 소식이 도움이 되는 쪽과 그 이유
+부담: 이 소식이 부담이 되는 쪽과 그 이유`;
   }
-  return `Write a factual news brief for a family. Use ONLY facts stated in the source text below. Never add a name, number, date, place, cause or motive that is not in it. If the text does not state an element, write exactly "${NOT_STATED.en}" and nothing more on that line. Ignore any lines in the text that are not about the headline story (ads, links to other stories).
+  return `Write a factual news brief for a family. Use ONLY facts stated in the source text below (the last two lines, HELPS and HURTS, are the one exception: they set out what follows directly from those facts). Never add a name, number, date, place, cause or motive that is not in it. If the text does not state an element, write exactly "${NOT_STATED.en}" and nothing more on that line. Ignore any lines in the text that are not about the headline story (ads, links to other stories).
 
 SOURCE: ${story.sourceName}${published ? `\nPUBLISHED: ${published}` : ""}
 HEADLINE: ${story.title}
@@ -206,8 +215,9 @@ Rules:
 - Each line is ONE short sentence (25 words at most) with only the most important point. The TLDR alone may be two sentences.
 - State the facts directly. Do not write "the text says" or "according to the source", do not comment on what the source leaves out, and do not quote the text in parentheses.
 - Keep unproven claims attributed to whoever made them ("the lawsuit alleges…", "police say…").
+- HELPS and HURTS are the objective balance sheet of this news. On each line name up to three specific parties (groups, companies, countries) and, after a dash, the concrete way it helps or costs them ("Savers — higher interest on deposits; Exporters — a weaker currency"). These two lines may run to 40 words. Direct consequences of the facts above only: no speculation beyond them, no numbers that are not in the text, no praise or blame; say "may" where the effect is not certain. Do not force a side: if nobody clearly gains (or loses), write exactly "${NO_CLEAR_PARTY.en}".
 
-Write exactly these eight lines in this order, one per line, plain text only (no markdown, no asterisks):
+Write exactly these nine lines in this order, one per line, plain text only (no markdown, no asterisks):
 TLDR: the most important fact (lead with the key number if there is one)
 WHO: the people, organisations or countries involved
 WHAT: what happened
@@ -215,7 +225,8 @@ WHEN: when it happened; if the text gives no date, write only ${published ? `"Re
 WHERE: where it happened
 WHY: the cause or reason given in the text
 HOW: how it happened or how it will work
-IMPACT: who benefits and who bears the cost, only as far as the text supports`;
+HELPS: who this news is good for, and why
+HURTS: who this news is bad for, and why`;
 }
 
 /** Models sometimes bold the labels despite being told not to. */
@@ -226,7 +237,8 @@ export function parseBrief(lang: NewsLang, raw: string): Brief {
   const aliasToField = new Map<string, BriefField>();
   for (const f of BRIEF_FIELDS) for (const a of ALIASES[lang][f]) aliasToField.set(a.toLowerCase(), f);
   const labels = [...aliasToField.keys()].sort((a, b) => b.length - a.length).map((a) => a.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
-  const lineRe = new RegExp(`^\\s*(?:[-•*]\\s*)?(${labels.join("|")})\\s*[:：]\\s*(.*)$`, "i");
+  const lineRe = new RegExp(`^\\s*(?:[-•*➕➖+]\\s*)?(${labels.join("|")})\\s*[:：]\\s*(.*)$`, "i");
+  const retiredRe = new RegExp(`^\\s*(?:[-•*]\\s*)?(${RETIRED_LABELS[lang].join("|")})\\s*[:：]`, "i");
 
   const out: Brief = {};
   let current: BriefField | null = null;
@@ -236,6 +248,8 @@ export function parseBrief(lang: NewsLang, raw: string): Brief {
       current = aliasToField.get(m[1].toLowerCase()) ?? null;
       if (current && out[current] === undefined) out[current] = m[2].trim();
       else current = null; // repeated label: keep the first value
+    } else if (retiredRe.test(line)) {
+      current = null;
     } else if (current && line.trim()) {
       out[current] = `${out[current]} ${line.trim()}`.trim();
     }
@@ -305,7 +319,7 @@ A God-centered reading of this story has already been given. Now judge it by hum
 
 First decide honestly: do people really disagree along political lines about THIS story — about its facts, who is responsible, or what should be done? Most crimes, accidents, disasters, deaths, discoveries and results are NOT contested: nearly everyone reads them the same way. When in doubt, it is not contested. Never invent a split to fill the format.
 
-FORMAT A — the story is genuinely contested. One sentence each, 30 words at most. State each view the way its own holders would recognise as fair, grounded in this story's facts; then weigh them: where each has a point and what each tends to miss.
+FORMAT A — the story is genuinely contested. One sentence each, 30 words at most. State each view the way its own holders would recognise as fair, grounded in this story's facts and in who gains and who loses from it (name them) — not in abstract ideology; then weigh them: where each has a point and what each tends to miss.
 ${en}
 
 FORMAT B — the story is not contested. One line only: how most people across the spectrum see it, and the practical question it leaves (two sentences at most).
@@ -344,9 +358,28 @@ export function toHumanView(agent: string, raw: string, langs: "both" | "ko"): P
 }
 
 function briefLines(lang: NewsLang, b: Brief): string[] {
-  return (["who", "what", "when", "where", "why", "how", "impact"] as const)
+  return (["who", "what", "when", "where", "why", "how"] as const)
     .filter((f) => b[f])
     .map((f) => `${DISPLAY[lang][f]}: ${b[f]}`);
+}
+
+const isNoParty = (v: string | undefined) => {
+  const t = (v ?? "").trim().toLowerCase().replace(/[."']/g, "");
+  return isNotStated(v) || t.startsWith(NO_CLEAR_PARTY.en.toLowerCase()) || t.startsWith(NO_CLEAR_PARTY.ko);
+};
+
+/**
+ * The objective balance sheet: who this news helps and who it costs. Shown as its own block so
+ * the two sides can be compared at a glance; left out when the story has no clear party on
+ * either side (nothing is forced).
+ */
+function balanceBlock(lang: NewsLang, b: Brief | null): string {
+  if (!b || (isNoParty(b.helps) && isNoParty(b.hurts))) return "";
+  return [
+    BALANCE_TITLE[lang],
+    `${DISPLAY[lang].helps}: ${b.helps?.trim() || NO_CLEAR_PARTY[lang]}`,
+    `${DISPLAY[lang].hurts}: ${b.hurts?.trim() || NO_CLEAR_PARTY[lang]}`,
+  ].join("\n");
 }
 
 export type Perspective = { agent: string; en: string; ko: string };
@@ -362,7 +395,8 @@ export function toPerspective(agent: string, raw: string, langs: "both" | "ko"):
 
 /**
  * Builds the post text. Line 1 is always the headline (the dedup check reads it) and the
- * TL;DR lines come right after it. Sections with no content are left out. The human view is only
+ * TL;DR lines come right after it, then the facts, then the balance sheet (who it helps, who it
+ * costs), then the two readings. Sections with no content are left out. The human view is only
  * shown after a God-centered view in the same language — never on its own.
  */
 export function assembleNewsPost(p: {
@@ -397,8 +431,8 @@ export function assembleNewsPost(p: {
     godView?.ko && humanView?.ko && `⚖️ 사람의 관점 — ${humanView.agent}\n${humanView.ko}`,
   ].filter(Boolean).join("\n\n");
   // When there is an English section, the Korean one is set off under its own heading.
-  const koSection = [koBody, koViews].filter(Boolean).join("\n\n");
+  const koSection = [koBody, balanceBlock("ko", ko), koViews].filter(Boolean).join("\n\n");
   const koBlock = koSection ? (enSection || enViews ? `---\n🇰🇷 한국어\n\n${koSection}` : koSection) : "";
 
-  return [head, enSection, enViews, koBlock, p.footer].filter(Boolean).join("\n\n");
+  return [head, enSection, balanceBlock("en", en), enViews, koBlock, p.footer].filter(Boolean).join("\n\n");
 }
