@@ -40,7 +40,7 @@ export async function fetchRss(url: string, limit = 10): Promise<RssItem[]> {
   const xml = await res.text();
 
   const items: RssItem[] = [];
-  const itemRegex = /<item>([\s\S]*?)<\/item>/g;
+  const itemRegex = /<item\b[^>]*>([\s\S]*?)<\/item>/g; // some feeds put attributes on <item>
   let match: RegExpExecArray | null;
 
   while ((match = itemRegex.exec(xml)) !== null && items.length < limit) {
@@ -79,7 +79,9 @@ export const NEWS_FEEDS = [
 
 // Korean-language news feeds
 export const KOREAN_NEWS_FEEDS = [
-  // Yonhap News Agency — Korea's primary national news wire
+  // Yonhap News Agency — Korea's primary national news wire (the path is lowercase on the current site;
+  // the old spelling is kept after it in case it still answers)
+  "https://www.yna.co.kr/rss/news.xml",
   "https://www.yna.co.kr/RSS/news.xml",
   // MBC News
   "https://imnews.imbc.com/rss/news/news_00.xml",

@@ -51,7 +51,17 @@ export function cleanFeedText(raw: string): string {
 /** Only http(s) links are shown; a feed's <guid> fallback is often not a URL. */
 export function cleanFeedLink(raw: string): string | null {
   const link = cleanFeedText(raw);
-  return /^https?:\/\/\S+$/i.test(link) ? link : null;
+  if (!/^https?:\/\/\S+$/i.test(link)) return null;
+  try {
+    const url = new URL(link);
+    // Feed tracking tags make the link long and say nothing to the reader.
+    for (const key of [...url.searchParams.keys()]) {
+      if (/^(utm_|at_|ns_)|^(cmpid|ocid|src|ref|tsrc)$/i.test(key)) url.searchParams.delete(key);
+    }
+    return url.toString();
+  } catch {
+    return null;
+  }
 }
 
 export const KOREAN_NEWS_BADGE = "🇰🇷 한국 뉴스";
@@ -132,33 +142,44 @@ export function briefPrompt(lang: NewsLang, story: NewsStory): string {
     ? `${story.description.slice(0, 500)}\n${story.articleText}`
     : story.description.slice(0, 700);
   if (lang === "ko") {
-    return `가족을 위한 사실 중심 뉴스 브리핑을 한국어로 작성하세요. 아래 출처 본문에 적힌 사실만 사용하세요. 본문에 없는 이름, 숫자, 날짜, 장소, 원인, 동기를 절대 추가하지 마세요. 본문에 없는 항목은 정확히 "${NOT_STATED.ko}"이라고 쓰세요. 본문에 제목과 관계없는 줄(광고, 다른 기사 안내)이 섞여 있으면 무시하세요.
+    return `가족을 위한 사실 중심 뉴스 브리핑을 한국어로 작성하세요. 아래 출처 본문에 적힌 사실만 사용하세요. 본문에 없는 이름, 숫자, 날짜, 장소, 원인, 동기를 절대 추가하지 마세요. 본문에 없는 항목은 정확히 "${NOT_STATED.ko}"이라고만 쓰고 다른 설명을 붙이지 마세요. 본문에 제목과 관계없는 줄(광고, 다른 기사 안내)이 섞여 있으면 무시하세요.
 
 출처: ${story.sourceName}${published ? `\n게시 시각: ${published}` : ""}
 제목: ${story.title}
 본문: ${text}
 
+작성 규칙:
+- 각 줄은 짧은 한 문장(70자 이내)으로, 가장 중요한 것만 쓰세요. 요약만 두 문장까지 가능합니다.
+- 사실을 바로 서술하세요. "본문에 따르면", "출처는 ~라고 전한다" 같은 표현이나 본문에 대한 평가, 괄호 속 원문 인용을 쓰지 마세요.
+- 확인되지 않은 주장은 누가 한 주장인지 밝히세요 (예: "소송은 ~라고 주장한다", "경찰은 ~라고 밝혔다").
+- 외국 인명·기관명은 한글로 쓰고, 처음 한 번만 원어를 괄호로 덧붙이세요.
+
 아래 여덟 줄을 이 순서대로, 한 줄에 하나씩, 일반 텍스트로만 쓰세요 (마크다운·별표 금지):
-요약: 가장 중요한 사실을 한두 문장으로 (핵심 수치가 있으면 그것부터)
+요약: 가장 중요한 사실 (핵심 수치가 있으면 그것부터)
 누가: 관련된 사람, 기관, 국가
 무엇을: 무슨 일이 일어났는지
-언제: 일어난 때. 본문에 날짜가 없으면 ${published ? `"${published} 보도"` : `"${NOT_STATED.ko}"`}라고 쓰세요
+언제: 일어난 때. 본문에 날짜가 없으면 ${published ? `"${published} 보도"` : `"${NOT_STATED.ko}"`}라고만 쓰세요
 어디서: 일어난 곳
 왜: 본문에 나온 원인이나 이유
 어떻게: 어떤 방식으로 일어났거나 진행되는지
 영향: 누가 이득을 보고 누가 부담을 지는지, 본문이 뒷받침하는 범위에서만`;
   }
-  return `Write a factual news brief for a family. Use ONLY facts stated in the source text below. Never add a name, number, date, place, cause or motive that is not in it. If the text does not state an element, write exactly "${NOT_STATED.en}". Ignore any lines in the text that are not about the headline story (ads, links to other stories).
+  return `Write a factual news brief for a family. Use ONLY facts stated in the source text below. Never add a name, number, date, place, cause or motive that is not in it. If the text does not state an element, write exactly "${NOT_STATED.en}" and nothing more on that line. Ignore any lines in the text that are not about the headline story (ads, links to other stories).
 
 SOURCE: ${story.sourceName}${published ? `\nPUBLISHED: ${published}` : ""}
 HEADLINE: ${story.title}
 TEXT: ${text}
 
+Rules:
+- Each line is ONE short sentence (25 words at most) with only the most important point. The TLDR alone may be two sentences.
+- State the facts directly. Do not write "the text says" or "according to the source", do not comment on what the source leaves out, and do not quote the text in parentheses.
+- Keep unproven claims attributed to whoever made them ("the lawsuit alleges…", "police say…").
+
 Write exactly these eight lines in this order, one per line, plain text only (no markdown, no asterisks):
-TLDR: the single most important fact in one or two sentences (lead with the key number if there is one)
+TLDR: the most important fact (lead with the key number if there is one)
 WHO: the people, organisations or countries involved
 WHAT: what happened
-WHEN: when it happened; if the text gives no date, write ${published ? `"Reported ${published}"` : `"${NOT_STATED.en}"`}
+WHEN: when it happened; if the text gives no date, write only ${published ? `"Reported ${published}"` : `"${NOT_STATED.en}"`}
 WHERE: where it happened
 WHY: the cause or reason given in the text
 HOW: how it happened or how it will work
@@ -226,7 +247,11 @@ export function godViewPrompt(agent: Persona, story: NewsStory, langs: "both" | 
 
 ${storyBlock(story)}
 
-Write the God-centered reading of this story for a Christian family. This comes first, before any human opinion. Start from who God is and what Scripture actually teaches — His justice and mercy, His truth, His care for the poor and the stranger, the worth of every person made in His image, His rule over nations and history — and say what that means for how to see this event and how to pray about it. Do not force a connection: if a passage genuinely speaks to it, name the book and chapter, and do not quote verse wording unless you are certain of it; if none clearly applies, speak plainly from God's character. No party politics. Use only the facts in the news text above; add no new facts. 2–3 sentences. No hashtags, no markdown, do not start with "I".
+Write the God-centered reading of this story for a Christian family. This comes first, before any human opinion. Start from who God is and what Scripture actually teaches — His justice and mercy, His truth, His care for the poor and the stranger, the worth of every person made in His image, His rule over nations and history — and say what that means for how to see THIS event and how to pray about it. Be specific to this story: a reading that would fit any news item is not good enough.
+
+Scripture: name a passage (book and chapter) only when it speaks to this kind of situation in particular, and do not quote verse wording unless you are certain of it. Do not reach for the most-quoted verses by reflex (Micah 6:8, Jeremiah 29:11, Romans 8:28, Proverbs 3:5). If no passage clearly applies, speak plainly from God's character instead.
+
+No party politics. Use only the facts in the news text above; add no new facts. 2–3 sentences, 60 words at most in English. No hashtags, no markdown, do not start with "I".
 
 ${langs === "ko" ? "한국어로만 작성하세요." : BILINGUAL}${guardrail}`;
 }
@@ -246,15 +271,19 @@ ${storyBlock(story)}
 
 A God-centered reading of this story has already been given. Now judge it by human standards, fairly.
 
-If people really do disagree about THIS story along political lines: state how thoughtful progressives read it and how thoughtful conservatives read it — each put the way its own holders would recognise as fair, and grounded in this story's facts — then weigh them in one sentence: where each has a point and what each tends to miss.
+First decide honestly: do people really disagree along political lines about THIS story — about its facts, who is responsible, or what should be done? Most crimes, accidents, disasters, deaths, discoveries and results are NOT contested: nearly everyone reads them the same way. When in doubt, it is not contested. Never invent a split to fill the format.
 
-If it is not politically contested (a disaster, a discovery, a result both sides read the same way), do not invent a split. Write the common-ground line instead: how most people across the spectrum see it, and the practical question it leaves.
+FORMAT A — the story is genuinely contested. One sentence each, 30 words at most. State each view the way its own holders would recognise as fair, grounded in this story's facts; then weigh them: where each has a point and what each tends to miss.
+${en}
+
+FORMAT B — the story is not contested. One line only: how most people across the spectrum see it, and the practical question it leaves (two sentences at most).
+${enCommon}
 
 Use only the facts in the news text above; add no statistics or events. No hashtags, no markdown.
 
 ${langs === "ko"
-    ? `한국어로만, 정확히 다음 형식 중 하나로 작성하세요.\n의견이 실제로 갈릴 때:\n${ko}\n갈리지 않을 때:\n${koCommon}`
-    : `Write it in English and then the same content in natural Korean, in exactly this format:\n[EN]\n${en}\n[KO]\n${ko}\n(when not contested, the [EN] part is the single line "${enCommon}" and the [KO] part is "${koCommon}")`}${guardrail}`;
+    ? `한국어로만 작성하세요. 형식 A는 "${ko.replace(/\n/g, " / ")}", 형식 B는 "${koCommon}" 입니다. 둘 중 하나만 쓰세요.`
+    : `Write the chosen format in English, then the same content in natural Korean, exactly like this:\n[EN]\n<format A or B in English>\n[KO]\n<같은 형식의 한국어: 형식 A는 "${ko.replace(/\n/g, " / ")}", 형식 B는 "${koCommon}">\nEach label starts its own line.`}${guardrail}`;
 }
 
 /** Splits "[EN] … [KO] …" output. Without markers the whole text is treated as English. */
