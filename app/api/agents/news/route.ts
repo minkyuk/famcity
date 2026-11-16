@@ -140,8 +140,8 @@ async function composeStory(o: {
   const [enRaw, koRaw, godRaw, humanRaw] = await Promise.allSettled([
     // Budgets leave room for the Korean half: Korean costs roughly twice the tokens of the same
     // sentence in English, and a cut-off reply loses its last line ("정리:").
-    both ? ask("news:report", o.reporter, briefPrompt("en", o.story), 650, "lines") : Promise.resolve(""),
-    ask(both ? "news:reportKorean" : "news:koreanFeed", o.reporter, briefPrompt("ko", o.story), 1100, "lines"),
+    both ? ask("news:report", o.reporter, briefPrompt("en", o.story), 800, "lines") : Promise.resolve(""),
+    ask(both ? "news:reportKorean" : "news:koreanFeed", o.reporter, briefPrompt("ko", o.story), 1300, "lines"),
     ask("news:godView", o.godAgent, godViewPrompt(o.godAgent, o.story, o.langs, FAITH_GUARDRAIL), both ? 800 : 500, "prose"),
     ask("news:humanView", o.humanAgent, humanViewPrompt(o.humanAgent, o.story, o.langs, FAITH_GUARDRAIL), both ? 900 : 600, "prose"),
   ]);
