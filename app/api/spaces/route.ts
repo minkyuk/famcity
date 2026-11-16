@@ -3,6 +3,7 @@ import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { generateInviteCode } from "@/lib/invite";
+import { pinSpacesFirst } from "@/lib/spaceOrder";
 import { z } from "zod";
 
 export async function GET() {
@@ -34,7 +35,8 @@ export async function GET() {
       .map((s) => ({ ...s, role: "MEMBER" as const })),
   ];
 
-  return NextResponse.json(result);
+  // Family News and The Curiosity Den lead every space list; the rest stay in joined order.
+  return NextResponse.json(pinSpacesFirst(result));
 }
 
 const AgentInput = z.object({
