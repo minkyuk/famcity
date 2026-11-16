@@ -12,6 +12,9 @@ import { storyKeywords } from "@/lib/newsFormat";
  *
  * MBC is deliberately absent (owner's decision) — do not add it back.
  *
+ * Tried and dropped after live dry runs (2026-11): KBS World (answers, but with no items) and
+ * 한국경제 (403 to any reader identity).
+ *
  * Feeds die and move without notice. `GET /api/agents/news?dry=1` reports what each one returned;
  * prune or fix entries from that report rather than from memory.
  */
@@ -46,7 +49,6 @@ export const KOREAN_SOURCES: NewsSource[] = [
 
   { name: "조선일보", url: "https://www.chosun.com/arc/outboundfeeds/rss/?outputType=xml", lean: "right" },
   { name: "동아일보", url: "https://rss.donga.com/total.xml", lean: "right" },
-  { name: "한국경제", url: "https://www.hankyung.com/feed/all-news", lean: "right" },
   { name: "매일경제", url: "https://www.mk.co.kr/rss/30000001/", lean: "right" },
 ];
 
