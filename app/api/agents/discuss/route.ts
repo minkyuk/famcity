@@ -22,7 +22,8 @@ import {
 } from "@/lib/agentMemory";
 import { finalizeAgentText } from "@/lib/agentText";
 import { fetchYouTubeTitle } from "@/lib/youtube";
-import { DEN_POST_WINDOW_MS, denBudgetAllows, denDebateInstruction, pickDenAgent, pickDenPost, type DenRole } from "@/lib/denDebate";
+import { DEN_MAX_AGENT_COMMENTS, DEN_POST_WINDOW_MS, denBudgetAllows, denDebateInstruction, pickDenAgent, pickDenPost, type DenRole } from "@/lib/denDebate";
+import { scriptureIsFaithful } from "@/lib/scripture";
 
 
 // Vision: agents can look at photos. Each photo URL is capped at 3 total VLM queries.
@@ -264,6 +265,7 @@ Respond. No hashtags.${STYLE_INSTRUCTION}${pickTone()}${pickLang()}${GROUNDING_I
     if (!text || text.length < 10) return;
     if (!(await isFactuallyHumble(text, post.content ?? null))) return;
     if (!(await isGroundedAboutPeople(text, post))) return;
+    if (!(await scriptureIsFaithful(text))) return; // every cited passage must exist and say what the comment says it says
     const fafoComment = await prisma.comment.create({
       data: { postId: post.id, authorName: agent.name, authorImage: avatar, body: text },
     });
@@ -1439,6 +1441,9 @@ Join this conversation. Respond to what ${originalPoster} shared — or to somet
       if (!(await isGroundedAboutPeople(finalText, target, fileUrls.length > 0 ? VISIBLE_MEDIA_NOTE : ""))) return;
     }
 
+    // Scripture gate — in every mode: a cited passage must exist and say what the comment says it says.
+    if (!(await scriptureIsFaithful(finalText))) return;
+
     // Relevance gate: for tutoring/debate spaces, ensure comment is on-topic and genuinely helpful
     if (mode !== "task" && target.spaceId) {
       const sp = await prisma.space.findUnique({ where: { id: target.spaceId }, select: { purpose: true } }).catch(() => null);
@@ -1629,6 +1634,7 @@ Write a short, thoughtful post sharing your reaction or a related idea it sparke
   const { text: afterBeliefP, update } = parseBeliefUpdate(afterSummaryRaw);
   const text = finalizeAgentText(afterBeliefP, response.stop_reason);
   if (!text) return;
+  if (!(await scriptureIsFaithful(text))) return;
 
   if (update) {
     await updateBelief(agent.slug, update.topic, update.belief, update.confidence).catch(() => {});
@@ -1857,6 +1863,8 @@ ${respondTo} is waiting for a reply. Respond directly and helpfully — engage w
     ]);
     if (!novel || !humble) return;
     if (!(await isGroundedAboutPeople(text, post))) return;
+    // Scripture gate: even with a person waiting, a mis-cited verse is not posted — the next sweep answers them.
+    if (!(await scriptureIsFaithful(text))) return;
     // Travel agents: append live flight results — only if no results already in thread
     if (TRAVEL_AGENT_SLUGS.has(agent.slug) && !hasFlightResults(post.comments)) {
       const searchText = [post.content, ...post.comments.map((c) => c.body)].filter(Boolean).join(" ");
@@ -2314,6 +2322,7 @@ async function runSpaceAgentActionBody(
     ]);
     if (!novelSA || !humbleSA) return dropAttempt();
     if (!(await isGroundedAboutPeople(text, target, spaceFileUrls.length > 0 ? VISIBLE_MEDIA_NOTE : ""))) return dropAttempt();
+    if (!(await scriptureIsFaithful(text))) return dropAttempt();
 
     // Relevance gate: for tutoring/debate spaces — skipped in FAFO mode, during a hot session,
     // and whenever we're replying to a human (a person waiting on an answer should never be
@@ -2391,6 +2400,7 @@ async function runSpaceAgentActionBody(
     if (update) await updateBelief(spaceAgent.slug, update.topic, update.belief, update.confidence).catch(() => {});
     const text = finalizeAgentText(afterBeliefSP, response.stop_reason);
     if (!text) return;
+    if (!(await scriptureIsFaithful(text))) return;
 
     const spaceAgentPost = await prisma.post.create({
       data: { authorName: spaceAgent.name, authorImage: avatar, spaceId, content: text, type: "TEXT", ...(postSummary ? { summary: postSummary } : {}) },
@@ -2577,7 +2587,7 @@ async function runDenDebate(denSpaceId: string): Promise<void> {
     }),
     fetchConcludedPostIds(),
   ]);
-  const target = pickDenPost(posts, now, { maxAgentComments: MAX_AGENT_COMMENTS_SINCE_HUMAN, concluded });
+  const target = pickDenPost(posts, now, { maxAgentComments: DEN_MAX_AGENT_COMMENTS, concluded });
   if (!target) return;
   const choice = pickDenAgent(target, AGENTS, (a) => topicScore(target, a.topics, a.keywords));
   if (!choice) return;
@@ -2630,6 +2640,7 @@ Post by ${speakerLabel(target)}: "${(target.content ?? "").slice(0, 1200)}"${thr
   ]);
   if (!novel || !humble) return;
   if (!(await isGroundedAboutPeople(finalText, target))) return;
+  if (!(await scriptureIsFaithful(finalText))) return;
 
   // Something else may have commented while this was being written: keep the thread unhurried.
   const justCommented = await prisma.comment.findFirst({
