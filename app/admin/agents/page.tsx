@@ -13,6 +13,7 @@ import { AiPingButton } from "@/components/Admin/AiPingButton";
 import { TokenBreakdownTable } from "@/components/Admin/TokenBreakdownTable";
 import { DailyActivityTable } from "@/components/Admin/DailyActivityTable";
 import { loadDailyActivity } from "@/lib/activityHistory";
+import { DEN_COMMENTS_PER_HOUR } from "@/lib/denDebate";
 
 export const dynamic = "force-dynamic";
 
@@ -85,10 +86,17 @@ export default async function AdminAgentHealthPage() {
 
       <DailyActivityTable days={history} />
 
-      <div className="grid gap-3 sm:grid-cols-3">
+      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
         <StatTile label="크론: 에이전트 (5분마다)" value={timeAgoKo(h.cronDiscussAt, now)} />
         <StatTile label="크론: 뉴스 (2시간마다)" value={timeAgoKo(h.cronNewsAt, now)} />
         <StatTile label="사람 댓글로 깨운 마지막 실행" value={timeAgoKo(h.userTriggerAt, now)} />
+        {h.den && (
+          <StatTile
+            label="Curiosity Den 토론 댓글 (24시간)"
+            value={`${fmt(h.den.agentComments24h)}개 · 글 ${fmt(h.den.posts24h)}개`}
+            sub={`최근 1시간 ${h.den.agentCommentsLastHour}/${DEN_COMMENTS_PER_HOUR} · 마지막 ${timeAgoKo(h.den.lastAgentCommentAt, now)} · 댓글 없는 글 ${h.den.uncommentedPosts24h}개`}
+          />
+        )}
       </div>
 
       {h.errorsByType.length > 0 && (

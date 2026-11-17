@@ -14,7 +14,7 @@ export function categoryOf(route: string): TokenCategory {
   if (route.startsWith("news")) return "news";
   const purpose = route.split(":")[1] ?? "";
   if (purpose === "runDirectTurn" || purpose === "runFafoTurn") return "direct";
-  if (purpose === "runAgentAction" || purpose === "tryCreateDenPost") return "routine";
+  if (purpose === "runAgentAction" || purpose === "tryCreateDenPost" || purpose === "denDebate") return "routine";
   if (purpose === "spaceComment" || purpose === "spacePost") return "space";
   if (["isNovel", "isFactuallyHumble", "isOnTopicAndHelpful", "findThreadGaps", "extractFlightParams"].includes(purpose)) return "gate";
   return "other";

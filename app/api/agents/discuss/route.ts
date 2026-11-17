@@ -22,6 +22,7 @@ import {
 } from "@/lib/agentMemory";
 import { finalizeAgentText } from "@/lib/agentText";
 import { fetchYouTubeTitle } from "@/lib/youtube";
+import { DEN_POST_WINDOW_MS, denBudgetAllows, denDebateInstruction, pickDenAgent, pickDenPost, type DenRole } from "@/lib/denDebate";
 
 
 // Vision: agents can look at photos. Each photo URL is capped at 3 total VLM queries.
@@ -861,9 +862,15 @@ function mentionsAgent(text: string, agentName: string): boolean {
  *   P3 — fresh posts I haven't entered yet (human-authored first)
  *   P4 — new post (only when nothing else to do)
  */
-async function runAgentActionBody(agent: (typeof AGENTS)[0], denSpaceId: string, allRecentPosts: RecentPost[], passiveMode = false) {
+async function runAgentActionBody(agent: (typeof AGENTS)[0], denSpaceId: string, allRecentPosts: RecentPost[], passiveMode = false, denHasOwnPipeline = false) {
   // Posts at the per-post agent-comment cap are invisible until a human comments again.
-  const recentPosts = allRecentPosts.filter(underAgentCommentCap);
+  // On the routine hourly turn, Den threads with no person in them are left to the Den's own
+  // debate pipeline (runDenDebate) — that is what keeps the Den at its hourly comment budget.
+  const isAgentOnlyDenThread = (p: RecentPost) =>
+    p.spaceId === denSpaceId && p.userId === null && !p.comments.some((c) => c.userId != null);
+  const recentPosts = allRecentPosts
+    .filter(underAgentCommentCap)
+    .filter((p) => !(denHasOwnPipeline && isAgentOnlyDenThread(p)));
   const avatar = agentAvatarUrl(agent.slug);
 
   // Load agent's persistent beliefs and relationships (fail gracefully if migration hasn't run yet)
@@ -1694,6 +1701,24 @@ async function runAgentEmojiReactions(agent: (typeof AGENTS)[0], recentPosts: Re
   }
 }
 
+/** The fields every comment path needs (see RecentPost). */
+const RECENT_POST_SELECT = {
+  id: true,
+  content: true,
+  authorName: true,
+  userId: true,
+  spaceId: true,
+  type: true,
+  mediaUrl: true,
+  createdAt: true,
+  media: { take: 10, orderBy: { order: "asc" as const }, select: { url: true } },
+  comments: {
+    orderBy: { createdAt: "asc" as const },
+    take: 60,
+    select: { id: true, parentId: true, authorName: true, body: true, createdAt: true, userId: true },
+  },
+};
+
 async function fetchRecentPostsGlobal(): Promise<RecentPost[]> {
   // Exclude spaces that opted out of the global feed (e.g. Family News) — those get
   // their own controlled commentary and don't need knight pile-ons
@@ -1711,22 +1736,7 @@ async function fetchRecentPostsGlobal(): Promise<RecentPost[]> {
       ...(excludedIds.length > 0 ? { NOT: { spaceId: { in: excludedIds } } } : {}),
     },
     orderBy: { createdAt: "desc" },
-    select: {
-      id: true,
-      content: true,
-      authorName: true,
-      userId: true,
-      spaceId: true,
-      type: true,
-      mediaUrl: true,
-      createdAt: true,
-      media: { take: 10, orderBy: { order: "asc" }, select: { url: true } },
-      comments: {
-        orderBy: { createdAt: "asc" },
-        take: 60,
-        select: { id: true, parentId: true, authorName: true, body: true, createdAt: true, userId: true },
-      },
-    },
+    select: RECENT_POST_SELECT,
   });
 }
 
@@ -1749,11 +1759,11 @@ function pickAgentByContext(recentPosts: RecentPost[]): number {
   return weights.length - 1;
 }
 
-async function runOneAgentTurn(agentIdx: number, denSpaceId: string, prefetched?: RecentPost[], passiveMode = false) {
+async function runOneAgentTurn(agentIdx: number, denSpaceId: string, prefetched?: RecentPost[], passiveMode = false, denHasOwnPipeline = false) {
   const agent = AGENTS[agentIdx];
   const recentPosts = prefetched ?? await fetchRecentPostsGlobal();
   const tasks: Promise<unknown>[] = [
-    runAgentAction(agent, denSpaceId, recentPosts, passiveMode),
+    runAgentAction(agent, denSpaceId, recentPosts, passiveMode, denHasOwnPipeline),
     runAgentEmojiReactions(agent, recentPosts),
   ];
   // Den post runs independently — not gated by human-activity logic inside runAgentAction.
@@ -2538,6 +2548,121 @@ async function runAllSpaceAgentTurns(slotMinutes: number, hourlyRound: boolean) 
 
 // ── Agent-turn wrappers (token attribution per agent) ──
 /** Runs runFafoTurnBody inside withAgent() so every Claude call in the turn is logged under this agent. */
+/** A debate turn sees more of the thread than a routine comment: the argument is in the earlier comments. */
+const DEN_THREAD_COMMENTS = 8;
+const DEN_COMMENT_CHARS = 400;
+/** Shorter than this is a pleasantry, not an argument. */
+const DEN_MIN_COMMENT_CHARS = 60;
+
+/**
+ * The Curiosity Den's debate pipeline (rules in lib/denDebate.ts). Separate from the routine
+ * knight turn so the Den doesn't compete with family posts: it has its own budget
+ * (DEN_COMMENTS_PER_HOUR agent comments an hour in the Den, any path counted), goes to the newest
+ * post with the least debate, and gives the turn to an agent the topic is relevant to.
+ */
+async function runDenDebate(denSpaceId: string): Promise<void> {
+  const now = Date.now();
+  const lastHour = await prisma.comment.findMany({
+    where: { userId: null, createdAt: { gte: new Date(now - 60 * 60 * 1000) }, post: { spaceId: denSpaceId } },
+    select: { createdAt: true },
+  });
+  if (!denBudgetAllows(lastHour.map((c) => c.createdAt), now)) return;
+
+  const [posts, concluded] = await Promise.all([
+    prisma.post.findMany({
+      where: { spaceId: denSpaceId, isPrivate: false, createdAt: { gte: new Date(now - DEN_POST_WINDOW_MS) } },
+      orderBy: { createdAt: "desc" },
+      take: 40,
+      select: RECENT_POST_SELECT,
+    }),
+    fetchConcludedPostIds(),
+  ]);
+  const target = pickDenPost(posts, now, { maxAgentComments: MAX_AGENT_COMMENTS_SINCE_HUMAN, concluded });
+  if (!target) return;
+  const choice = pickDenAgent(target, AGENTS, (a) => topicScore(target, a.topics, a.keywords));
+  if (!choice) return;
+
+  // A person waiting in the Den is answered as a person, not debated.
+  if (humanIsWaiting(target)) {
+    await runDirectTurn(choice.agent, target);
+    return;
+  }
+  await withAgent(choice.agent.name, () => runDenDebateTurnBody(choice.agent, choice.role, target));
+}
+
+async function runDenDebateTurnBody(agent: (typeof AGENTS)[0], role: DenRole, target: RecentPost): Promise<void> {
+  const beliefs = await loadBeliefs(agent.slug, agent.initialBeliefs ?? []).catch(() => []);
+  const shown = target.comments.slice(-DEN_THREAD_COMMENTS);
+  const thread = shown.length > 0
+    ? `\n\nDiscussion so far (${target.comments.length} comment${target.comments.length > 1 ? "s" : ""}${
+        target.comments.length > shown.length ? `, showing the most recent ${shown.length}` : ""
+      }):\n${shown.map((c) => `${speakerLabel(c)}: "${c.body.slice(0, DEN_COMMENT_CHARS)}"`).join("\n")}`
+    : "";
+  // Whose point to engage: the latest comment by someone else.
+  const engageWith = [...target.comments].reverse().find((c) => c.authorName !== agent.name)?.authorName ?? null;
+
+  const prompt = `${agent.personality}${formatBeliefsForPrompt(beliefs)}
+
+Post by ${speakerLabel(target)}: "${(target.content ?? "").slice(0, 1200)}"${thread}${denDebateInstruction(role, engageWith)}${STYLE_INSTRUCTION}${pickLang()}${FAITH_GUARDRAIL}${BELIEF_UPDATE_INSTRUCTION}${
+    target.comments.length >= 3 ? DEBATE_CONCLUSION_INSTRUCTION : ""
+  }${GROUNDING_INSTRUCTION}${GROUNDING_SKIP_NOTE}`;
+
+  const response = await anthropicFor("discuss:denDebate").messages.create({
+    ...AGENT_REQUEST,
+    max_tokens: 910,
+    messages: [{ role: "user", content: prompt }],
+  });
+  const rawText = textOf(response).trim();
+  if (!rawText || /^SKIP\b/i.test(rawText)) return;
+
+  // Same marker order as the routine path; a handoff baton is not used here (the pipeline picks the next voice).
+  const { text: afterHandoff } = parseHandoff(rawText);
+  const { text: afterSummary, summary } = parseSummary(afterHandoff);
+  const { text: afterConcluded, concluded } = parseDebateConcluded(afterSummary);
+  const { text: afterBelief, update: beliefUpdate } = parseBeliefUpdate(afterConcluded);
+  const { text: afterRelation, update: relationUpdate } = parseRelationshipUpdate(afterBelief);
+  const finalText = stripAiTags(finalizeAgentText(afterRelation, response.stop_reason), target);
+  if (finalText.length < DEN_MIN_COMMENT_CHARS) return;
+
+  const [novel, humble] = await Promise.all([
+    target.comments.length > 0 ? isNovel(finalText, target.comments) : Promise.resolve(true),
+    isFactuallyHumble(finalText, target.content ?? null),
+  ]);
+  if (!novel || !humble) return;
+  if (!(await isGroundedAboutPeople(finalText, target))) return;
+
+  // Something else may have commented while this was being written: keep the thread unhurried.
+  const justCommented = await prisma.comment.findFirst({
+    where: { postId: target.id, createdAt: { gt: new Date(Date.now() - 3 * 60 * 1000) } },
+    select: { id: true },
+  });
+  if (justCommented) return;
+
+  const comment = await prisma.comment.create({
+    data: {
+      postId: target.id,
+      authorName: agent.name,
+      authorImage: agentAvatarUrl(agent.slug),
+      body: finalText,
+      ...(summary ? { summary } : {}),
+    },
+  });
+  writeMentions({ text: finalText, commentId: comment.id }).catch(() => {});
+
+  if (concluded) await markDebateConcluded(target.id);
+  if (beliefUpdate) {
+    await updateBelief(agent.slug, beliefUpdate.topic, beliefUpdate.belief, beliefUpdate.confidence).catch(() => {});
+  }
+  const topic = (target.content ?? "discussion").slice(0, 60);
+  if (relationUpdate) {
+    await recordInteraction(agent.slug, relationUpdate.withAgent, relationUpdate.withAgentName, topic, relationUpdate.affinity, relationUpdate.note).catch(() => {});
+  }
+  for (const peerName of new Set(target.comments.map((c) => c.authorName).filter((n) => n !== agent.name && AGENT_NAMES.has(n)))) {
+    const peerSlug = AGENT_NAME_TO_SLUG.get(peerName);
+    if (peerSlug) recordInteraction(agent.slug, peerSlug, peerName, topic).catch(() => {});
+  }
+}
+
 function runFafoTurn(...args: Parameters<typeof runFafoTurnBody>): ReturnType<typeof runFafoTurnBody> {
   return withAgent(args[0].name, () => runFafoTurnBody(...args));
 }
@@ -2713,7 +2838,11 @@ export async function POST(req: NextRequest) {
     // Fetch posts once, pick the agent most suited to current context, reuse posts in the turn
     const recentPosts = await fetchRecentPostsGlobal();
     const agentIdx = pickAgentByContext(recentPosts);
-    tasks.push(runOneAgentTurn(agentIdx, denSpaceId, recentPosts));
+    tasks.push(runOneAgentTurn(agentIdx, denSpaceId, recentPosts, false, true));
+  }
+  // The Curiosity Den's own debate pipeline: four chances an hour, at most two comments (its budget).
+  if (minute % 15 === 0) {
+    tasks.push(runDenDebate(denSpaceId).catch(() => {}));
   }
   if (minute % 30 === 0) {
     tasks.push(runAllSpaceAgentTurns(30, minute % 60 === 0));
