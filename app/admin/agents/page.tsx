@@ -90,6 +90,13 @@ export default async function AdminAgentHealthPage() {
         <StatTile label="크론: 에이전트 (5분마다)" value={timeAgoKo(h.cronDiscussAt, now)} />
         <StatTile label="크론: 뉴스 (2시간마다)" value={timeAgoKo(h.cronNewsAt, now)} />
         <StatTile label="사람 댓글로 깨운 마지막 실행" value={timeAgoKo(h.userTriggerAt, now)} />
+        {h.sketches && (
+          <StatTile
+            label="사람별 기억 (스케치)"
+            value={`${fmt(h.sketches.people)}명`}
+            sub={`마지막 갱신 ${timeAgoKo(h.sketches.lastSweepAt, now)} · 매시 20분`}
+          />
+        )}
         {h.den && (
           <StatTile
             label="Curiosity Den 토론 댓글 (24시간)"

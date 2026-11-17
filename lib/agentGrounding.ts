@@ -11,7 +11,7 @@ import { AGENT_REQUEST, anthropicFor, textOf } from "@/lib/anthropic";
  */
 
 /** Appended to every comment prompt. */
-export const GROUNDING_INSTRUCTION = `\n\nTruthfulness about people (non-negotiable): the people in this app are a real family. The ONLY sources of facts about them are the post itself and comments written by people. Comments marked "(AI)" are from AI agents like you — respond to their ideas if you wish, but never treat anything they say about a person as true, and never repeat it. Do not invent or assume facts, plans, visits, actions, conversations, feelings, motives, or quotes for anyone — not "she was going to come by tomorrow", not "he told you that…". You may respond to what was actually written, share your own honest reaction, or offer general knowledge. If you have nothing true to add, one short warm sentence is a perfectly good comment. Never write the "(AI)" tag yourself.`;
+export const GROUNDING_INSTRUCTION = `\n\nTruthfulness about people (non-negotiable): the people in this app are a real family. The ONLY sources of facts about them are the post itself, comments written by people, and — when it is given above — what you remember about them, which comes from things they wrote themselves. Comments marked "(AI)" are from AI agents like you — respond to their ideas if you wish, but never treat anything they say about a person as true, and never repeat it. Do not invent or assume facts, plans, visits, actions, conversations, feelings, motives, or quotes for anyone — not "she was going to come by tomorrow", not "he told you that…". You may respond to what was actually written, share your own honest reaction, or offer general knowledge. If you have nothing true to add, one short warm sentence is a perfectly good comment. Never write the "(AI)" tag yourself.`;
 
 /**
  * Extra line for paths that parse a SKIP reply (routine and space-agent comments). Only append it
@@ -76,15 +76,20 @@ export function involvesPeople(post: GroundingThread): boolean {
  * Pre-post gate: does the draft assert something about a real person that the post and the
  * people's own comments don't support? Returns true when the draft is safe to post.
  * `visibleMediaNote` tells the checker about attachments the agent could actually see, so
- * describing a photo isn't mistaken for invention. Fails open on API errors, like the other gates.
+ * describing a photo isn't mistaken for invention. `peopleMemory` is the memory block the agent
+ * was given (lib/userSketch.ts) — built only from what these people wrote themselves, so it is a
+ * valid source too. Fails open on API errors, like the other gates.
  */
 export async function isGroundedAboutPeople(
   draft: string,
   post: GroundingThread,
-  visibleMediaNote = ""
+  visibleMediaNote = "",
+  peopleMemory = ""
 ): Promise<boolean> {
   if (!involvesPeople(post)) return true;
 
+  // Only the "- Name: …" lines of the memory block: the facts, not the instructions around them.
+  const memoryNotes = peopleMemory.split("\n").filter((line) => line.startsWith("- ")).map((line) => line.slice(0, 700)).join("\n");
   const humanComments = post.comments.filter((c) => c.userId != null).slice(-6);
   const sources = humanComments.length > 0
     ? humanComments.map((c) => `${c.authorName}: "${c.body.slice(0, 200)}"`).join("\n")
@@ -100,12 +105,12 @@ export async function isGroundedAboutPeople(
 
 Post by ${speakerLabel(post)}: "${(post.content ?? "").slice(0, 900)}"${visibleMediaNote ? `\n${visibleMediaNote}` : ""}
 
-Comments written by people (with the post, the only sources of facts):
-${sources}
+Comments written by people (with the post${memoryNotes ? " and the notes below" : ""}, the only sources of facts):
+${sources}${memoryNotes ? `\n\nNotes the agent holds from things these people wrote earlier (a valid source):\n${memoryNotes}` : ""}
 
 Draft comment: "${draft.slice(0, 700)}"
 
-Does the draft assert a specific fact about a real person — something they did, said, planned, decided, or a detail of their life — that is NOT stated in the post or the people's comments above?
+Does the draft assert a specific fact about a real person — something they did, said, planned, decided, or a detail of their life — that is NOT stated in the post, the people's comments${memoryNotes ? " or the notes" : ""} above?
 Answer NO for: empathy, congratulations, encouragement, questions, the agent's own opinions or general knowledge, and gentle readings of what was actually written ("it sounds like you feel relieved").
 Answer YES for: invented events, plans, visits, conversations, quotes, or motives ("she was going to come over tomorrow afternoon", "he told you that…").
 Reply with only YES or NO.`,

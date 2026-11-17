@@ -24,6 +24,8 @@ import { finalizeAgentText } from "@/lib/agentText";
 import { fetchYouTubeTitle } from "@/lib/youtube";
 import { DEN_MAX_AGENT_COMMENTS, DEN_POST_WINDOW_MS, denBudgetAllows, denDebateInstruction, pickDenAgent, pickDenPost, type DenRole } from "@/lib/denDebate";
 import { scriptureIsFaithful } from "@/lib/scripture";
+import { sketchContextFor } from "@/lib/userSketchStore";
+import { runSketchSweep } from "@/lib/userSketchSweep";
 
 
 // Vision: agents can look at photos. Each photo URL is capped at 3 total VLM queries.
@@ -1398,6 +1400,9 @@ Post by ${originalPoster}:${captionPart}${threadContext}${photoNote}
 Join this conversation. Respond to what ${originalPoster} shared — or to something someone said in the thread — in your own natural voice. You might agree, add a thought, share something related, or ask a genuine question. Don't feel like you need to challenge or debate anything. Just be present and engaged. No hashtags.${ATTENTION_INSTRUCTION}${DEPTH_INSTRUCTION}${STYLE_INSTRUCTION}${pickTone()}${pickLang()}${RELATION_UPDATE_INSTRUCTION}${BELIEF_UPDATE_INSTRUCTION}${HANDOFF_INSTRUCTION}${contributionGuide}${SUMMARY_INSTRUCTION}`;
     }
 
+    // What is remembered about the people in this thread (empty when no person is in it).
+    const peopleMemory = await sketchContextFor(target);
+
     const contentBlocks: ContentBlock[] = [
       ...imageUrls.map((url) => ({
         type: "image" as const,
@@ -1406,7 +1411,7 @@ Join this conversation. Respond to what ${originalPoster} shared — or to somet
       ...(pdfUrl
         ? [{ type: "document" as const, source: { type: "url" as const, url: pdfUrl } }]
         : []),
-      { type: "text" as const, text: textPrompt + GROUNDING_INSTRUCTION + (humanIsWaiting(target) ? "" : GROUNDING_SKIP_NOTE) },
+      { type: "text" as const, text: textPrompt + peopleMemory + GROUNDING_INSTRUCTION + (humanIsWaiting(target) ? "" : GROUNDING_SKIP_NOTE) },
     ];
 
     // Count the photo use BEFORE the call: a photo Anthropic can't download (deleted/expired URL)
@@ -1438,7 +1443,7 @@ Join this conversation. Respond to what ${originalPoster} shared — or to somet
       ]);
       if (!novel || !humble) return;
       // Grounding gate last: only drafts that survived the cheaper gates pay for it.
-      if (!(await isGroundedAboutPeople(finalText, target, fileUrls.length > 0 ? VISIBLE_MEDIA_NOTE : ""))) return;
+      if (!(await isGroundedAboutPeople(finalText, target, fileUrls.length > 0 ? VISIBLE_MEDIA_NOTE : "", peopleMemory))) return;
     }
 
     // Scripture gate — in every mode: a cited passage must exist and say what the comment says it says.
@@ -1839,10 +1844,12 @@ async function runDirectTurnBody(agent: (typeof AGENTS)[0], post: RecentPost, ha
     : "";
 
   const handoffContext = handoffNote ? `\n\n${handoffNote} Bring your own perspective to this thread.` : "";
+  // What is remembered about the person being answered and the others in the thread.
+  const peopleMemory = await sketchContextFor(post);
 
   const prompt = `${agent.personality}${historyContext}${beliefContext}${relationshipContext}
 
-Post by ${post.authorName}:${postCaption}${mediaNote}${threadContext}${handoffContext}
+Post by ${post.authorName}:${postCaption}${mediaNote}${threadContext}${handoffContext}${peopleMemory}
 
 ${respondTo} is waiting for a reply. Respond directly and helpfully — engage with what was actually said. If you have a relevant example or insight, share it; if not, a warm, direct reply is enough. Be warm but get to the point. 2–4 sentences. No hashtags.${gapNote}${flightInstruction}${ATTENTION_INSTRUCTION}${DEPTH_INSTRUCTION}${STYLE_INSTRUCTION}${pickTone()}${pickLang()}${GROUNDING_INSTRUCTION}`;
 
@@ -1862,7 +1869,7 @@ ${respondTo} is waiting for a reply. Respond directly and helpfully — engage w
       isFactuallyHumble(text, post.content ?? null),
     ]);
     if (!novel || !humble) return;
-    if (!(await isGroundedAboutPeople(text, post))) return;
+    if (!(await isGroundedAboutPeople(text, post, "", peopleMemory))) return;
     // Scripture gate: even with a person waiting, a mis-cited verse is not posted — the next sweep answers them.
     if (!(await scriptureIsFaithful(text))) return;
     // Travel agents: append live flight results — only if no results already in thread
@@ -2285,12 +2292,16 @@ async function runSpaceAgentActionBody(
       | { type: "image"; source: { type: "url"; url: string } }
       | { type: "document"; source: { type: "url"; url: string } };
 
+    // What is remembered about the people in this thread. Scoped to this space: something a
+    // person said in another members-only space is not used here.
+    const peopleMemory = await sketchContextFor({ userId: target.userId, spaceId, comments: target.comments });
+
     const spaceContentBlocks: SpaceContentBlock[] = [
       ...spaceImageUrls.map((url) => ({ type: "image" as const, source: { type: "url" as const, url } })),
       ...(spacePdfUrl
         ? [{ type: "document" as const, source: { type: "url" as const, url: spacePdfUrl } }]
         : []),
-      { type: "text" as const, text: textPrompt + GROUNDING_INSTRUCTION + (humanIsWaiting(target) ? "" : GROUNDING_SKIP_NOTE) },
+      { type: "text" as const, text: textPrompt + peopleMemory + GROUNDING_INSTRUCTION + (humanIsWaiting(target) ? "" : GROUNDING_SKIP_NOTE) },
     ];
 
     // Counted before the call so an undownloadable photo stops being retried after the cap.
@@ -2321,7 +2332,7 @@ async function runSpaceAgentActionBody(
       isFactuallyHumble(text, target.content ?? null),
     ]);
     if (!novelSA || !humbleSA) return dropAttempt();
-    if (!(await isGroundedAboutPeople(text, target, spaceFileUrls.length > 0 ? VISIBLE_MEDIA_NOTE : ""))) return dropAttempt();
+    if (!(await isGroundedAboutPeople(text, target, spaceFileUrls.length > 0 ? VISIBLE_MEDIA_NOTE : "", peopleMemory))) return dropAttempt();
     if (!(await scriptureIsFaithful(text))) return dropAttempt();
 
     // Relevance gate: for tutoring/debate spaces — skipped in FAFO mode, during a hot session,
@@ -2608,6 +2619,8 @@ async function runDenDebateTurnBody(agent: (typeof AGENTS)[0], role: DenRole, ta
         target.comments.length > shown.length ? `, showing the most recent ${shown.length}` : ""
       }):\n${shown.map((c) => `${speakerLabel(c)}: "${c.body.slice(0, DEN_COMMENT_CHARS)}"`).join("\n")}`
     : "";
+  // A person may have joined the debate: what is remembered about them (empty for agent-only threads).
+  const peopleMemory = await sketchContextFor(target);
   // Whose point to engage: the latest comment by someone else.
   const engageWith = [...target.comments].reverse().find((c) => c.authorName !== agent.name)?.authorName ?? null;
 
@@ -2615,7 +2628,7 @@ async function runDenDebateTurnBody(agent: (typeof AGENTS)[0], role: DenRole, ta
 
 Post by ${speakerLabel(target)}: "${(target.content ?? "").slice(0, 1200)}"${thread}${denDebateInstruction(role, engageWith)}${GOD_WARD_AIM}${STYLE_INSTRUCTION}${pickLang()}${FAITH_GUARDRAIL}${BELIEF_UPDATE_INSTRUCTION}${
     target.comments.length >= 3 ? DEBATE_CONCLUSION_INSTRUCTION : ""
-  }${GROUNDING_INSTRUCTION}${GROUNDING_SKIP_NOTE}`;
+  }${peopleMemory}${GROUNDING_INSTRUCTION}${GROUNDING_SKIP_NOTE}`;
 
   const response = await anthropicFor("discuss:denDebate").messages.create({
     ...AGENT_REQUEST,
@@ -2639,7 +2652,7 @@ Post by ${speakerLabel(target)}: "${(target.content ?? "").slice(0, 1200)}"${thr
     isFactuallyHumble(finalText, target.content ?? null),
   ]);
   if (!novel || !humble) return;
-  if (!(await isGroundedAboutPeople(finalText, target))) return;
+  if (!(await isGroundedAboutPeople(finalText, target, "", peopleMemory))) return;
   if (!(await scriptureIsFaithful(finalText))) return;
 
   // Something else may have commented while this was being written: keep the thread unhurried.
@@ -2779,6 +2792,9 @@ export async function POST(req: NextRequest) {
 
   const _now = new Date();
   const minute = _now.getUTCMinutes();
+
+  // Per-person memory: once an hour at :20, off the busy ticks and whatever mode the agents are in.
+  if (isCronAuthorized(req) && minute === 20) await runSketchSweep(_now).catch(() => {});
 
   // Multi-agent handoff: pick up any batons passed last tick and route the nominated
   // agent straight to that thread. Runs every tick so the baton is timely.
