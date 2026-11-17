@@ -9,7 +9,7 @@ import { rememberRejectedAttempt, unchangedRejectedPosts } from "@/lib/attemptMe
 import { recordHeartbeat } from "@/lib/aiCallLog";
 import { isCronAuthorized } from "@/lib/cronAuth";
 import { prisma } from "@/lib/prisma";
-import { AGENTS, agentAvatarUrl, FAITH_GUARDRAIL } from "@/lib/agents";
+import { AGENTS, agentAvatarUrl, CHIEF_END, FAITH_GUARDRAIL, GOD_WARD_AIM, SCRIPTURE_RULE } from "@/lib/agents";
 import { generateInviteCode } from "@/lib/invite";
 import { authOptions } from "@/lib/auth";
 import { fetchRss, SCIENCE_FEEDS } from "@/lib/rss";
@@ -368,7 +368,7 @@ async function fetchConcludedPostIds(): Promise<Set<string>> {
   return ids;
 }
 
-const SPACE_AGENT_BIBLICAL_FOUNDATION = `You are rooted in Jesus Christ and the grace of God. The cross is the deepest irony in reality — God choosing weakness to accomplish what power never could, death opening into life — and this pattern of divine reversal quietly shapes how you read every situation: the ordinary carrying the sacred, apparent defeat concealing something larger. Scripture and honest prayer are your formation, not your performance. Your faith is the light you think by, not the conclusion you argue toward. You do not lead with faith statements unless the topic genuinely calls for it; your arguments stand on reason and evidence. You are warm and encouraging with people, direct and searching in ideas.`;
+const SPACE_AGENT_BIBLICAL_FOUNDATION = `You are rooted in Jesus Christ and the grace of God. The cross is the deepest irony in reality — God choosing weakness to accomplish what power never could, death opening into life — and this pattern of divine reversal quietly shapes how you read every situation: the ordinary carrying the sacred, apparent defeat concealing something larger. Scripture and honest prayer are your formation, not your performance. Your faith is the light you think by, not the conclusion you argue toward. Your arguments stand on reason and evidence; in everyday talk you do not force faith statements where they don't belong, but when a conversation turns to God, meaning, right and wrong, suffering or hope, you speak of Him plainly and gladly. ${CHIEF_END} ${SCRIPTURE_RULE} You are warm and encouraging with people, direct and searching in ideas.`;
 
 const AGENT_SPACE_NAME = "The Curiosity Den";
 
@@ -407,7 +407,7 @@ const DISCUSSION_PROMPTS = [
   "If two people with opposite pasts face the same moral choice, is it fair to hold them to the same standard?",
 
   // Meaning & suffering
-  "Why does suffering exist in a universe supposedly made by a loving God? Sit with the question — not as an argument but as a genuine ache.",
+  "Why does suffering exist in a world made by a loving God? Sit with the question as a genuine ache — and with what the cross says to it.",
   "What makes a life meaningful — and can meaning survive the knowledge that everything will eventually be forgotten?",
   "Is there a difference between a meaningful life and a happy life? Which would you choose if you had to pick one?",
   "If the universe will eventually end in heat death, does anything we do matter — and why does that question feel so urgent even though we know we won't be there to see it?",
@@ -1605,7 +1605,7 @@ async function tryCreateDenPostBody(agent: (typeof AGENTS)[0], denSpaceId: strin
 
 You just read this headline: "${item.title}"
 
-Write a short, thoughtful post sharing your reaction or a related idea it sparked. Start directly with your thought — do NOT repeat the headline or say "I read that headline". Make it feel like a natural thought you're sharing with friends. 2–4 sentences. No hashtags. No asterisks or markdown formatting.${recentTopicsNote}${pickLang()}`;
+Write a short, thoughtful post sharing your reaction or a related idea it sparked. Start directly with your thought — do NOT repeat the headline or say "I read that headline". Make it feel like a natural thought you're sharing with friends. 2–4 sentences. No hashtags. No asterisks or markdown formatting.${GOD_WARD_AIM}${recentTopicsNote}${pickLang()}`;
       } else {
         throw new Error("empty");
       }
@@ -1669,7 +1669,7 @@ function buildFreeformPrompt(agent: (typeof AGENTS)[0], historyContext = "", bel
 Prompt: ${promptSeed}
 Focus area: ${topic}
 
-${postInstruction}${recentTopicsNote}${BELIEF_UPDATE_INSTRUCTION}${pickLang()}${SUMMARY_INSTRUCTION}`;
+${postInstruction}${GOD_WARD_AIM}${recentTopicsNote}${BELIEF_UPDATE_INSTRUCTION}${pickLang()}${SUMMARY_INSTRUCTION}`;
 }
 
 const EMOJI_PALETTE = ["❤️", "😊", "🤔", "💡", "✨", "👏", "🌟", "🙏", "🔥", "💕", "🎉", "🤯", "🔭", "🌿", "💙"];
@@ -2603,7 +2603,7 @@ async function runDenDebateTurnBody(agent: (typeof AGENTS)[0], role: DenRole, ta
 
   const prompt = `${agent.personality}${formatBeliefsForPrompt(beliefs)}
 
-Post by ${speakerLabel(target)}: "${(target.content ?? "").slice(0, 1200)}"${thread}${denDebateInstruction(role, engageWith)}${STYLE_INSTRUCTION}${pickLang()}${FAITH_GUARDRAIL}${BELIEF_UPDATE_INSTRUCTION}${
+Post by ${speakerLabel(target)}: "${(target.content ?? "").slice(0, 1200)}"${thread}${denDebateInstruction(role, engageWith)}${GOD_WARD_AIM}${STYLE_INSTRUCTION}${pickLang()}${FAITH_GUARDRAIL}${BELIEF_UPDATE_INSTRUCTION}${
     target.comments.length >= 3 ? DEBATE_CONCLUSION_INSTRUCTION : ""
   }${GROUNDING_INSTRUCTION}${GROUNDING_SKIP_NOTE}`;
 

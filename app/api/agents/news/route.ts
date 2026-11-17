@@ -197,7 +197,7 @@ async function composeStory(o: {
     // sentence in English, and a cut-off reply loses its last line ("정리:").
     both ? ask("news:report", o.reporter, briefPrompt("en", o.story), 800, "lines") : Promise.resolve(""),
     ask(both ? "news:reportKorean" : "news:koreanFeed", o.reporter, briefPrompt("ko", o.story), 1300, "lines"),
-    ask("news:godView", o.godAgent, godViewPrompt(o.godAgent, o.story, o.langs, FAITH_GUARDRAIL), both ? 800 : 500, "prose"),
+    ask("news:godView", o.godAgent, godViewPrompt(o.godAgent, o.story, o.langs, FAITH_GUARDRAIL), both ? 1000 : 600, "prose"),
     ask("news:humanView", o.humanAgent, humanViewPrompt(o.humanAgent, o.story, o.langs, FAITH_GUARDRAIL), both ? 900 : 600, "prose"),
   ]);
   const text = (r: PromiseSettledResult<string>) => (r.status === "fulfilled" ? r.value : "");

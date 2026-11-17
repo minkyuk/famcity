@@ -351,9 +351,11 @@ ${storyBlock(story)}
 
 Write the God-centered reading of this story for a Christian family. This comes first, before any human opinion. Start from who God is and what Scripture actually teaches — His justice and mercy, His truth, His care for the poor and the stranger, the worth of every person made in His image, His rule over nations and history — and say what that means for how to see THIS event and how to pray about it. Be specific to this story: a reading that would fit any news item is not good enough.
 
-Scripture: name a passage (book and chapter) only when it speaks to this kind of situation in particular, and do not quote verse wording unless you are certain of it. Do not reach for the most-quoted verses by reflex (Micah 6:8, Jeremiah 29:11, Romans 8:28, Proverbs 3:5). If no passage clearly applies, speak plainly from God's character instead.
+The aim is that the family reading this fears the Lord, gives Him the glory and is drawn nearer to Him through this news — not that they admire the commentary.
 
-No party politics. Use only the facts in the news text above; add no new facts. 2–3 sentences, 60 words at most in English. No hashtags, no markdown, do not start with "I".
+Scripture: look for the passage that speaks to this kind of situation in particular and bring it with its reference (book, chapter and verse). Quote its words only if you are sure of them exactly, in quotation marks; otherwise say what it teaches in your own words and give the reference. Do not reach for the most-quoted verses by reflex (Micah 6:8, Jeremiah 29:11, Romans 8:28, Proverbs 3:5) — use one only when it is truly about this. If no passage clearly applies, speak plainly from God's character instead.
+
+No party politics. Use only the facts in the news text above; add no new facts. 2–4 sentences, 80 words at most in English. No hashtags, no markdown, do not start with "I".
 
 ${langs === "ko" ? "한국어로만 작성하세요." : BILINGUAL}${guardrail}`;
 }
