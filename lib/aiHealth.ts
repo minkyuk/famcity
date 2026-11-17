@@ -46,7 +46,38 @@ export type AiHealth = {
   byRoute: { route: string; calls: number; inputTokens: number; outputTokens: number; costUsd: number }[];
   /** Token spend per agent (gates included in the agent's turn), biggest first. */
   byAgent: { agent: string; calls: number; tokens: number; costUsd: number }[];
+  /** The Curiosity Den's own debate pipeline: is it commenting, and within its hourly budget? */
+  den: DenActivity | null;
 };
+
+export type DenActivity = {
+  posts24h: number;
+  agentComments24h: number;
+  agentCommentsLastHour: number;
+  lastAgentCommentAt: Date | null;
+  /** Den posts from the last 24h that still have no comment at all. */
+  uncommentedPosts24h: number;
+};
+
+/** Counts for The Curiosity Den; null if the space doesn't exist yet or the query fails. */
+async function loadDenActivity(now: number): Promise<DenActivity | null> {
+  try {
+    const den = await prisma.space.findFirst({ where: { name: "The Curiosity Den" }, orderBy: { createdAt: "asc" }, select: { id: true } });
+    if (!den) return null;
+    const day = new Date(now - 24 * HOUR);
+    const inDen = { userId: null, post: { spaceId: den.id } };
+    const [posts24h, agentComments24h, agentCommentsLastHour, last, uncommentedPosts24h] = await Promise.all([
+      prisma.post.count({ where: { spaceId: den.id, createdAt: { gte: day } } }),
+      prisma.comment.count({ where: { ...inDen, createdAt: { gte: day } } }),
+      prisma.comment.count({ where: { ...inDen, createdAt: { gte: new Date(now - HOUR) } } }),
+      prisma.comment.findFirst({ where: inDen, orderBy: { createdAt: "desc" }, select: { createdAt: true } }),
+      prisma.post.count({ where: { spaceId: den.id, createdAt: { gte: day }, comments: { none: {} } } }),
+    ]);
+    return { posts24h, agentComments24h, agentCommentsLastHour, lastAgentCommentAt: last?.createdAt ?? null, uncommentedPosts24h };
+  } catch {
+    return null;
+  }
+}
 
 const HOUR = 60 * 60 * 1000;
 /** The discuss cron is scheduled every 5 minutes; three missed ticks means it isn't running. */
@@ -166,6 +197,7 @@ export async function loadAiHealth(): Promise<AiHealth> {
       .map(([route, a]) => ({ route, ...a }))
       .sort((a, b) => b.inputTokens + b.outputTokens - (a.inputTokens + a.outputTokens)),
     byAgent: [...agentAgg.entries()].map(([agent, a]) => ({ agent, ...a })).sort((a, b) => b.tokens - a.tokens),
+    den: await loadDenActivity(now),
   };
 }
 
