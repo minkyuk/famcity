@@ -2793,8 +2793,9 @@ export async function POST(req: NextRequest) {
   const _now = new Date();
   const minute = _now.getUTCMinutes();
 
-  // Per-person memory: once an hour at :20, off the busy ticks and whatever mode the agents are in.
-  if (isCronAuthorized(req) && minute === 20) await runSketchSweep(_now).catch(() => {});
+  // Per-person memory: once an hour at :25 — a tick on which nothing else runs in any mode (no
+  // knight, space or Den turn, and an off-tick of a hot session) — so its calls delay nothing.
+  if (isCronAuthorized(req) && minute === 25) await runSketchSweep(_now).catch(() => {});
 
   // Multi-agent handoff: pick up any batons passed last tick and route the nominated
   // agent straight to that thread. Runs every tick so the baton is timely.

@@ -94,7 +94,7 @@ export default async function AdminAgentHealthPage() {
           <StatTile
             label="사람별 기억 (스케치)"
             value={`${fmt(h.sketches.people)}명`}
-            sub={`마지막 갱신 ${timeAgoKo(h.sketches.lastSweepAt, now)} · 매시 20분`}
+            sub={`마지막 갱신 ${timeAgoKo(h.sketches.lastSweepAt, now)} · 매시 25분`}
           />
         )}
         {h.den && (

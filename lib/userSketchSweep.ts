@@ -1,7 +1,8 @@
 import { AGENT_REQUEST, anthropicFor, textOf } from "@/lib/anthropic";
+import { AGENTS } from "@/lib/agents";
 import { prisma } from "@/lib/prisma";
-import { applyUpdate, emptySketch, parseSketchUpdate, sketchUpdatePrompt, type Scope, type UserSketch, type Writing } from "@/lib/userSketch";
-import { loadSketch, loadSketches, saveSketch } from "@/lib/userSketchStore";
+import { applyUpdate, emptySketch, laterOf, NOTHING_TO_ADD, parseSketchUpdate, sketchUpdatePrompt, type Scope, type Writing } from "@/lib/userSketch";
+import { loadSketchRows, saveSketchIfUnchanged, type SketchRow } from "@/lib/userSketchStore";
 
 /**
  * The hourly build of per-person memory. For a few people who have written something new since
@@ -16,18 +17,37 @@ const SWEEP_SLUG = "$$sketch-sweep";
 const MIN_GAP_MS = 50 * 60 * 1000;
 /** People updated per sweep — a family catches up within a few hours without a burst of calls. */
 const USERS_PER_SWEEP = 4;
-/** Messages read in one update; a first build reads a little further back. */
+/**
+ * Messages read in one update; a first build reads a little further back. When someone writes
+ * more than this between two sweeps, the newest are read and the older ones are passed over.
+ */
 const BATCH = 40;
 const FIRST_BATCH = 60;
-/** After this many failed tries on the same messages they are skipped rather than retried forever. */
+/** After this many unreadable answers for the same messages they are skipped rather than retried forever. */
 const MAX_FAILS = 3;
 
 const topicOf = (content: string | null) => (content ?? "").replace(/\s+/g, " ").trim().slice(0, 80) || "(a post without text)";
 /** A members-only space is a scope of its own; system spaces and space-less posts are open to the whole family. */
-const scopeOf = (post: { spaceId: string | null; space: { isSystem: boolean } | null }): Scope => (post.spaceId && !post.space?.isSystem ? post.spaceId : null);
+const scopeOf = (post: { spaceId: string | null; space: { isSystem: boolean } | null }): Scope =>
+  post.spaceId && !post.space?.isSystem ? post.spaceId : null;
 
-/** What one person wrote after `since`, oldest first — never more than `limit` of the newest. */
-export async function writingsOf(userId: string, since: Date | null, limit: number): Promise<Writing[]> {
+/** Names of every agent: the knights and the agents people created in spaces. */
+async function agentNames(): Promise<Set<string>> {
+  const spaceAgents = await prisma.spaceAgent.findMany({ select: { name: true } }).catch(() => []);
+  return new Set([...AGENTS.map((a) => a.name), ...spaceAgents.map((a) => a.name)]);
+}
+
+/**
+ * What one person wrote after `since`, oldest first — never more than `limit` of the newest.
+ * `newestAt` is the time of their newest message of any length, so that a run of messages too
+ * short to learn from ("ㅎㅎ", "👍") still moves the watermark.
+ */
+export async function writingsOf(
+  userId: string,
+  since: Date | null,
+  limit: number,
+  agents: Set<string>,
+): Promise<{ writings: Writing[]; newestAt: Date | null }> {
   const after = since ? { createdAt: { gt: since } } : {};
   const [comments, posts] = await Promise.all([
     prisma.comment.findMany({
@@ -50,11 +70,13 @@ export async function writingsOf(userId: string, since: Date | null, limit: numb
     }),
   ]);
 
-  const writings: Writing[] = [
+  const all: Writing[] = [
     ...comments.map((c): Writing => {
-      // An agent's post (a Den question, a news item) or the person's own may be kept and shown as
-      // context. Another family member's post is theirs: only "a post by <name>" goes into this sketch.
-      const shownTopic = c.post.userId === null || c.post.userId === userId ? topicOf(c.post.content) : null;
+      // The post may be kept and shown as context only when it is the person's own, or an agent's
+      // (a Den question, a news item) — an agent being a post with no user AND a known agent name:
+      // old posts from before sign-in also have no user, and those are a person's words.
+      const mayShow = c.post.userId === userId || (c.post.userId === null && agents.has(c.post.authorName));
+      const shownTopic = mayShow ? topicOf(c.post.content) : null;
       return {
         kind: "comment",
         text: c.body,
@@ -69,37 +91,38 @@ export async function writingsOf(userId: string, since: Date | null, limit: numb
       };
     }),
     ...posts.map(
-      (p): Writing => ({
-        kind: "post",
-        text: p.content ?? "",
-        at: p.createdAt,
-        scope: scopeOf(p),
-        postId: p.id,
-        topic: topicOf(p.content),
-        shownTopic: null,
-        with: [],
-      }),
+      (p): Writing => ({ kind: "post", text: p.content ?? "", at: p.createdAt, scope: scopeOf(p), postId: p.id, topic: topicOf(p.content), shownTopic: null, with: [] }),
     ),
   ];
-  return writings
+  const newestAt = all.reduce<Date | null>((max, w) => (max === null || w.at > max ? w.at : max), null);
+  const writings = all
     .filter((w) => w.text.trim().length >= 3)
     .sort((a, b) => a.at.getTime() - b.at.getTime())
     .slice(-limit);
+  return { writings, newestAt };
 }
 
-/** Updates one person's sketch from what they wrote since it was last read. Returns what happened. */
-export async function updateSketchFor(
-  userId: string,
-  name: string,
-  existing: UserSketch | null,
-): Promise<"updated" | "nothing-new" | "failed" | "reset-meanwhile"> {
-  const sketch = existing ?? emptySketch(name);
-  if (name && sketch.name !== name) sketch.name = name;
-  const since = sketch.watermark ? new Date(sketch.watermark) : null;
-  const writings = await writingsOf(userId, since, existing?.builtAt ? BATCH : FIRST_BATCH);
-  if (writings.length === 0) return "nothing-new";
+type Outcome = "updated" | "nothing-new" | "failed" | "reset-meanwhile";
 
-  let raw = "";
+/**
+ * Updates one person's sketch from what they wrote since it was last read.
+ * Every write is conditional on the row not having changed since it was loaded, so a reset that
+ * lands while the model is working is never overwritten.
+ */
+export async function updateSketchFor(userId: string, name: string, row: SketchRow | null, agents: Set<string>): Promise<Outcome> {
+  const sketch = { ...(row?.sketch ?? emptySketch(name)), ...(name ? { name } : {}) };
+  const expected = row?.updatedAt ?? null;
+  // Never read anything from before a reset, whatever the watermark says.
+  const sinceIso = laterOf(sketch.watermark, sketch.resetAt);
+  const { writings, newestAt } = await writingsOf(userId, sinceIso ? new Date(sinceIso) : null, row?.sketch.builtAt ? BATCH : FIRST_BATCH, agents);
+
+  if (writings.length === 0) {
+    // Only messages too short to learn from: mark them read so this person doesn't keep a place in every sweep.
+    if (newestAt) await saveSketchIfUnchanged(userId, { ...sketch, watermark: laterOf(sinceIso, newestAt.toISOString()) }, expected);
+    return "nothing-new";
+  }
+
+  let raw: string;
   try {
     const msg = await anthropicFor("sketch:update").messages.create({
       ...AGENT_REQUEST,
@@ -108,24 +131,41 @@ export async function updateSketchFor(
     });
     raw = textOf(msg);
   } catch {
-    raw = "";
-  }
-  const readable = /\{[\s\S]*\}/.test(raw);
-
-  // The person may have cleared their sketch while the model was thinking: their reset wins.
-  const current = await loadSketch(userId);
-  if ((current?.resetAt ?? null) !== sketch.resetAt) return "reset-meanwhile";
-
-  if (!readable) {
-    const fails = sketch.fails + 1;
-    // Give up on this batch after a few tries: the threads joined are still recorded, nothing else.
-    const next = fails >= MAX_FAILS ? applyUpdate(sketch, { character: [], ideas: [], memories: [], mood: null }, writings, new Date()) : { ...sketch, fails };
-    await saveSketch(userId, next);
+    // An outage (billing, rate limit, server error) says nothing about these messages: leave
+    // everything as it is and read the same batch at the next sweep.
     return "failed";
   }
 
-  await saveSketch(userId, applyUpdate(sketch, parseSketchUpdate(raw, writings), writings, new Date()));
-  return "updated";
+  const additions = parseSketchUpdate(raw, writings);
+  if (!additions) {
+    // The model answered, but not with something readable. Count it against this batch; after a
+    // few tries the batch is passed over (the threads joined are still recorded, nothing else).
+    const batch = writings[writings.length - 1].at.toISOString();
+    const fails = sketch.failBatch === batch ? sketch.fails + 1 : 1;
+    const next = fails >= MAX_FAILS ? applyUpdate(sketch, NOTHING_TO_ADD, writings, new Date()) : { ...sketch, fails, failBatch: batch };
+    return (await saveSketchIfUnchanged(userId, next, expected)) ? "failed" : "reset-meanwhile";
+  }
+
+  return (await saveSketchIfUnchanged(userId, applyUpdate(sketch, additions, writings, new Date()), expected)) ? "updated" : "reset-meanwhile";
+}
+
+/**
+ * Takes this hour's turn, atomically: the marker row is only updated if it is old enough, so two
+ * cron invocations arriving together cannot both run.
+ */
+async function claimSweep(now: Date): Promise<boolean> {
+  const beliefs = { lastRunAt: now.toISOString() };
+  const claimed = await prisma.agentMemory.updateMany({
+    where: { agentSlug: SWEEP_SLUG, updatedAt: { lt: new Date(now.getTime() - MIN_GAP_MS) } },
+    data: { beliefs },
+  });
+  if (claimed.count > 0) return true;
+  try {
+    await prisma.agentMemory.create({ data: { agentSlug: SWEEP_SLUG, beliefs } }); // first run ever
+    return true;
+  } catch {
+    return false; // the marker exists and is recent: a sweep already ran
+  }
 }
 
 export type SweepReport = { ran: boolean; reason?: string; updated: string[]; failed: string[] };
@@ -135,14 +175,7 @@ export type SweepReport = { ran: boolean; reason?: string; updated: string[]; fa
  * it does nothing if a sweep ran within the last fifty minutes.
  */
 export async function runSketchSweep(now = new Date()): Promise<SweepReport> {
-  const marker = await prisma.agentMemory.findUnique({ where: { agentSlug: SWEEP_SLUG }, select: { beliefs: true } });
-  const last = (marker?.beliefs as { lastRunAt?: string } | null)?.lastRunAt; // our own marker row: { lastRunAt }
-  if (last && now.getTime() - new Date(last).getTime() < MIN_GAP_MS) return { ran: false, reason: "ran recently", updated: [], failed: [] };
-  await prisma.agentMemory.upsert({
-    where: { agentSlug: SWEEP_SLUG },
-    create: { agentSlug: SWEEP_SLUG, beliefs: { lastRunAt: now.toISOString() } },
-    update: { beliefs: { lastRunAt: now.toISOString() } },
-  });
+  if (!(await claimSweep(now))) return { ran: false, reason: "ran recently", updated: [], failed: [] };
 
   // Newest non-private writing per person (posts and comments).
   const [byComment, byPost] = await Promise.all([
@@ -159,14 +192,19 @@ export async function runSketchSweep(now = new Date()): Promise<SweepReport> {
   if (latest.size === 0) return { ran: true, updated: [], failed: [] };
 
   const ids = [...latest.keys()];
-  const [sketches, users] = await Promise.all([loadSketches(ids), prisma.user.findMany({ where: { id: { in: ids } }, select: { id: true, name: true } })]);
+  const [rows, users, agents] = await Promise.all([
+    loadSketchRows(ids),
+    prisma.user.findMany({ where: { id: { in: ids } }, select: { id: true, name: true } }),
+    agentNames(),
+  ]);
   const nameOf = new Map(users.map((u) => [u.id, u.name ?? ""]));
 
   const due = [...latest.entries()]
     .filter(([id, at]) => {
       if (!nameOf.has(id)) return false; // the account is gone
-      const watermark = sketches.get(id)?.watermark;
-      return !watermark || at > new Date(watermark);
+      const sketch = rows.get(id)?.sketch;
+      const read = sketch ? laterOf(sketch.watermark, sketch.resetAt) : null;
+      return !read || at > new Date(read);
     })
     .sort((a, b) => b[1].getTime() - a[1].getTime())
     .slice(0, USERS_PER_SWEEP)
@@ -174,7 +212,7 @@ export async function runSketchSweep(now = new Date()): Promise<SweepReport> {
 
   const report: SweepReport = { ran: true, updated: [], failed: [] };
   for (const id of due) {
-    const outcome = await updateSketchFor(id, nameOf.get(id) ?? "", sketches.get(id) ?? null).catch(() => "failed" as const);
+    const outcome = await updateSketchFor(id, nameOf.get(id) ?? "", rows.get(id) ?? null, agents).catch((): Outcome => "failed");
     if (outcome === "updated") report.updated.push(id);
     if (outcome === "failed") report.failed.push(id);
   }

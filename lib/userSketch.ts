@@ -65,8 +65,9 @@ export type UserSketch = {
   /** Set when the person cleared their sketch: nothing written before it is ever read. */
   resetAt: string | null;
   builtAt: string | null;
-  /** Consecutive failed updates on the current batch of messages. */
+  /** Consecutive unreadable answers for one batch of messages (`failBatch` = newest message of that batch). */
   fails: number;
+  failBatch: string | null;
 };
 
 /** One thing the person wrote, as the sweep hands it to the model. */
@@ -89,22 +90,36 @@ export type Writing = {
 };
 
 export function emptySketch(name: string, resetAt: string | null = null): UserSketch {
-  return { v: 1, name, character: [], ideas: [], memories: [], moods: [], threads: [], talksWith: [], watermark: resetAt, resetAt, builtAt: null, fails: 0 };
+  return { v: 1, name, character: [], ideas: [], memories: [], moods: [], threads: [], talksWith: [], watermark: resetAt, resetAt, builtAt: null, fails: 0, failBatch: null };
 }
 
 const isObj = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
-const str = (v: unknown, max = ITEM_MAX_CHARS) => (typeof v === "string" ? v.trim().slice(0, max) : "");
-const scopeOf = (v: unknown): Scope => (typeof v === "string" && v ? v : null);
+/** Single-line: a stored or model-written string can never start a line of its own in a prompt. */
+const str = (v: unknown, max = ITEM_MAX_CHARS) => (typeof v === "string" ? v.replace(/\s+/g, " ").trim().slice(0, max) : "");
+/**
+ * A scope is a space id or an explicit null (open). Anything else — missing, empty, a number —
+ * is not "open" by default: the item is dropped, so a damaged row can never widen who sees it.
+ */
+const scopeOf = (v: unknown): Scope | undefined => (v === null ? null : typeof v === "string" && v ? v : undefined);
 const evidenceOf = (o: Record<string, unknown>): Evidence | null => {
   const at = str(o.at, 40);
-  return at ? { quote: str(o.quote, QUOTE_CHARS), at, scope: scopeOf(o.scope) } : null;
+  const scope = scopeOf(o.scope);
+  return at && scope !== undefined ? { quote: str(o.quote, QUOTE_CHARS), at, scope } : null;
 };
 const list = <T,>(v: unknown, read: (o: Record<string, unknown>) => T | null): T[] =>
   Array.isArray(v) ? v.flatMap((x) => { const item = isObj(x) ? read(x) : null; return item ? [item] : []; }) : [];
 
 /** Reads a stored sketch defensively: the row is JSON in a shared table, so every field is checked. */
 export function readSketch(json: unknown): UserSketch | null {
-  if (!isObj(json) || json.v !== 1) return null;
+  if (!isObj(json)) return null;
+  if (json.v !== 1) {
+    // Not a shape we know. What must survive is the person's reset: nothing written before it
+    // may be read again, whatever happened to the rest of the row.
+    const resetAt = str(json.resetAt, 40) || null;
+    const watermark = str(json.watermark, 40) || null;
+    if (!resetAt && !watermark) return null;
+    return { ...emptySketch(str(json.name, 80), resetAt), watermark: laterOf(resetAt, watermark) };
+  }
   return {
     v: 1,
     name: str(json.name, 80),
@@ -114,16 +129,25 @@ export function readSketch(json: unknown): UserSketch | null {
     moods: list(json.moods, (o) => { const e = evidenceOf(o); const text = str(o.text); return e && text ? { ...e, text } : null; }).slice(0, MAX_MOODS),
     threads: list(json.threads, (o) => {
       const postId = str(o.postId, 60); const lastAt = str(o.lastAt, 40);
-      return postId && lastAt
-        ? { postId, topic: str(o.topic, 80), scope: scopeOf(o.scope), with: Array.isArray(o.with) ? o.with.map((w) => str(w, 60)).filter(Boolean).slice(0, 6) : [], count: typeof o.count === "number" ? Math.max(1, Math.floor(o.count)) : 1, lastAt }
+      const scope = scopeOf(o.scope);
+      return postId && lastAt && scope !== undefined
+        ? { postId, topic: str(o.topic, 80), scope, with: Array.isArray(o.with) ? o.with.map((w) => str(w, 60)).filter(Boolean).slice(0, 6) : [], count: typeof o.count === "number" ? Math.max(1, Math.floor(o.count)) : 1, lastAt }
         : null;
     }).slice(0, MAX_THREADS),
     talksWith: list(json.talksWith, (o) => { const name = str(o.name, 60); return name && typeof o.count === "number" ? { name, count: Math.max(1, Math.floor(o.count)) } : null; }).slice(0, MAX_TALKS_WITH),
-    watermark: str(json.watermark, 40) || null,
+    watermark: laterOf(str(json.resetAt, 40) || null, str(json.watermark, 40) || null),
     resetAt: str(json.resetAt, 40) || null,
     builtAt: str(json.builtAt, 40) || null,
     fails: typeof json.fails === "number" && json.fails > 0 ? Math.floor(json.fails) : 0,
+    failBatch: str(json.failBatch, 40) || null,
   };
+}
+
+/** The later of two ISO timestamps (either may be missing). The watermark is never earlier than a reset. */
+export function laterOf(a: string | null, b: string | null): string | null {
+  if (!a) return b;
+  if (!b) return a;
+  return a > b ? a : b;
 }
 
 /** Contact details and money never go into a sketch, whatever the model returns. */
@@ -179,7 +203,7 @@ Rules:
 - Use ONLY what ${name} wrote in the numbered messages — the text inside the quotation marks after the colon. Every item must give "from": the number of the message it comes from. Do not go beyond what that message says, and do not use anything other people said. A post title shown before the colon is only there so you can tell what ${name} was answering; it is not ${name}'s and nothing from it is recorded.
 - character: what kind of person they are, as it shows in how they write and what they care about ("encourages others before giving an opinion", "asks precise questions"). Describe, never judge: no diagnoses, and nothing they would be hurt to read.
 - ideas: their beliefs and main ideas — what they hold about God and faith, their values, opinions they keep returning to. "topic" is 1–3 words; "stance" is one sentence in their own terms.
-- memories: what is worth remembering next time. "kind" is one of: life, joy, hardship, interest, faith. A hardship is recorded as they told it — briefly and kindly.
+- memories: what is worth remembering next time. "kind" is one of: life, joy, hardship, interest, faith. A hardship is recorded as they told it — briefly and kindly. Grief, loss, illness, struggle or anything painful is ALWAYS a memory of kind "hardship" — never a character trait, an idea, a mood or another kind of memory.
 - mood: how they seem in the newest messages, only if it shows.
 - Never record: medical details or diagnoses, money or finances, conflicts between named people, addresses, phone numbers, emails or IDs, or details about other people beyond their relationship to ${name} ("her mother", not the mother's condition).
 - Add only what is new or clearer than what is already remembered. Adding nothing is fine.
@@ -199,16 +223,16 @@ Use [] or null where there is nothing to add.`;
 export type SketchAdditions = { character: Trait[]; ideas: Idea[]; memories: Memory[]; mood: Mood | null };
 
 /**
- * Reads the model's answer. The evidence for each item is copied from the message it points to;
- * an item that points nowhere, or that carries contact details or money, is dropped.
+ * Reads the model's answer; null when it isn't readable JSON (as opposed to "nothing to add").
+ * The evidence for each item is copied from the message it points to; an item that points
+ * nowhere, or that carries contact details or money, is dropped.
  */
-export function parseSketchUpdate(raw: string, writings: Writing[]): SketchAdditions {
-  const none: SketchAdditions = { character: [], ideas: [], memories: [], mood: null };
+export function parseSketchUpdate(raw: string, writings: Writing[]): SketchAdditions | null {
   const match = raw.match(/\{[\s\S]*\}/);
-  if (!match) return none;
+  if (!match) return null;
   let parsed: unknown;
-  try { parsed = JSON.parse(match[0]); } catch { return none; }
-  if (!isObj(parsed)) return none;
+  try { parsed = JSON.parse(match[0]); } catch { return null; }
+  if (!isObj(parsed)) return null;
 
   const evidence = (o: Record<string, unknown>): Evidence | null => {
     const n = o.from;
@@ -227,8 +251,22 @@ export function parseSketchUpdate(raw: string, writings: Writing[]): SketchAddit
 }
 
 const newest = <T extends { at: string }>(a: T, b: T) => (a.at < b.at ? 1 : a.at > b.at ? -1 : 0);
-/** Said in the open once, it may be used in the open: the wider scope wins when the same thing shows twice. */
-const widerScope = (a: Scope, b: Scope): Scope => (a === null || b === null ? null : b);
+/** What has no usable evidence left to add. */
+export const NOTHING_TO_ADD: SketchAdditions = { character: [], ideas: [], memories: [], mood: null };
+
+/**
+ * How a new item meets an existing one that says the same thing. A scope is never widened by a
+ * merge: text first said in a members-only space must not become visible elsewhere because a
+ * similar thing was later said in the open (or the other way round).
+ *   - same scope                → "merge": one item, strengthened
+ *   - new one said in the open  → "replace": the open wording, quote and scope take the place of
+ *                                 the members-only one (everything shown is then the open text)
+ *   - anything else             → "keep-both": two separate items, each with its own scope
+ */
+function meet(existing: Scope, incoming: Scope): "merge" | "replace" | "keep-both" {
+  if (existing === incoming) return "merge";
+  return incoming === null ? "replace" : "keep-both";
+}
 
 /**
  * Folds additions and the new messages into the sketch: repeats strengthen a trait instead of
@@ -238,17 +276,24 @@ const widerScope = (a: Scope, b: Scope): Scope => (a === null || b === null ? nu
 export function applyUpdate(sketch: UserSketch, add: SketchAdditions, writings: Writing[], now: Date): UserSketch {
   const character = [...sketch.character];
   for (const t of add.character) {
-    const i = character.findIndex((c) => similar(c.text, t.text));
-    if (i === -1) character.push(t);
-    else character[i] = { ...character[i], seen: character[i].seen + 1, quote: t.quote, at: t.at, scope: widerScope(character[i].scope, t.scope) };
+    // Prefer a match in the same scope; otherwise any similar item decides how they meet.
+    const same = character.findIndex((c) => c.scope === t.scope && similar(c.text, t.text));
+    const i = same !== -1 ? same : character.findIndex((c) => similar(c.text, t.text));
+    const how = i === -1 ? "keep-both" : meet(character[i].scope, t.scope);
+    if (how === "merge") character[i] = { ...character[i], seen: character[i].seen + 1, quote: t.quote, at: t.at };
+    else if (how === "replace") character[i] = { ...t, seen: character[i].seen + 1 };
+    else character.push(t);
   }
   character.sort((a, b) => b.seen - a.seen || newest(a, b));
 
   const ideas = [...sketch.ideas];
   for (const idea of add.ideas) {
-    const i = ideas.findIndex((x) => x.topic.toLowerCase() === idea.topic.toLowerCase() || similar(x.stance, idea.stance));
-    if (i === -1) ideas.push(idea);
-    else ideas[i] = { ...idea, scope: widerScope(ideas[i].scope, idea.scope) };
+    const matches = (x: Idea) => x.topic.toLowerCase() === idea.topic.toLowerCase() || similar(x.stance, idea.stance);
+    const same = ideas.findIndex((x) => x.scope === idea.scope && matches(x));
+    const i = same !== -1 ? same : ideas.findIndex(matches);
+    // A newer stance replaces the old one only within the same scope (or when the new one is open).
+    if (i !== -1 && meet(ideas[i].scope, idea.scope) !== "keep-both") ideas[i] = idea;
+    else ideas.push(idea);
   }
   ideas.sort(newest);
 
@@ -284,6 +329,7 @@ export function applyUpdate(sketch: UserSketch, add: SketchAdditions, writings: 
     watermark: latest,
     builtAt: now.toISOString(),
     fails: 0,
+    failBatch: null,
   };
 }
 
@@ -291,18 +337,26 @@ const usableIn = (scope: Scope) => (item: { scope: Scope }) => item.scope === nu
 
 /**
  * What an agent is told about one person, for a thread in `scope`. Only items usable there are
- * included, and a hardship only when `answering` — the agent is replying to this very person.
+ * included.
+ *
+ * `answering` — the agent is replying to this very person — decides how much. For the person
+ * being answered: character, ideas, memories (hardships included), mood, threads joined. For
+ * anyone else in the thread: character and ideas only. Memories, moods and threads are where
+ * something painful can sit — under any label the model gave it, or in the first line of the
+ * person's own post — so none of them is ever put in front of an agent that is talking to
+ * someone else.
  */
 export function sketchNote(sketch: UserSketch, opts: { scope: Scope; answering: boolean; now: number }): string {
   const ok = usableIn(opts.scope);
   const bare = (t: string) => t.replace(/[.。!?\s]+$/u, "");
-  const traits = sketch.character.filter(ok).slice(0, 4).map((t) => bare(t.text));
-  const ideas = sketch.ideas.filter(ok).slice(0, 3).map((i) => `${i.topic}: ${bare(i.stance)}`);
-  const memories = sketch.memories.filter(ok).filter((m) => m.kind !== "hardship" || opts.answering).slice(0, 3)
+  const unique = (items: string[]) => [...new Set(items)];
+  const traits = unique(sketch.character.filter(ok).map((t) => bare(t.text))).slice(0, opts.answering ? 4 : 3);
+  const ideas = unique(sketch.ideas.filter(ok).map((i) => `${i.topic}: ${bare(i.stance)}`)).slice(0, opts.answering ? 3 : 2);
+  const memories = !opts.answering ? [] : sketch.memories.filter(ok).slice(0, 3)
     .map((m) => `${bare(m.text)} (${m.kind === "hardship" ? "shared as a hardship, " : ""}${day(m.at)})`);
-  const mood = sketch.moods.filter(ok).find((m) => opts.now - new Date(m.at).getTime() < MOOD_FRESH_MS);
+  const mood = !opts.answering ? undefined : sketch.moods.filter(ok).find((m) => opts.now - new Date(m.at).getTime() < MOOD_FRESH_MS);
   const seenTopics = new Set<string>();
-  const threads = sketch.threads.filter(ok)
+  const threads = !opts.answering ? [] : sketch.threads.filter(ok)
     .filter((t) => (seenTopics.has(t.topic) ? false : (seenTopics.add(t.topic), true)))
     .slice(0, 2)
     .map((t) => {
