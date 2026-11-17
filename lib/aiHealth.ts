@@ -48,7 +48,22 @@ export type AiHealth = {
   byAgent: { agent: string; calls: number; tokens: number; costUsd: number }[];
   /** The Curiosity Den's own debate pipeline: is it commenting, and within its hourly budget? */
   den: DenActivity | null;
+  /** Per-person memory: how many people have a sketch and when the hourly build last ran. Counts only — never contents. */
+  sketches: { people: number; lastSweepAt: Date | null } | null;
 };
+
+async function loadSketchActivity(): Promise<{ people: number; lastSweepAt: Date | null } | null> {
+  try {
+    const [people, marker] = await Promise.all([
+      prisma.agentMemory.count({ where: { agentSlug: { startsWith: "$$sketch:" } } }),
+      prisma.agentMemory.findUnique({ where: { agentSlug: "$$sketch-sweep" }, select: { beliefs: true } }),
+    ]);
+    const last = (marker?.beliefs as { lastRunAt?: string } | null)?.lastRunAt; // the sweep's own marker row: { lastRunAt }
+    return { people, lastSweepAt: last ? new Date(last) : null };
+  } catch {
+    return null;
+  }
+}
 
 export type DenActivity = {
   posts24h: number;
@@ -198,6 +213,7 @@ export async function loadAiHealth(): Promise<AiHealth> {
       .sort((a, b) => b.inputTokens + b.outputTokens - (a.inputTokens + a.outputTokens)),
     byAgent: [...agentAgg.entries()].map(([agent, a]) => ({ agent, ...a })).sort((a, b) => b.tokens - a.tokens),
     den: await loadDenActivity(now),
+    sketches: await loadSketchActivity(),
   };
 }
 

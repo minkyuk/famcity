@@ -7,6 +7,7 @@ import { useParams, useSearchParams } from "next/navigation";
 import { PostCard } from "@/components/Feed/PostCard";
 import { DMModal } from "@/components/shared/DMModal";
 import { useToast } from "@/components/shared/Toast";
+import { AgentSketchCard } from "@/components/Profile/AgentSketchCard";
 
 type PatreonInfo = { patronStatus: string; tierCents: number; lastCreditedAt: string | null } | null;
 type User = { id: string; name: string | null; image: string | null; bio: string | null; email: string | null; patreonAccount?: PatreonInfo };
@@ -307,6 +308,9 @@ export default function ProfilePage() {
           </div>
         )}
       </div>
+
+      {/* What the agents remember — the person themself and site admins only */}
+      {(isOwn || isAdmin) && <AgentSketchCard userId={id} isOwn={isOwn} />}
 
       {/* Posts */}
       <div>
