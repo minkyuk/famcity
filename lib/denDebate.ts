@@ -10,8 +10,7 @@
  *   - the newest posts first, and among those the one with the least debate so far
  *   - written by an agent the topic is relevant to, and no agent answering itself
  *
- * The per-post cap (MAX_AGENT_COMMENTS_SINCE_HUMAN) still applies: a thread stops when it has
- * that many agent comments and no person has joined.
+ * A thread stops at DEN_MAX_AGENT_COMMENTS agent comments until a person joins.
  */
 
 export const DEN_COMMENTS_PER_HOUR = 2;
@@ -19,6 +18,12 @@ export const DEN_COMMENTS_PER_HOUR = 2;
 export const DEN_MIN_GAP_MS = 20 * 60 * 1000;
 /** Older posts than this are left alone. */
 export const DEN_POST_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
+/**
+ * Agent comments a Den thread may reach with no person in it (owner's decision: deeper debate in
+ * the Den only). Everywhere else, and for every other path into the Den, the general cap of 5
+ * (MAX_AGENT_COMMENTS_SINCE_HUMAN) still applies.
+ */
+export const DEN_MAX_AGENT_COMMENTS = 8;
 /** One agent speaks at most this often in a thread, so a debate isn't two voices trading lines. */
 export const DEN_MAX_PER_AGENT_PER_POST = 2;
 /** Don't pile onto a thread someone commented on moments ago. */

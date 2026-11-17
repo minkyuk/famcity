@@ -22,9 +22,11 @@ export const CHIEF_END = `The fear of the Lord is the beginning of your wisdom (
 /**
  * How agents handle Scripture: look for the passage that bears on the matter and bring it with
  * its reference; the words go in quotation marks only when they are the words actually written.
- * (Quotations come from the model's memory — nothing checks them against a Bible text yet.)
+ * English quotations are from the NKJV (owner's choice), Korean from the 개역개정. Before anything is
+ * posted, lib/scripture.ts checks that each cited passage exists and says what the text says it
+ * says — against the KJV, because the NKJV text is under copyright and cannot be bundled.
  */
-export const SCRIPTURE_RULE = `When Scripture bears on what is being discussed, look for the passage that really speaks to it and bring it, with its reference (book, chapter and verse). Quote its words only as they are actually written — in a standard translation (in Korean, 개역개정) and inside quotation marks; if you are not sure of the exact wording, say what the passage teaches in your own words, without quotation marks, and give the reference so the reader can open it. Never attach a reference to words Scripture does not say, and never lift a verse out of its context to win a point.`;
+export const SCRIPTURE_RULE = `When Scripture bears on what is being discussed, look for the passage that really speaks to it and bring it, with its reference (book, chapter and verse). Quote its words only as they are actually written, inside quotation marks — in English from the New King James Version, marked NKJV after the reference, as in (Proverbs 9:10, NKJV); in Korean from the 개역개정. If you are not sure of the exact wording, say what the passage teaches in your own words, without quotation marks, and give the reference so the reader can open it. Never attach a reference to words Scripture does not say, and never lift a verse out of its context to win a point.`;
 
 /**
  * Appended to prompts where a debate or an open question may touch God (Den posts, Den debate,

@@ -12,6 +12,7 @@ import { isCronAuthorized } from "@/lib/cronAuth";
 import { authOptions } from "@/lib/auth";
 import { finalizeAgentText } from "@/lib/agentText";
 import { fetchArticleText } from "@/lib/articleText";
+import { scriptureIsFaithful } from "@/lib/scripture";
 import {
   assembleNewsPost, briefIsUsable, briefPrompt, cleanFeedLink, cleanFeedText, clip, dropUnfinishedLine, godViewPrompt,
   groupPrompt, parseGroups,
@@ -210,13 +211,17 @@ async function composeStory(o: {
   const ko = brief("ko", text(koRaw));
   if (both ? !en : !ko) return null;
 
+  // Every passage a reading cites must exist and say what the reading says it says. A reading that
+  // fails is left out (and with it the human view, which never stands without the God-centered one).
+  const [godFaithful, humanFaithful] = await Promise.all([scriptureIsFaithful(text(godRaw)), scriptureIsFaithful(text(humanRaw))]);
+
   return assembleNewsPost({
     story: o.story,
     badge: o.badge,
     en,
     ko,
-    godView: toPerspective(o.godAgent.name, text(godRaw), o.langs),
-    humanView: toHumanView(o.humanAgent.name, text(humanRaw), o.langs),
+    godView: godFaithful ? toPerspective(o.godAgent.name, text(godRaw), o.langs) : null,
+    humanView: humanFaithful ? toHumanView(o.humanAgent.name, text(humanRaw), o.langs) : null,
     footer: o.footer,
   });
 }

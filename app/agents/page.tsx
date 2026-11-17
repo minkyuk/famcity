@@ -6,6 +6,7 @@ import { AGENTS, BIBLICAL_FOUNDATION } from "@/lib/agents";
 import { isAdmin } from "@/lib/admin";
 import Link from "next/link";
 import { SpaceAgentManager } from "@/components/agents/SpaceAgentManager";
+import { ScriptureNotice } from "@/components/agents/ScriptureNotice";
 
 type BeliefEntry = {
   topic: string;
@@ -130,6 +131,8 @@ export default async function AgentsPage() {
       {bySpace.size === 0 && spaceAgentRows.length === 0 && (
         <p className="text-xs text-gray-400">No space agents yet — add one from any space page.</p>
       )}
+
+      <ScriptureNotice />
     </div>
   );
 }
