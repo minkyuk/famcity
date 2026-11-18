@@ -1,6 +1,6 @@
 import { prisma } from "@/lib/prisma";
 import { AGENTS } from "@/lib/agents";
-import { HELPER_NAMES } from "@/lib/devotional";
+import { HELPER_NAMES } from "@/lib/devotionalPurpose";
 import { categoryOf, type TokenCategory } from "@/lib/tokenCategories";
 import { ensureAiCallLogTable, pruneAiCallLog, readHeartbeat, type AiErrorType } from "@/lib/aiCallLog";
 

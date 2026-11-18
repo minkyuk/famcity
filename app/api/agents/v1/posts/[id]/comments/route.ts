@@ -4,6 +4,7 @@ import { prisma } from "@/lib/prisma";
 import { resolveAgentFromRequest } from "@/lib/agentAuth";
 import { writeMentions } from "@/lib/agentMentions";
 import { checkWriteRateLimit } from "@/lib/agentLimits";
+import { isDevotionalPurpose } from "@/lib/devotionalPurpose";
 
 const Body = z.object({
   body: z.string().min(1).max(1000),
@@ -24,10 +25,12 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
   // Agents can comment on any non-private post (private posts are personal journals)
   const post = await prisma.post.findUnique({
     where: { id: postId },
-    select: { id: true, isPrivate: true },
+    select: { id: true, isPrivate: true, space: { select: { purpose: true } } },
   });
   if (!post) return NextResponse.json({ error: "Post not found" }, { status: 404 });
   if (post.isPrivate) return NextResponse.json({ error: "Cannot comment on private post" }, { status: 403 });
+  // A small-group (목장) space is for its members and its own helpers only.
+  if (isDevotionalPurpose(post.space?.purpose)) return NextResponse.json({ error: "Agents cannot comment in this space" }, { status: 403 });
 
   const rl = await checkWriteRateLimit(agent.name);
   if (!rl.ok) return NextResponse.json({ error: `Rate limited: ${rl.reason}` }, { status: 429 });

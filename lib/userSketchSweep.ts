@@ -1,6 +1,6 @@
 import { AGENT_REQUEST, anthropicFor, textOf } from "@/lib/anthropic";
 import { AGENTS } from "@/lib/agents";
-import { HELPER_NAMES } from "@/lib/devotional";
+import { HELPER_NAMES } from "@/lib/devotionalPurpose";
 import { prisma } from "@/lib/prisma";
 import { applyUpdate, emptySketch, laterOf, NOTHING_TO_ADD, parseSketchUpdate, sketchUpdatePrompt, type Scope, type Writing } from "@/lib/userSketch";
 import { loadSketchRows, saveSketchIfUnchanged, type SketchRow } from "@/lib/userSketchStore";
