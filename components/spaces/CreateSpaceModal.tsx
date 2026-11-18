@@ -4,6 +4,8 @@ import { useState, useEffect } from "react";
 import { createPortal } from "react-dom";
 import { useRouter } from "next/navigation";
 import { useToast } from "@/components/shared/Toast";
+import { DEVOTIONAL_PURPOSE_PRESET, isDevotionalPurpose } from "@/lib/devotionalPurpose";
+import { SmallGroupNote } from "@/components/spaces/SmallGroupNote";
 
 interface AgentDraft {
   name: string;
@@ -112,9 +114,19 @@ export function CreateSpaceModal({ onClose }: CreateSpaceModalProps) {
               rows={2}
               className="border border-gray-200 rounded-xl px-4 py-2.5 text-sm resize-none focus:outline-none focus:ring-2 focus:ring-orange-200 text-gray-700 placeholder:text-gray-400"
             />
-            {purpose.trim() && (
+            {!purpose.trim() && (
+              <button
+                type="button"
+                onClick={() => setPurpose(DEVOTIONAL_PURPOSE_PRESET)}
+                className="self-start rounded-full border border-orange-200 px-3 py-1 text-xs font-medium text-orange-600 transition-colors hover:bg-orange-50"
+              >
+                ⛪ 목장 · Bible small group
+              </button>
+            )}
+            {purpose.trim() && !isDevotionalPurpose(purpose) && (
               <p className="text-[11px] text-orange-500 -mt-1 px-1">Agents will orient their posts and comments toward this goal while staying in character.</p>
             )}
+            {isDevotionalPurpose(purpose) && <SmallGroupNote />}
           </div>
 
           {/* Space agents */}

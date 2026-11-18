@@ -16,6 +16,8 @@ import { EditSpaceButton } from "@/components/spaces/EditSpaceButton";
 import { AddAgentButton } from "@/components/spaces/AddAgentButton";
 import { SpaceAgentsDropdown } from "@/components/spaces/SpaceAgentsDropdown";
 import { isAdmin } from "@/lib/admin";
+import { isDevotionalPurpose } from "@/lib/devotionalPurpose";
+import { SmallGroupNote } from "@/components/spaces/SmallGroupNote";
 
 export default async function SpacePage({
   params,
@@ -105,10 +107,11 @@ export default async function SpacePage({
             {space.purpose && (
               <p className="text-[11px] text-orange-400 mt-0.5">🎯 {space.purpose}</p>
             )}
+            {isDevotionalPurpose(space.purpose) && <SmallGroupNote />}
           </div>
           <div className="flex items-center gap-2">
             {!space.isSystem && <SpaceAgentsDropdown agents={spaceAgents} />}
-            <SpaceHotButton spaceId={id} />
+            {!isDevotionalPurpose(space.purpose) && <SpaceHotButton spaceId={id} />}
             {!space.isSystem && <InviteButton spaceId={id} />}
             {!space.isSystem && <AddAgentButton spaceId={id} />}
             {!space.isSystem && (

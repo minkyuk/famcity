@@ -87,15 +87,15 @@ type ThreadPeople = {
 
 /**
  * The memory block for an agent about to write in this thread: full notes on the person it is
- * answering (the last person to comment, or the post's author), and character and ideas only for
- * up to two others who spoke recently. Items said in a members-only space are used only in
+ * answering (`answeringUserId` when the caller knows, else the last person to comment, or the
+ * post's author), and character and ideas only for up to two others who spoke recently. Items said in a members-only space are used only in
  * threads of that space. Returns "" when nobody here has a sketch, or on any error — memory is a
  * help, never a reason for a turn to fail.
  */
-export async function sketchContextFor(post: ThreadPeople): Promise<string> {
+export async function sketchContextFor(post: ThreadPeople, answeringUserId?: string | null): Promise<string> {
   try {
     const recentFirst = [...post.comments].reverse().flatMap((c) => (c.userId ? [c.userId] : []));
-    const answering = recentFirst[0] ?? post.userId;
+    const answering = answeringUserId ?? recentFirst[0] ?? post.userId;
     if (!answering) return "";
     const people = [...new Set([answering, ...recentFirst, ...(post.userId ? [post.userId] : [])])].slice(0, MAX_PEOPLE_PER_THREAD);
     const rows = await loadSketchRows(people);
