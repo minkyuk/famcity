@@ -26,7 +26,10 @@ import { fetchYouTubeTitle } from "@/lib/youtube";
 import { DEN_MAX_AGENT_COMMENTS, DEN_POST_WINDOW_MS, denBudgetAllows, denDebateInstruction, pickDenAgent, pickDenPost, type DenRole } from "@/lib/denDebate";
 import { scriptureIsFaithful } from "@/lib/scripture";
 import { sketchContextFor } from "@/lib/userSketchStore";
-import { chooseHelper, DEVOTIONAL_ANSWER_WINDOW_MS, devotionalPrompt, helperAsks, helperWantedPrompt, isDevotionalPurpose, isKorean, type Helper, type HelperAsk } from "@/lib/devotional";
+import {
+  chooseHelper, claimIsOpen, DEVOTIONAL_ANSWER_WINDOW_MS, devotionalPrompt, helperAsks, helperWantedPrompt, isDevotionalPurpose, isKorean,
+  readClaim, settledClaim, stillUnanswered, type DevotionalClaim, type DevotionalOutcome, type Helper, type HelperAsk,
+} from "@/lib/devotional";
 import { runSketchSweep } from "@/lib/userSketchSweep";
 
 
@@ -2474,6 +2477,9 @@ async function runHotSpaceAgentTurns(spaceIds: string[], passiveMode = false, ma
   await Promise.all(
     spaceIds.map(async (spaceId) => {
       const agents = bySpace.get(spaceId);
+      // The purpose decides who may speak here. If it couldn't be read, nobody does this tick —
+      // never the space's own agents by default, which is exactly what a small-group space forbids.
+      if (!purposeBySpace.has(spaceId)) return;
       const purpose = purposeBySpace.get(spaceId);
       // A small-group space has its own quiet rules, hot session or not: helpers answer people, nothing else.
       if (isDevotionalPurpose(purpose)) return runDevotionalSpace(spaceId, purpose ?? "");
@@ -2566,6 +2572,7 @@ async function runAllSpaceAgentTurns(slotMinutes: number, hourlyRound: boolean) 
 
   await Promise.all(
     [...bySpace.entries()].map(([spaceId, agents]) => {
+      if (!purposeBySpace.has(spaceId)) return Promise.resolve(); // purpose unreadable: nobody speaks this tick (see runHotSpaceAgentTurns)
       if (isDevotionalPurpose(purposeBySpace.get(spaceId))) return Promise.resolve(); // small-group spaces: runDevotionalSweep
       const active = humanActive.has(spaceId);
       if (!active && !hourlyRound) return Promise.resolve(); // idle space: hourly only
@@ -2587,39 +2594,30 @@ const DEVOTIONAL_REPLIES_PER_RUN = 2;
 /** Threads looked at per run, and comments read per thread (the newest ones). */
 const DEVOTIONAL_POSTS = 30;
 const DEVOTIONAL_COMMENTS = 40;
-/** While a helper is writing, nobody else answers the same message; a dropped draft is retried after a while. */
-const DEVOTIONAL_WORKING_MS = 5 * 60 * 1000;
-const DEVOTIONAL_RETRY_MS = 2 * 60 * 60 * 1000;
+/** The half-hourly sweep stops starting new spaces after this long. */
+const DEVOTIONAL_SWEEP_BUDGET_MS = 90 * 1000;
 const DEVOTIONAL_CLAIM_PREFIX = "$$devo:";
-
-/** How a message was settled: answered, judged not to be for the helpers, or a draft that didn't pass. */
-type DevotionalOutcome = "done" | "declined" | "dropped";
 
 /**
  * Takes the turn of answering one message, atomically — a person's post can trigger two runs at
- * once (the post trigger and the space trigger), and they must not both reply. The row's state:
- *   working  — a helper is writing; another run may take over only after DEVOTIONAL_WORKING_MS
- *   dropped  — the draft failed a gate or the call failed; tried again after DEVOTIONAL_RETRY_MS
- *   declined — the message was judged not to be for the helpers; never asked again
- *   done     — answered; never again, even if someone deletes the reply
+ * once (the post trigger and the space trigger), and they must not both reply. One row per
+ * message, `$$devo:<postId>:<commentId|post>`; its states are described in lib/devotional.ts.
+ * `known` is the row as read a moment ago (undefined = none): a new row is created, an old one is
+ * taken over only if nobody has touched it since. Returns the drafts already spent on the
+ * message, or null when the turn is someone else's.
  */
-async function claimDevotionalReply(key: string): Promise<boolean> {
-  const beliefs = { state: "working" };
-  try {
-    await prisma.agentMemory.create({ data: { agentSlug: key, beliefs } });
-    return true;
-  } catch {
-    const row = await prisma.agentMemory.findUnique({ where: { agentSlug: key }, select: { beliefs: true } }).catch(() => null);
-    const state = (row?.beliefs as { state?: string } | null)?.state; // our own claim row: { state }
-    if (!row || state === "declined" || state === "done") return false;
-    const staleBefore = new Date(Date.now() - (state === "dropped" ? DEVOTIONAL_RETRY_MS : DEVOTIONAL_WORKING_MS));
-    // Conditional on the row's age: a row another run has just taken or settled is fresh, so it is left alone.
-    const taken = await prisma.agentMemory.updateMany({ where: { agentSlug: key, updatedAt: { lt: staleBefore } }, data: { beliefs } }).catch(() => ({ count: 0 }));
-    return taken.count === 1;
+async function claimDevotionalReply(key: string, known: DevotionalClaim | undefined): Promise<number | null> {
+  const tries = known?.tries ?? 0;
+  const beliefs = { state: "working", tries };
+  if (!known) {
+    return prisma.agentMemory.create({ data: { agentSlug: key, beliefs } }).then(() => tries, () => null);
   }
+  const taken = await prisma.agentMemory.updateMany({ where: { agentSlug: key, updatedAt: known.updatedAt }, data: { beliefs } }).catch(() => ({ count: 0 }));
+  return taken.count === 1 ? tries : null;
 }
-const settleDevotionalClaim = (key: string, state: DevotionalOutcome) =>
-  prisma.agentMemory.update({ where: { agentSlug: key }, data: { beliefs: { state } } }).catch(() => {});
+
+const settleDevotionalClaim = (key: string, outcome: DevotionalOutcome, tries: number) =>
+  prisma.agentMemory.update({ where: { agentSlug: key }, data: { beliefs: settledClaim(outcome, tries) } }).catch(() => {});
 
 type DevotionalPost = RecentPost & { truncated: boolean };
 
@@ -2646,8 +2644,10 @@ async function runDevotionalSweep(): Promise<void> {
     .deleteMany({ where: { agentSlug: { startsWith: DEVOTIONAL_CLAIM_PREFIX }, updatedAt: { lt: new Date(Date.now() - DEVOTIONAL_ANSWER_WINDOW_MS - 24 * 60 * 60 * 1000) } } })
     .catch(() => {});
   const spaces = await prisma.space.findMany({ where: { purpose: { not: null } }, select: { id: true, purpose: true } });
+  const deadline = Date.now() + DEVOTIONAL_SWEEP_BUDGET_MS;
   for (const space of spaces) {
     if (!isDevotionalPurpose(space.purpose)) continue;
+    if (Date.now() > deadline) break; // the rest are reached by their own triggers and the next sweep
     await runDevotionalSpace(space.id, space.purpose ?? "").catch((err: unknown) => console.error("[devotional] sweep failed", space.id, err));
   }
 }
@@ -2660,21 +2660,34 @@ async function runDevotionalSpace(spaceId: string, purpose: string): Promise<voi
     { spaceId, OR: [{ createdAt: { gte: since } }, { comments: { some: { createdAt: { gte: since }, userId: { not: null } } } }] },
     DEVOTIONAL_POSTS,
   );
+  const claimKey = (postId: string, ask: HelperAsk) => `${DEVOTIONAL_CLAIM_PREFIX}${postId}:${ask.commentId ?? "post"}`;
+  const waiting = posts.map((post) => ({ post, asks: helperAsks(post, Date.now()) })).filter((t) => t.asks.length > 0);
+  if (waiting.length === 0) return;
+
+  // Where each message stands, in one query — most were settled on an earlier run.
+  const rows = await prisma.agentMemory.findMany({
+    where: { agentSlug: { in: waiting.flatMap((t) => t.asks.map((ask) => claimKey(t.post.id, ask))) } },
+    select: { agentSlug: true, beliefs: true, updatedAt: true },
+  });
+  const claims = new Map(rows.map((row) => [row.agentSlug, readClaim(row)]));
 
   let drafts = 0;
-  for (const post of posts) {
+  for (const { post, asks } of waiting) {
     if (drafts >= DEVOTIONAL_REPLIES_PER_RUN) break;
-    for (const ask of helperAsks(post, Date.now())) {
-      const claim = `${DEVOTIONAL_CLAIM_PREFIX}${post.id}:${ask.commentId ?? "post"}`;
-      if (!(await claimDevotionalReply(claim))) continue; // another run has it, or it was settled earlier
+    for (const ask of asks) {
+      const key = claimKey(post.id, ask);
+      const known = claims.get(key);
+      if (!claimIsOpen(known, Date.now())) continue; // settled, being written, or waiting for its retry
+      const tries = await claimDevotionalReply(key, known);
+      if (tries === null) continue; // another run took it meanwhile
 
       const helper = chooseHelper(ask.text);
       const korean = isKorean(ask.text);
       const outcome = await withAgent(korean ? helper.ko : helper.en, () => runDevotionalReplyBody(helper, korean, post, ask, purpose)).catch((err: unknown): DevotionalOutcome => {
         console.error("[devotional] reply failed", post.id, err);
-        return "dropped";
+        return "failed";
       });
-      await settleDevotionalClaim(claim, outcome);
+      await settleDevotionalClaim(key, outcome, tries);
       if (outcome === "declined") continue; // not for the helpers: the thread's next message may be
       drafts++;
       break; // one reply per thread per run
@@ -2694,8 +2707,10 @@ function devotionalThread(post: RecentPost): string {
 }
 
 /**
- * One helper's turn on one message: "done" (posted), "declined" (not meant for the helpers) or
- * "dropped" (no reply this time — a gate, the last re-check, or a call that could not be made).
+ * One helper's turn on one message: "done" (posted), "declined" (not meant for the helpers),
+ * "dropped" (a draft was written and a gate stopped it) or "failed" (no draft: the check couldn't
+ * be made, or the message was gone or answered by the time the reply was ready). A thrown error —
+ * an outage — is "failed" too (see runDevotionalSpace).
  */
 async function runDevotionalReplyBody(helper: Helper, korean: boolean, post: DevotionalPost, ask: HelperAsk, purpose: string): Promise<DevotionalOutcome> {
   const thread = devotionalThread(post);
@@ -2712,7 +2727,7 @@ async function runDevotionalReplyBody(helper: Helper, korean: boolean, post: Dev
       })
       .catch(() => null);
     if (wanted === false) return "declined";
-    if (wanted === null && ask.commentId !== null) return "dropped";
+    if (wanted === null && ask.commentId !== null) return "failed";
   }
 
   // What is remembered about the person being answered — including what they shared in this
@@ -2729,17 +2744,17 @@ async function runDevotionalReplyBody(helper: Helper, korean: boolean, post: Dev
     messages: [{ role: "user", content: prompt }],
   });
   const text = stripAiTags(finalizeAgentText(textOf(response), response.stop_reason), post);
-  if (text.length < 20) return "dropped";
+  if (text.length < 8) return "dropped"; // a refusal or an empty answer; one short warm sentence is a real reply
 
   // A person is waiting, so the gates that judge novelty or debate value don't apply. The two
   // that guard truth do: nothing invented about a person, and every cited passage real and faithful.
   if (!(await isGroundedAboutPeople(text, post, "", peopleMemory))) return "dropped";
   if (!(await scriptureIsFaithful(text))) return "dropped";
 
-  // The thread may have changed while this was being prepared (a message deleted, the post made
-  // private): post only if this message is still there and still unanswered.
+  // The thread may have changed while this was being prepared (the message deleted, the post made
+  // private): post only if the message is still there and still unanswered.
   const [current] = await loadDevotionalThreads({ id: post.id }, 1);
-  if (!current || !helperAsks(current, Date.now()).some((a) => a.commentId === ask.commentId)) return "dropped";
+  if (!current || !stillUnanswered(current, ask)) return "failed";
 
   const comment = await prisma.comment.create({
     data: {
@@ -2988,7 +3003,7 @@ export async function POST(req: NextRequest) {
   // Small-group spaces: anyone still waiting for a helper is answered, whatever mode the agents
   // are in — at :05 and :35, when nothing else runs in normal mode and a hot session is on an
   // off-tick, so it delays no other turn.
-  if (minute % 30 === 5) await runDevotionalSweep().catch(() => {});
+  if (isCronAuthorized(req) && minute % 30 === 5) await runDevotionalSweep().catch(() => {});
 
   // Per-person memory: once an hour at :25 — a tick on which nothing else runs in any mode (no
   // knight, space or Den turn, and an off-tick of a hot session) — so its calls delay nothing.
