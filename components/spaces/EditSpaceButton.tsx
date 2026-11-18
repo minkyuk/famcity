@@ -4,6 +4,8 @@ import { useState } from "react";
 import { useSession } from "next-auth/react";
 import { useRouter } from "next/navigation";
 import { useToast } from "@/components/shared/Toast";
+import { DEVOTIONAL_PURPOSE_PRESET, isDevotionalPurpose } from "@/lib/devotionalPurpose";
+import { SmallGroupNote } from "@/components/spaces/SmallGroupNote";
 
 export function EditSpaceButton({
   spaceId,
@@ -79,6 +81,16 @@ export function EditSpaceButton({
                 placeholder="e.g. 'math tutoring for kids' — shapes how space agents interact"
                 maxLength={500}
               />
+              {!isDevotionalPurpose(purpose) && (
+                <button
+                  type="button"
+                  onClick={() => setPurpose(DEVOTIONAL_PURPOSE_PRESET)}
+                  className="self-start rounded-full border border-orange-200 px-3 py-1 text-xs font-medium text-orange-600 transition-colors hover:bg-orange-50"
+                >
+                  ⛪ 목장 · Bible small group
+                </button>
+              )}
+              {isDevotionalPurpose(purpose) && <SmallGroupNote />}
             </div>
 
             <div className="flex justify-end gap-2 pt-1">

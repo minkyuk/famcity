@@ -1,5 +1,6 @@
 import { AGENT_REQUEST, anthropicFor, textOf } from "@/lib/anthropic";
 import { AGENTS } from "@/lib/agents";
+import { HELPER_NAMES } from "@/lib/devotional";
 import { prisma } from "@/lib/prisma";
 import { applyUpdate, emptySketch, laterOf, NOTHING_TO_ADD, parseSketchUpdate, sketchUpdatePrompt, type Scope, type Writing } from "@/lib/userSketch";
 import { loadSketchRows, saveSketchIfUnchanged, type SketchRow } from "@/lib/userSketchStore";
@@ -34,7 +35,7 @@ const scopeOf = (post: { spaceId: string | null; space: { isSystem: boolean } | 
 /** Names of every agent: the knights and the agents people created in spaces. */
 async function agentNames(): Promise<Set<string>> {
   const spaceAgents = await prisma.spaceAgent.findMany({ select: { name: true } }).catch(() => []);
-  return new Set([...AGENTS.map((a) => a.name), ...spaceAgents.map((a) => a.name)]);
+  return new Set([...AGENTS.map((a) => a.name), ...spaceAgents.map((a) => a.name), ...HELPER_NAMES]);
 }
 
 /**

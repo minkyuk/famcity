@@ -25,6 +25,7 @@ import { fetchYouTubeTitle } from "@/lib/youtube";
 import { DEN_MAX_AGENT_COMMENTS, DEN_POST_WINDOW_MS, denBudgetAllows, denDebateInstruction, pickDenAgent, pickDenPost, type DenRole } from "@/lib/denDebate";
 import { scriptureIsFaithful } from "@/lib/scripture";
 import { sketchContextFor } from "@/lib/userSketchStore";
+import { chooseHelper, devotionalPrompt, helperIsNeeded, isDevotionalPurpose, isKorean, type Helper, type HelperAsk } from "@/lib/devotional";
 import { runSketchSweep } from "@/lib/userSketchSweep";
 
 
@@ -1733,12 +1734,16 @@ const RECENT_POST_SELECT = {
 async function fetchRecentPostsGlobal(): Promise<RecentPost[]> {
   // Exclude spaces that opted out of the global feed (e.g. Family News) — those get
   // their own controlled commentary and don't need knight pile-ons
-  const excludedSpaces = await prisma.space.findMany({
-    // Exclude spaces that hide from the user feed, but keep The Curiosity Den so knights can see and post there
-    where: { excludeFromAll: true, name: { not: AGENT_SPACE_NAME } },
-    select: { id: true },
+  const candidates = await prisma.space.findMany({
+    // Spaces that hide from the user feed (but keep The Curiosity Den so knights can see and post
+    // there), and spaces with a purpose — of those, small-group (목장) spaces are closed to knights:
+    // only their own helpers speak there (runDevotionalSpace).
+    where: { OR: [{ excludeFromAll: true, name: { not: AGENT_SPACE_NAME } }, { purpose: { not: null } }] },
+    select: { id: true, name: true, excludeFromAll: true, purpose: true },
   });
-  const excludedIds = excludedSpaces.map((s) => s.id);
+  const excludedIds = candidates
+    .filter((s) => (s.excludeFromAll && s.name !== AGENT_SPACE_NAME) || isDevotionalPurpose(s.purpose))
+    .map((s) => s.id);
 
   return prisma.post.findMany({
     take: 100,
@@ -2469,6 +2474,8 @@ async function runHotSpaceAgentTurns(spaceIds: string[], passiveMode = false, ma
     spaceIds.map(async (spaceId) => {
       const agents = bySpace.get(spaceId);
       const purpose = purposeBySpace.get(spaceId);
+      // A small-group space has its own quiet rules, hot session or not: helpers answer people, nothing else.
+      if (isDevotionalPurpose(purpose)) return runDevotionalSpace(spaceId, purpose ?? "");
       const knightAsSpaceAgent = { slug: knightVisitor.slug, name: knightVisitor.name, personality: knightVisitor.personality };
       if (agents && agents.length > 0) {
         // Run sequentially so each agent sees the previous agent's freshly written comment
@@ -2558,6 +2565,7 @@ async function runAllSpaceAgentTurns(slotMinutes: number, hourlyRound: boolean) 
 
   await Promise.all(
     [...bySpace.entries()].map(([spaceId, agents]) => {
+      if (isDevotionalPurpose(purposeBySpace.get(spaceId))) return Promise.resolve(); // small-group spaces: runDevotionalSweep
       const active = humanActive.has(spaceId);
       if (!active && !hourlyRound) return Promise.resolve(); // idle space: hourly only
       // Idle spaces rotate by hour so every agent still gets a turn (30-min slots on :00 only hit even indices).
@@ -2569,6 +2577,115 @@ async function runAllSpaceAgentTurns(slotMinutes: number, hourlyRound: boolean) 
 
 // ── Agent-turn wrappers (token attribution per agent) ──
 /** Runs runFafoTurnBody inside withAgent() so every Claude call in the turn is logged under this agent. */
+// ── Small-group (목장) spaces ────────────────────────────────────────────────────────────────
+// Rules and wording live in lib/devotional.ts. Three built-in helpers answer people; they never
+// answer each other, never start threads and never debate.
+
+/** People answered per run in one space. */
+const DEVOTIONAL_REPLIES_PER_RUN = 2;
+/** While a helper is writing, nobody else answers the same message; a dropped draft is retried after a while. */
+const DEVOTIONAL_WORKING_MS = 3 * 60 * 1000;
+const DEVOTIONAL_RETRY_MS = 2 * 60 * 60 * 1000;
+
+/**
+ * Takes the turn of answering one message, atomically — a person's post can trigger two runs at
+ * once (the post trigger and the space trigger), and they must not both reply.
+ */
+async function claimDevotionalReply(key: string): Promise<boolean> {
+  const beliefs = { state: "working" };
+  try {
+    await prisma.agentMemory.create({ data: { agentSlug: key, beliefs } });
+    return true;
+  } catch {
+    // Someone has it, or had it: take over only when a helper has been "working" too long to
+    // still be working, or the last draft was dropped long enough ago to try again.
+    const row = await prisma.agentMemory.findUnique({ where: { agentSlug: key }, select: { beliefs: true, updatedAt: true } }).catch(() => null);
+    if (!row) return false;
+    const dropped = (row.beliefs as { state?: string } | null)?.state === "dropped"; // our own claim row: { state }
+    const staleBefore = new Date(Date.now() - (dropped ? DEVOTIONAL_RETRY_MS : DEVOTIONAL_WORKING_MS));
+    const taken = await prisma.agentMemory.updateMany({ where: { agentSlug: key, updatedAt: { lt: staleBefore } }, data: { beliefs } }).catch(() => ({ count: 0 }));
+    return taken.count === 1;
+  }
+}
+
+async function runDevotionalSweep(): Promise<void> {
+  const spaces = await prisma.space.findMany({ where: { purpose: { not: null } }, select: { id: true, purpose: true } });
+  for (const space of spaces) {
+    if (isDevotionalPurpose(space.purpose)) await runDevotionalSpace(space.id, space.purpose ?? "").catch(() => {});
+  }
+}
+
+/** Answers the people in one small-group space who need a helper now — at most a couple per run. */
+async function runDevotionalSpace(spaceId: string, purpose: string): Promise<void> {
+  const posts = await prisma.post.findMany({
+    where: { spaceId, isPrivate: false },
+    orderBy: { createdAt: "desc" },
+    take: 20,
+    select: RECENT_POST_SELECT,
+  });
+  const now = Date.now();
+  const waiting = posts
+    .flatMap((post) => { const ask = helperIsNeeded(post, now); return ask ? [{ post, ask }] : []; })
+    .slice(0, DEVOTIONAL_REPLIES_PER_RUN);
+
+  for (const { post, ask } of waiting) {
+    const claim = `$$devo:${post.id}:${ask.commentId ?? "post"}`;
+    if (!(await claimDevotionalReply(claim))) continue;
+    const helper = chooseHelper(ask.text);
+    const korean = isKorean(ask.text);
+    const posted = await withAgent(korean ? helper.ko : helper.en, () => runDevotionalReplyBody(helper, korean, post, ask, purpose)).catch(() => false);
+    if (posted) await prisma.agentMemory.delete({ where: { agentSlug: claim } }).catch(() => {});
+    else await prisma.agentMemory.update({ where: { agentSlug: claim }, data: { beliefs: { state: "dropped" } } }).catch(() => {});
+  }
+}
+
+/** One helper's reply to one person. Returns whether a comment was posted. */
+async function runDevotionalReplyBody(helper: Helper, korean: boolean, post: RecentPost, ask: HelperAsk, purpose: string): Promise<boolean> {
+  const name = korean ? helper.ko : helper.en;
+  const shown = post.comments.slice(-THREAD_CONTEXT_COMMENTS);
+  const thread = `Post by ${speakerLabel(post)}: "${(post.content ?? "").slice(0, 900)}"${
+    shown.length > 0 ? `\n\nComments so far:\n${shown.map((c) => `${speakerLabel(c)}: "${c.body.slice(0, 300)}"`).join("\n")}` : ""
+  }`;
+  // What is remembered about the person being answered — including what they shared in this space.
+  const peopleMemory = await sketchContextFor(post);
+
+  const prompt = `${devotionalPrompt({ helper, korean, foundation: SPACE_AGENT_BIBLICAL_FOUNDATION, purpose, thread, to: ask.to })}${peopleMemory}${GOD_WARD_AIM}${FAITH_GUARDRAIL}${GROUNDING_INSTRUCTION}`;
+
+  const response = await anthropicFor("discuss:devotional").messages.create({
+    ...AGENT_REQUEST,
+    max_tokens: 910,
+    messages: [{ role: "user", content: prompt }],
+  });
+  const text = stripAiTags(finalizeAgentText(textOf(response), response.stop_reason), post);
+  if (text.length < 20) return false;
+
+  // A person is waiting, so the gates that judge novelty or debate value don't apply. The two
+  // that guard truth do: nothing invented about a person, and every cited passage real and faithful.
+  if (!(await isGroundedAboutPeople(text, post, "", peopleMemory))) return false;
+  if (!(await scriptureIsFaithful(text))) return false;
+
+  // Someone else may have answered while this was being written.
+  const latest = await prisma.comment.findMany({
+    where: { postId: post.id },
+    orderBy: { createdAt: "asc" },
+    select: { id: true, parentId: true, authorName: true, body: true, createdAt: true, userId: true },
+  });
+  const stillNeeded = helperIsNeeded({ ...post, comments: latest }, Date.now());
+  if (!stillNeeded || stillNeeded.commentId !== ask.commentId) return false;
+
+  const comment = await prisma.comment.create({
+    data: {
+      postId: post.id,
+      authorName: name,
+      authorImage: agentAvatarUrl(helper.slug),
+      body: text,
+      ...(ask.commentId ? { parentId: ask.commentId } : {}),
+    },
+  });
+  writeMentions({ text, commentId: comment.id }).catch(() => {});
+  return true;
+}
+
 /** A debate turn sees more of the thread than a routine comment: the argument is in the earlier comments. */
 const DEN_THREAD_COMMENTS = 8;
 const DEN_COMMENT_CHARS = 400;
@@ -2728,13 +2845,20 @@ export async function POST(req: NextRequest) {
   try { bodyJson = JSON.parse(await req.text()); } catch {}
   const triggerSpaceId = typeof bodyJson.triggerSpaceId === "string" ? bodyJson.triggerSpaceId : undefined;
   if (triggerSpaceId) {
-    await runHotSpaceAgentTurns([triggerSpaceId], false, TRIGGER_SPACE_MAX_AGENTS);
+    await runHotSpaceAgentTurns([triggerSpaceId], false, TRIGGER_SPACE_MAX_AGENTS); // routes a small-group space to its helpers
     return NextResponse.json({ ok: true, trigger: true, spaceId: triggerSpaceId });
   }
 
   // Fast path: post trigger — a human just commented; respond to EVERY post with a recent unanswered comment
   const triggerPostId = typeof bodyJson.triggerPostId === "string" ? bodyJson.triggerPostId : undefined;
   if (triggerPostId) {
+    // A post in a small-group (목장) space is answered by that space's helpers, never by a knight.
+    const home = await prisma.post.findUnique({ where: { id: triggerPostId }, select: { spaceId: true, space: { select: { purpose: true } } } }).catch(() => null);
+    if (home?.spaceId && isDevotionalPurpose(home.space?.purpose)) {
+      await runDevotionalSpace(home.spaceId, home.space?.purpose ?? "");
+      return NextResponse.json({ ok: true, trigger: true, devotional: true, postId: triggerPostId });
+    }
+
     const [denSpaceIdForTrigger, recentPosts] = await Promise.all([
       getOrCreateDenSpace(),
       fetchRecentPostsGlobal(),
@@ -2792,6 +2916,9 @@ export async function POST(req: NextRequest) {
 
   const _now = new Date();
   const minute = _now.getUTCMinutes();
+
+  // Small-group spaces: anyone still waiting for a helper is answered, whatever mode the agents are in.
+  if (minute % 30 === 0) await runDevotionalSweep().catch(() => {});
 
   // Per-person memory: once an hour at :25 — a tick on which nothing else runs in any mode (no
   // knight, space or Den turn, and an off-tick of a hot session) — so its calls delay nothing.

@@ -1,5 +1,6 @@
 import { prisma } from "@/lib/prisma";
 import { AGENTS } from "@/lib/agents";
+import { HELPER_NAMES } from "@/lib/devotional";
 import { categoryOf, type TokenCategory } from "@/lib/tokenCategories";
 import { ensureAiCallLogTable, pruneAiCallLog, readHeartbeat, type AiErrorType } from "@/lib/aiCallLog";
 
@@ -113,7 +114,7 @@ export async function loadAiHealth(): Promise<AiHealth> {
   if (!tableError) await pruneAiCallLog();
 
   const spaceAgentNames = (await prisma.spaceAgent.findMany({ select: { name: true } }).catch(() => [])).map((r) => r.name);
-  const agentNames = [...AGENTS.map((a) => a.name), ...spaceAgentNames];
+  const agentNames = [...AGENTS.map((a) => a.name), ...spaceAgentNames, ...HELPER_NAMES];
 
   const [logs, latest, lastSuccess, recentErrors, agentComments24h, agentPosts24h, lastAgentComment, cronDiscussAt, userTriggerAt, cronNewsAt] =
     await Promise.all([
