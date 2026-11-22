@@ -24,6 +24,7 @@ import {
 } from "@/lib/agentMemory";
 import { finalizeAgentText } from "@/lib/agentText";
 import { fetchYouTubeTitle } from "@/lib/youtube";
+import { modelImageUrl } from "@/lib/modelImageUrl";
 import { DEN_MAX_AGENT_COMMENTS, DEN_POST_WINDOW_MS, denBudgetAllows, denDebateInstruction, pickDenAgent, pickDenPost, type DenRole } from "@/lib/denDebate";
 import { scriptureIsFaithful } from "@/lib/scripture";
 import { sketchContextFor } from "@/lib/userSketchStore";
@@ -82,16 +83,21 @@ async function exhaustPhotoQueries(urls: string[]): Promise<void> {
   } catch {}
 }
 
-/** Anthropic couldn't fetch an image/PDF URL we attached. The API has no distinct error type for
- *  this (it's a plain 400 invalid_request_error), so the message text is the only signal. */
-function isUndownloadableFileError(err: unknown): boolean {
-  return err instanceof Anthropic.APIError && err.status === 400 && /unable to download/i.test(err.message);
+/** Anthropic couldn't use an image/PDF we attached: it couldn't fetch it, couldn't read its
+ *  format, or found it too large. The API has no distinct error type for this (it's a plain 400
+ *  invalid_request_error), so the message text is the only signal. */
+function isUnusableFileError(err: unknown): boolean {
+  return (
+    err instanceof Anthropic.APIError &&
+    err.status === 400 &&
+    /unable to download|file format is invalid or unsupported|exceeds .{0,20}maximum/i.test(err.message)
+  );
 }
 
 /**
- * Generate with attached photos/PDFs. If Anthropic can't download one of them (deleted or
- * expired URL), exclude those files for good and retry once text-only — so one dead file
- * neither fails every agent that looks at the post nor gets retried hour after hour.
+ * Generate with attached photos/PDFs. If Anthropic can't use one of them (a deleted or expired
+ * URL, or a format it can't read), exclude those files for good and retry once text-only — so one
+ * bad file neither fails every agent that looks at the post nor gets retried hour after hour.
  */
 async function createWithFiles(
   label: string,
@@ -104,7 +110,7 @@ async function createWithFiles(
   try {
     return await send(blocks);
   } catch (err) {
-    if (fileUrls.length === 0 || !isUndownloadableFileError(err)) throw err;
+    if (fileUrls.length === 0 || !isUnusableFileError(err)) throw err;
     await exhaustPhotoQueries(fileUrls);
     // The prompt may still say "photos shown above" — tell the model the files didn't load, so it
     // doesn't invent what they contain.
@@ -1412,7 +1418,7 @@ Join this conversation. Respond to what ${originalPoster} shared — or to somet
     const contentBlocks: ContentBlock[] = [
       ...imageUrls.map((url) => ({
         type: "image" as const,
-        source: { type: "url" as const, url },
+        source: { type: "url" as const, url: modelImageUrl(url) },
       })),
       ...(pdfUrl
         ? [{ type: "document" as const, source: { type: "url" as const, url: pdfUrl } }]
@@ -2319,7 +2325,7 @@ async function runSpaceAgentActionBody(
     const peopleMemory = await sketchContextFor({ id: target.id, userId: target.userId, spaceId, comments: target.comments });
 
     const spaceContentBlocks: SpaceContentBlock[] = [
-      ...spaceImageUrls.map((url) => ({ type: "image" as const, source: { type: "url" as const, url } })),
+      ...spaceImageUrls.map((url) => ({ type: "image" as const, source: { type: "url" as const, url: modelImageUrl(url) } })),
       ...(spacePdfUrl
         ? [{ type: "document" as const, source: { type: "url" as const, url: spacePdfUrl } }]
         : []),
