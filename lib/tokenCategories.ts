@@ -12,7 +12,7 @@ export type TokenCategory = (typeof TOKEN_CATEGORIES)[number]["key"];
 
 export function categoryOf(route: string): TokenCategory {
   if (route.startsWith("news")) return "news";
-  if (route.startsWith("scripture")) return "gate";
+  if (route.startsWith("scripture") || route.startsWith("faith")) return "gate";
   const purpose = route.split(":")[1] ?? "";
   if (purpose === "runDirectTurn" || purpose === "runFafoTurn" || purpose === "commentReply" || purpose === "commentVoice") return "direct";
   if (purpose === "runAgentAction" || purpose === "tryCreateDenPost" || purpose === "denDebate") return "routine";

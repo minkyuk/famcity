@@ -12,7 +12,8 @@ import { isCronAuthorized } from "@/lib/cronAuth";
 import { authOptions } from "@/lib/auth";
 import { finalizeAgentText } from "@/lib/agentText";
 import { fetchArticleText } from "@/lib/articleText";
-import { scriptureIsFaithful } from "@/lib/scripture";
+import { passesFaithGates } from "@/lib/faithGates";
+import { withAgent } from "@/lib/agentContext";
 import {
   assembleNewsPost, briefIsUsable, briefPrompt, cleanFeedLink, cleanFeedText, clip, dropUnfinishedLine, godViewPrompt,
   groupPrompt, parseGroups,
@@ -211,9 +212,14 @@ async function composeStory(o: {
   const ko = brief("ko", text(koRaw));
   if (both ? !en : !ko) return null;
 
-  // Every passage a reading cites must exist and say what the reading says it says. A reading that
-  // fails is left out (and with it the human view, which never stands without the God-centered one).
-  const [godFaithful, humanFaithful] = await Promise.all([scriptureIsFaithful(text(godRaw)), scriptureIsFaithful(text(humanRaw))]);
+  // A reading must never question or be cynical about God or His Word, and every passage it cites
+  // must exist and say what the reading says it says (lib/faithGates.ts). A reading that fails is
+  // left out (and with it the human view, which never stands without the God-centered one).
+  // Each check runs under the agent that wrote the reading, so its calls and any refusal are logged under that name.
+  const [godFaithful, humanFaithful] = await Promise.all([
+    withAgent(o.godAgent.name, () => passesFaithGates(text(godRaw))),
+    withAgent(o.humanAgent.name, () => passesFaithGates(text(humanRaw))),
+  ]);
 
   return assembleNewsPost({
     story: o.story,
