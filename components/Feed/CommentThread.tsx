@@ -282,7 +282,8 @@ export function CommentThread({ postId, initialComments, currentUserId, currentU
   };
   useEffect(() => stopWatching, []);
 
-  const watchForReplies = (since: string) => {
+  /** Starts watching; returns the check itself, for one last look when the agents' turn ends. */
+  const watchForReplies = (since: string): (() => Promise<void>) => {
     stopWatching();
     // A second comment sent while still watching keeps the earlier starting point, so replies to
     // the first one that hadn't been fetched yet aren't missed.
@@ -304,6 +305,7 @@ export function CommentThread({ postId, initialComments, currentUserId, currentU
       }
     };
     watchTimers.current = REPLY_WATCH_SECONDS.map((s) => setTimeout(check, s * 1000));
+    return check;
   };
 
   /** Saves a comment (a reply when `parentId` is given) and wakes the agents. True when saved. */
@@ -324,12 +326,16 @@ export function CommentThread({ postId, initialComments, currentUserId, currentU
       }, 80);
       // Fire-and-forget: an agent answers this comment, under it — in a space, one of that space's
       // own agents first — and others with something of their own to say may add to it.
+      const lastLook = watchForReplies(new Date(comment.createdAt).toISOString());
+      // This request returns only when the agents' whole turn is over (it can outlast the watch):
+      // one last look then picks up anything written at the very end.
       fetch("/api/agents/discuss", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ triggerPostId: postId, triggerCommentId: comment.id }),
-      }).catch(() => {});
-      watchForReplies(new Date(comment.createdAt).toISOString());
+      })
+        .catch(() => {})
+        .finally(() => void lastLook());
       return true;
     } catch {
       showToast("Failed to post comment", "error");

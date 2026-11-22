@@ -12,7 +12,7 @@ import { isCronAuthorized } from "@/lib/cronAuth";
 import { prisma } from "@/lib/prisma";
 import { AGENTS, agentAvatarUrl, CHIEF_END, FAITH_GUARDRAIL, GOD_WARD_AIM, SCRIPTURE_RULE, type InitialBelief } from "@/lib/agents";
 import { claimIsOpen as replyClaimIsOpen, claimRow, readClaim as readReplyClaim, type ClaimOutcome, type ClaimPolicy } from "@/lib/replyClaims";
-import { invitesVoices, isSkip, orderSpeakers, personalityScore, voiceInstruction, voicesAfter, type Said, type SpeakerKind } from "@/lib/replyVoices";
+import { isSkip, opensToVoices, orderSpeakers, personalityScore, voiceInstruction, voicesAfter, type Said, type SpeakerKind } from "@/lib/replyVoices";
 import { generateInviteCode } from "@/lib/invite";
 import { authOptions } from "@/lib/auth";
 import { fetchRss, SCIENCE_FEEDS } from "@/lib/rss";
@@ -2623,7 +2623,10 @@ const REPLY_CLAIM_PREFIX = "$$reply:";
 const REPLY_POLICY: ClaimPolicy = { workingMs: 5 * 60 * 1000, retryMs: 20 * 60 * 1000, maxTries: 3 };
 /** Agents tried for the first reply in one run before the message waits for the sweep. */
 const REPLY_SPEAKERS_PER_RUN = 2;
-/** No further agent is invited to add a reply after this long (the function may live 300s). */
+/**
+ * No further agent is invited to add a reply once the whole turn has run this long. One more
+ * reply (a draft and its gates) fits comfortably before the function's 300s limit.
+ */
 const REPLY_VOICES_BUDGET_MS = 150 * 1000;
 /** The sweep looks back this far for a person still waiting. */
 const REPLY_SWEEP_WINDOW_MS = 6 * 60 * 60 * 1000;
@@ -2758,13 +2761,18 @@ Write in ${korean ? "Korean (한국어)" : "English"} — the language ${comment
 /**
  * After the first reply: the agents invited to add their own (lib/replyVoices.ts), one after the
  * other so each sees what was already said. Nothing here can fail the turn — the person has
- * their reply. Returns how many spoke.
+ * their reply. `deadline` is measured from the start of the turn. Returns how many spoke.
+ *
+ * If the person writes again in the thread meanwhile, the rest is left for that newer comment:
+ * it gets its own reply and its own voices, and several comments sent in a row don't each draw
+ * a full round at once.
  */
-async function addVoices(post: RecentPost, comment: ThreadComment, speakers: ReplySpeaker[], heard: Set<string>, said: Said[]): Promise<number> {
-  const deadline = Date.now() + REPLY_VOICES_BUDGET_MS;
+async function addVoices(post: RecentPost, comment: ThreadComment, speakers: ReplySpeaker[], heard: Set<string>, said: Said[], deadline: number): Promise<number> {
   let added = 0;
   for (const speaker of voicesAfter(speakers, heard)) {
     if (Date.now() > deadline) break;
+    const movedOn = await prisma.comment.count({ where: { postId: post.id, userId: comment.userId, createdAt: { gt: comment.createdAt } } }).catch(() => 0);
+    if (movedOn > 0) break;
     const result = await withAgent(speaker.name, () => runCommentReplyBody(speaker, post, comment, said)).catch((err: unknown) => {
       console.error("[reply] voice failed", comment.id, speaker.name, err);
       return { outcome: "failed" as const, body: undefined };
@@ -2801,6 +2809,7 @@ async function answerPersonComment(commentId: string, opts: { voices?: boolean }
 
   let outcome: ClaimOutcome = "failed";
   let tries = before;
+  const voicesUntil = Date.now() + REPLY_VOICES_BUDGET_MS;
   try {
     const post = await loadThreadWith(row.postId, commentId);
     const comment = post?.comments.find((c) => c.id === commentId);
@@ -2828,8 +2837,11 @@ async function answerPersonComment(commentId: string, opts: { voices?: boolean }
       if (outcome !== "dropped") break; // answered — or an outage, which the sweep retries later
       tries++;
     }
-    // The person has their reply. Now anyone else with something of their own to say may add it.
-    if (opts.voices && said.length > 0 && invitesVoices(comment.body)) await addVoices(post, comment, speakers, heard, said);
+    // The person has their reply. Now anyone else with something of their own to say may add it —
+    // unless this is a FAFO thread (its own rules) or the person was talking to another person.
+    const parent = comment.parentId ? post.comments.find((c) => c.id === comment.parentId) : undefined;
+    const open = opensToVoices(comment.body, parent ? parent.userId != null : null);
+    if (opts.voices && said.length > 0 && open && !isFafo(post)) await addVoices(post, comment, speakers, heard, said, voicesUntil);
     return outcome;
   } finally {
     // Unconditional: another run can take a claim over only after REPLY_POLICY.workingMs (5 min),
@@ -3106,13 +3118,21 @@ const DEN_MIN_COMMENT_CHARS = 60;
 /**
  * The Curiosity Den's debate pipeline (rules in lib/denDebate.ts). Separate from the routine
  * knight turn so the Den doesn't compete with family posts: it has its own budget
- * (DEN_COMMENTS_PER_HOUR agent comments an hour in the Den, any path counted), goes to the newest
+ * (DEN_COMMENTS_PER_HOUR agent comments an hour in the Den, any path counted except replies to a
+ * person's comment), goes to the newest
  * post with the least debate, and gives the turn to an agent the topic is relevant to.
  */
 async function runDenDebate(denSpaceId: string): Promise<void> {
   const now = Date.now();
   const lastHour = await prisma.comment.findMany({
-    where: { userId: null, createdAt: { gte: new Date(now - 60 * 60 * 1000) }, post: { spaceId: denSpaceId } },
+    // Replies to a person's comment are not debate among agents and don't use the budget up —
+    // otherwise one comment from a person would silence the Den's own debate for an hour.
+    where: {
+      userId: null,
+      createdAt: { gte: new Date(now - 60 * 60 * 1000) },
+      post: { spaceId: denSpaceId },
+      NOT: { parent: { userId: { not: null } } },
+    },
     select: { createdAt: true },
   });
   if (!denBudgetAllows(lastHour.map((c) => c.createdAt), now)) return;

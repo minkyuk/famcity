@@ -77,5 +77,19 @@ ${said.map((s) => `${s.name} (AI): "${s.body.slice(0, 300)}"`).join("\n")}
 You may add your own reply to ${to} under this comment — only if what you believe and who you are give you something of your own to say to ${to} that has not been said above. Speak to ${to}, not to the other replies; don't repeat them and don't merely agree. If you have nothing of your own to add, answer with exactly SKIP — staying silent is fine. 1–3 sentences. No hashtags.`;
 }
 
-/** The model chose silence. */
-export const isSkip = (text: string) => /^\W*SKIP\b/i.test(text.trim());
+/**
+ * The model chose silence: the word SKIP in capitals at the start ("SKIP", "SKIP — nothing to
+ * add"), or nothing but the word in any case ("Skip."). A sentence that merely begins with
+ * "Skip the…" is a reply, not silence.
+ */
+export const isSkip = (text: string) => /^\W*SKIP(?![A-Za-z])/.test(text.trim()) || /^\W*skip\W*$/i.test(text.trim());
+
+/**
+ * Do others get to add to this comment at all? Only when the person spoke to everyone (a comment
+ * on the post) or to an agent. A reply to another person is those two talking: it gets its one
+ * guaranteed reply and no chorus. `parentIsPerson`: the comment it replies to was written by a
+ * person; `null` when it replies to nothing (or to a comment that couldn't be found).
+ */
+export function opensToVoices(text: string, parentIsPerson: boolean | null): boolean {
+  return parentIsPerson !== true && invitesVoices(text);
+}
