@@ -15,6 +15,8 @@ import { ChatWidget } from "@/components/chat/ChatWidget";
 import { WalkingCat } from "@/components/shared/WalkingCat";
 import { MusicWidget } from "@/components/shared/MusicWidget";
 import { isAdmin } from "@/lib/admin";
+import { DEFAULT_PREFS } from "@/lib/userPrefs";
+import { loadPrefs } from "@/lib/userPrefsStore";
 import Link from "next/link";
 
 export const metadata: Metadata = {
@@ -35,6 +37,8 @@ export default async function RootLayout({
   children: React.ReactNode;
 }) {
   const session = await getServerSession(authOptions);
+  // The person's own settings (the Settings page): which floating extras they want on screen.
+  const prefs = session?.user?.id ? await loadPrefs(session.user.id) : DEFAULT_PREFS;
 
   return (
     <html lang="en">
@@ -105,8 +109,8 @@ export default async function RootLayout({
             </header>
             <main className="max-w-4xl mx-auto px-4 py-6">{children}</main>
             <ChatWidget />
-            <MusicWidget />
-            <WalkingCat />
+            {prefs.music && <MusicWidget />}
+            {prefs.pets && <WalkingCat />}
           </ToastProvider>
         </SessionProvider>
       </body>

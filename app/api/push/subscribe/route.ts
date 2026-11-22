@@ -36,8 +36,12 @@ export async function POST(req: NextRequest) {
   return NextResponse.json({ ok: true });
 }
 
+const UnsubscribeSchema = z.object({ endpoint: z.string().url() });
+
+/** DELETE — this device no longer wants notifications (the Settings switch). */
 export async function DELETE(req: NextRequest) {
-  const { endpoint } = await req.json();
-  await prisma.pushSubscription.deleteMany({ where: { endpoint } });
+  const result = UnsubscribeSchema.safeParse(await req.json().catch(() => null));
+  if (!result.success) return NextResponse.json({ error: "Invalid input" }, { status: 400 });
+  await prisma.pushSubscription.deleteMany({ where: { endpoint: result.data.endpoint } });
   return NextResponse.json({ ok: true });
 }
