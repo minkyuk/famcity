@@ -7,6 +7,8 @@ import { useToast } from "@/components/shared/Toast";
 import type { Comment } from "@prisma/client";
 import { getAgentRank } from "@/lib/agents";
 import { useTranslate } from "@/components/shared/useTranslate";
+import { ReplyComposer } from "./ReplyComposer";
+import { rowsFor } from "./textareaRows";
 
 function linkify(text: string): React.ReactNode {
   const re = /https?:\/\/[^\s)>\]]+/g;
@@ -24,9 +26,6 @@ function linkify(text: string): React.ReactNode {
 }
 
 const isKorean = (t: string) => (t.match(/[\uAC00-\uD7A3]/g) ?? []).length / Math.max(t.replace(/\s/g, "").length, 1) > 0.3;
-
-/** Rows for a growing textarea: one per line, between `min` and `max`. */
-const rowsFor = (text: string, min: number, max: number) => Math.min(max, Math.max(min, text.split("\n").length));
 
 interface CommentThreadProps {
   postId: string;
@@ -82,7 +81,11 @@ interface CommentRowProps {
   currentUserId: string;
   isAdmin: boolean;
   likedIds: Set<string>;
-  onReply: (parentId: string, parentAuthor: string) => void;
+  /** The comment whose reply box is open (at most one in the thread). */
+  replyingToId: string | null;
+  onReply: (commentId: string) => void;
+  onCancelReply: () => void;
+  onSubmitReply: (parentId: string, text: string) => Promise<boolean>;
   onDelete: (id: string) => void;
   onEdit: (id: string, body: string) => void;
   editingId: string | null;
@@ -94,7 +97,7 @@ interface CommentRowProps {
 
 function CommentRow({
   c, depth, replies, allComments, currentUserId, isAdmin, likedIds,
-  onReply, onDelete, onEdit, editingId, editBody, setEditBody, saveEdit, cancelEdit,
+  replyingToId, onReply, onCancelReply, onSubmitReply, onDelete, onEdit, editingId, editBody, setEditBody, saveEdit, cancelEdit,
 }: CommentRowProps) {
   const isOwn = c.userId === currentUserId;
   const canDelete = isOwn || isAdmin;
@@ -182,8 +185,8 @@ function CommentRow({
                   </button>
                 )}
                 <button
-                  onClick={() => onReply(c.id, c.authorName)}
-                  className="text-[10px] text-gray-400 hover:text-orange-500 transition-colors"
+                  onClick={() => onReply(c.id)}
+                  className={`text-[10px] transition-colors ${replyingToId === c.id ? "text-orange-500" : "text-gray-400 hover:text-orange-500"}`}
                 >
                   ↩ Reply
                 </button>
@@ -218,7 +221,10 @@ function CommentRow({
               currentUserId={currentUserId}
               isAdmin={isAdmin}
               likedIds={likedIds}
+              replyingToId={replyingToId}
               onReply={onReply}
+              onCancelReply={onCancelReply}
+              onSubmitReply={onSubmitReply}
               onDelete={onDelete}
               onEdit={onEdit}
               editingId={editingId}
@@ -228,6 +234,13 @@ function CommentRow({
               cancelEdit={cancelEdit}
             />
           ))}
+        </div>
+      )}
+
+      {/* The reply box opens here, under this comment and its replies — not at the top of the thread */}
+      {replyingToId === c.id && (
+        <div className={`mt-2 border-l border-gray-100 pl-2 ${depth === 0 ? "ml-3" : ""}`}>
+          <ReplyComposer author={c.authorName} onSubmit={(text) => onSubmitReply(c.id, text)} onCancel={onCancelReply} />
         </div>
       )}
     </div>
@@ -241,7 +254,7 @@ export function CommentThread({ postId, initialComments, currentUserId, currentU
   const [submitting, setSubmitting] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editBody, setEditBody] = useState("");
-  const [replyTo, setReplyTo] = useState<{ id: string; author: string } | null>(null);
+  const [replyingToId, setReplyingToId] = useState<string | null>(null);
   const [likedIds, setLikedIds] = useState<Set<string>>(new Set());
   const { showToast } = useToast();
 
@@ -254,41 +267,48 @@ export function CommentThread({ postId, initialComments, currentUserId, currentU
     } catch { /* ignore */ }
   };
 
-  const submit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!body.trim()) return;
-    setSubmitting(true);
+  /** Saves a comment (a reply when `parentId` is given) and wakes the agents. True when saved. */
+  const sendComment = async (text: string, parentId?: string): Promise<boolean> => {
     try {
       const res = await fetch(`/api/posts/${postId}/comments`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          body: body.trim(),
-          ...(replyTo ? { parentId: replyTo.id } : {}),
-        }),
+        body: JSON.stringify({ body: text, ...(parentId ? { parentId } : {}) }),
       });
       if (!res.ok) throw new Error();
-      const comment = await res.json();
+      const comment: Comment = await res.json();
       setComments((prev) => [...prev, comment]);
-      setBody("");
-      setReplyTo(null);
       if (!open) { setOpen(true); fetchLiked(); }
       // The list scrolls inside its own box — bring the new comment into view once it has rendered.
       setTimeout(() => {
         document.getElementById(`comment-${comment.id}`)?.scrollIntoView({ block: "nearest", behavior: "smooth" });
       }, 80);
-      // Fire-and-forget: trigger agents to respond immediately
+      // Fire-and-forget: an agent answers this comment, under it (and a space's own agents may join in)
       if (spaceId) fetch(`/api/spaces/${spaceId}/trigger`, { method: "POST" }).catch(() => {});
       fetch("/api/agents/discuss", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ triggerPostId: postId }),
+        body: JSON.stringify({ triggerPostId: postId, triggerCommentId: comment.id }),
       }).catch(() => {});
+      return true;
     } catch {
       showToast("Failed to post comment", "error");
-    } finally {
-      setSubmitting(false);
+      return false;
     }
+  };
+
+  const submit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!body.trim()) return;
+    setSubmitting(true);
+    if (await sendComment(body.trim())) setBody("");
+    setSubmitting(false);
+  };
+
+  const submitReply = async (parentId: string, text: string): Promise<boolean> => {
+    const ok = await sendComment(text, parentId);
+    if (ok) setReplyingToId(null);
+    return ok;
   };
 
   const saveEdit = async (id: string) => {
@@ -318,25 +338,14 @@ export function CommentThread({ postId, initialComments, currentUserId, currentU
     }
   };
 
-  const handleReply = (parentId: string, parentAuthor: string) => {
-    setReplyTo({ id: parentId, author: parentAuthor });
-    // Focus the input shortly after render
-    setTimeout(() => {
-      document.getElementById(`reply-input-${postId}`)?.focus();
-    }, 50);
-  };
+  // Reply opens a box under that comment; pressing Reply again closes it.
+  const handleReply = (commentId: string) => setReplyingToId((current) => (current === commentId ? null : commentId));
 
   const topLevel = comments.filter((c) => !c.parentId);
 
   return (
     <div className="mt-2 min-w-0 flex flex-col gap-2">
-      {/* Composer sits directly under the post — always visible, no scrolling past comments to reach it */}
-      {replyTo && (
-        <div className="flex items-center gap-2 px-1">
-          <span className="text-xs text-gray-500">↩ Replying to <span className="font-semibold text-gray-700">{replyTo.author}</span></span>
-          <button onClick={() => setReplyTo(null)} className="text-[10px] text-gray-400 hover:text-gray-600">✕</button>
-        </div>
-      )}
+      {/* New comments: the composer sits directly under the post. Replies open under the comment itself. */}
       <form onSubmit={submit} className="flex items-end gap-2">
         {/* Enter adds a new line; only the Post button (or Ctrl/⌘+Enter) sends */}
         <textarea
@@ -348,7 +357,7 @@ export function CommentThread({ postId, initialComments, currentUserId, currentU
           }}
           rows={rowsFor(body, 1, 6)}
           maxLength={1000}
-          placeholder={replyTo ? `Reply to ${replyTo.author}…` : "Write a comment…"}
+          placeholder="Write a comment…"
           className="flex-1 min-w-0 text-sm border border-gray-200 rounded-xl px-3 py-2 resize-none focus:outline-none focus:ring-2 focus:ring-orange-200"
         />
         <button
@@ -382,7 +391,10 @@ export function CommentThread({ postId, initialComments, currentUserId, currentU
               currentUserId={currentUserId}
               isAdmin={!!isAdmin}
               likedIds={likedIds}
+              replyingToId={replyingToId}
               onReply={handleReply}
+              onCancelReply={() => setReplyingToId(null)}
+              onSubmitReply={submitReply}
               onDelete={deleteComment}
               onEdit={(id, body) => { setEditingId(id); setEditBody(body); }}
               editingId={editingId}

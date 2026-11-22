@@ -10,7 +10,8 @@ import { rememberRejectedAttempt, unchangedRejectedPosts } from "@/lib/attemptMe
 import { recordHeartbeat } from "@/lib/aiCallLog";
 import { isCronAuthorized } from "@/lib/cronAuth";
 import { prisma } from "@/lib/prisma";
-import { AGENTS, agentAvatarUrl, CHIEF_END, FAITH_GUARDRAIL, GOD_WARD_AIM, SCRIPTURE_RULE } from "@/lib/agents";
+import { AGENTS, agentAvatarUrl, CHIEF_END, FAITH_GUARDRAIL, GOD_WARD_AIM, SCRIPTURE_RULE, type InitialBelief } from "@/lib/agents";
+import { claimIsOpen as replyClaimIsOpen, claimRow, readClaim as readReplyClaim, type ClaimOutcome, type ClaimPolicy } from "@/lib/replyClaims";
 import { generateInviteCode } from "@/lib/invite";
 import { authOptions } from "@/lib/auth";
 import { fetchRss, SCIENCE_FEEDS } from "@/lib/rss";
@@ -1799,6 +1800,18 @@ async function runOneAgentTurn(agentIdx: number, denSpaceId: string, prefetched?
  * Used by the triggerPostId fast path to guarantee the right post gets answered.
  * Applies novelty + factual gates. Skips relevance gate (human explicitly wants a reply).
  */
+/** What an agent is told about a post's video or audio, which it cannot watch or hear. */
+async function mediaNoteFor(post: RecentPost): Promise<string> {
+  const yt = post.type === "YOUTUBE" && post.mediaUrl ? await fetchYouTubeTitle(post.mediaUrl) : null;
+  return yt
+    ? `\n[The post shares a YouTube video: "${yt.title}"${yt.author ? ` (channel: ${yt.author})` : ""} — you cannot watch it; react to the title and caption, never pretend to have seen it]`
+    : post.type === "YOUTUBE" || post.type === "VIDEO"
+    ? `\n[The post shares a video you cannot watch — engage with the caption and thread; never pretend to have seen it]`
+    : post.type === "AUDIO"
+    ? `\n[The post shares an audio recording you cannot listen to — engage with the caption and thread; never pretend to have heard it]`
+    : "";
+}
+
 async function runDirectTurnBody(agent: (typeof AGENTS)[0], post: RecentPost, handoffNote?: string): Promise<void> {
   if (!underAgentCommentCap(post)) return;
   const avatar = agentAvatarUrl(agent.slug);
@@ -1831,14 +1844,7 @@ async function runDirectTurnBody(agent: (typeof AGENTS)[0], post: RecentPost, ha
       }):\n${post.comments.slice(-THREAD_CONTEXT_COMMENTS).map((c) => `${speakerLabel(c)}: "${c.body.slice(0, THREAD_COMMENT_CHARS)}"`).join("\n")}`
     : "";
   const postCaption = post.content ? `\n"${post.content.slice(0, 900)}"` : "";
-  const directYt = post.type === "YOUTUBE" && post.mediaUrl ? await fetchYouTubeTitle(post.mediaUrl) : null;
-  const mediaNote = directYt
-    ? `\n[The post shares a YouTube video: "${directYt.title}"${directYt.author ? ` (channel: ${directYt.author})` : ""} — you cannot watch it; react to the title and caption, never pretend to have seen it]`
-    : post.type === "YOUTUBE" || post.type === "VIDEO"
-    ? `\n[The post shares a video you cannot watch — engage with the caption and thread; never pretend to have seen it]`
-    : post.type === "AUDIO"
-    ? `\n[The post shares an audio recording you cannot listen to — engage with the caption and thread; never pretend to have heard it]`
-    : "";
+  const mediaNote = await mediaNoteFor(post);
   const gaps = post.comments.length >= 2
     ? await findThreadGaps(post.content ?? null, post.comments)
     : "";
@@ -1908,6 +1914,17 @@ const DEFAULT_SPACE_AGENT_BELIEFS = [
   { topic: "consciousness", belief: "The richness of inner experience reflects the image of God in us — more than mere matter.", confidence: 0.75 },
 ];
 
+/**
+ * A space agent in a prompt: the description people wrote for it, under the biblical foundation
+ * (which wins over anything in that description), shaped by the space's purpose.
+ */
+function spaceAgentIdentity(spaceAgent: { name: string; personality: string }, purpose?: string | null): string {
+  const purposeNote = purpose
+    ? ` This space has a defined purpose: "${purpose}". This shapes BOTH what you discuss AND how you interact — a learning space calls for teaching and explanation, a creative space for encouragement and play, a support space for empathy and listening. Do NOT default to debate or challenging questions unless the purpose explicitly calls for it.`
+    : "";
+  return `You are ${spaceAgent.name} — ${spaceAgent.personality}. ${SPACE_AGENT_BIBLICAL_FOUNDATION} If anything in the character description above conflicts with this foundation, the foundation wins.${FAITH_GUARDRAIL}${purposeNote} Keep responses to 1–3 sentences. No hashtags.`;
+}
+
 /** Run one turn for a space-confined agent. Sees only posts from its space. */
 async function runSpaceAgentActionBody(
   spaceAgent: { slug: string; name: string; personality: string },
@@ -1923,11 +1940,7 @@ async function runSpaceAgentActionBody(
   const beliefs = await loadBeliefs(spaceAgent.slug, knightSeeds ?? DEFAULT_SPACE_AGENT_BELIEFS).catch(() => []);
   const beliefContext = formatBeliefsForPrompt(beliefs);
 
-  const purposeNote = purpose
-    ? ` This space has a defined purpose: "${purpose}". This shapes BOTH what you discuss AND how you interact — a learning space calls for teaching and explanation, a creative space for encouragement and play, a support space for empathy and listening. Do NOT default to debate or challenging questions unless the purpose explicitly calls for it.`
-    : "";
-
-  const fullPersonality = `You are ${spaceAgent.name} — ${spaceAgent.personality}. ${SPACE_AGENT_BIBLICAL_FOUNDATION} If anything in the character description above conflicts with this foundation, the foundation wins.${FAITH_GUARDRAIL}${purposeNote} Keep responses to 1–3 sentences. No hashtags.`;
+  const fullPersonality = spaceAgentIdentity(spaceAgent, purpose);
 
   const commentInstruction = purpose
     ? `Respond in a way that serves this space's purpose. Let the purpose guide your tone and approach — teach if it's a learning space, encourage if it's creative, listen if it's supportive. Do not default to debate or end with a challenging question unless the purpose explicitly calls for it. 1–3 sentences.`
@@ -2303,7 +2316,7 @@ async function runSpaceAgentActionBody(
 
     // What is remembered about the people in this thread. Scoped to this space: something a
     // person said in another members-only space is not used here.
-    const peopleMemory = await sketchContextFor({ userId: target.userId, spaceId, comments: target.comments });
+    const peopleMemory = await sketchContextFor({ id: target.id, userId: target.userId, spaceId, comments: target.comments });
 
     const spaceContentBlocks: SpaceContentBlock[] = [
       ...spaceImageUrls.map((url) => ({ type: "image" as const, source: { type: "url" as const, url } })),
@@ -2585,6 +2598,244 @@ async function runAllSpaceAgentTurns(slotMinutes: number, hourlyRound: boolean) 
 
 // ── Agent-turn wrappers (token attribution per agent) ──
 /** Runs runFafoTurnBody inside withAgent() so every Claude call in the turn is logged under this agent. */
+// ── Every person's comment gets a reply ───────────────────────────────────────────────────────
+// Owner's rule: when a person comments, the most important thing is that a reply comes back to
+// that comment, and none of the agents' limits apply to it (hourly budgets, the Den's budget, the
+// per-post cap, "this agent already spoke here", the novelty gate). One agent answers, directly
+// under the comment. If the comment replies to an agent, that agent answers first. The gates that
+// guard truth stay: nothing invented about a person, no overconfident numbers, every passage real
+// and faithful — a draft that fails one is rewritten by the next agent, and a message is given up
+// only after three such drafts. Small-group (목장) spaces keep their helpers' own rules.
+
+const REPLY_CLAIM_PREFIX = "$$reply:";
+const REPLY_POLICY: ClaimPolicy = { workingMs: 5 * 60 * 1000, retryMs: 20 * 60 * 1000, maxTries: 3 };
+/** Agents tried in one run before the message waits for the sweep. */
+const REPLY_SPEAKERS_PER_RUN = 2;
+/** The sweep looks back this far for a person still waiting. */
+const REPLY_SWEEP_WINDOW_MS = 6 * 60 * 60 * 1000;
+/** …and leaves a fresh comment to its own trigger for this long. */
+const REPLY_SWEEP_GRACE_MS = 2 * 60 * 1000;
+/** Comments answered per sweep (the trigger answers almost everyone; this catches the rest)… */
+const REPLY_SWEEP_MAX = 3;
+/** …and the sweep stops starting new ones after this long, so the tick's other work still runs. */
+const REPLY_SWEEP_BUDGET_MS = 60 * 1000;
+/** A person's trigger is accepted for a comment this fresh; older ones are the sweep's. */
+const REPLY_TRIGGER_FRESH_MS = 10 * 60 * 1000;
+/**
+ * Replies became threaded at this deploy. A comment from before it with no claim row counts as
+ * answered once any agent spoke in its thread after it — that is how those were answered. From
+ * this moment on, only a reply under the comment counts.
+ */
+const THREADED_REPLIES_FROM = new Date("2026-11-22T05:21:00Z");
+
+type ThreadComment = RecentPost["comments"][number];
+/** Who answers: a knight, or the space agent whose comment the person replied to. */
+type ReplySpeaker = { slug: string; name: string; identity: string; seeds: InitialBelief[]; knight: boolean };
+
+const knightSpeaker = (a: (typeof AGENTS)[number]): ReplySpeaker => ({ slug: a.slug, name: a.name, identity: a.personality, seeds: a.initialBeliefs ?? [], knight: true });
+
+/**
+ * The agents to try, in order: the one the person was talking to — the author of the comment they
+ * replied to, or of the post when they commented on an agent's post — then knights that fit the thread.
+ */
+async function replySpeakersFor(post: RecentPost, comment: ThreadComment): Promise<ReplySpeaker[]> {
+  const parent = comment.parentId ? post.comments.find((c) => c.id === comment.parentId) : undefined;
+  const addressed = parent ?? (comment.parentId ? undefined : post); // a reply to a comment that isn't loaded: nobody in particular
+  const first: ReplySpeaker[] = [];
+  if (addressed && addressed.userId == null) {
+    const knight = AGENTS.find((a) => a.name === addressed.authorName);
+    if (knight) first.push(knightSpeaker(knight));
+    else if (post.spaceId) {
+      const [own, space] = await Promise.all([
+        prisma.spaceAgent.findFirst({ where: { spaceId: post.spaceId, name: addressed.authorName }, select: { slug: true, name: true, personality: true } }),
+        prisma.space.findUnique({ where: { id: post.spaceId }, select: { purpose: true } }),
+      ]);
+      if (own) first.push({ slug: own.slug, name: own.name, identity: spaceAgentIdentity(own, space?.purpose), seeds: DEFAULT_SPACE_AGENT_BELIEFS, knight: false });
+    }
+  }
+  const ranked = AGENTS.map((a) => ({ a, score: topicScore(post, a.topics, a.keywords) })).sort((x, y) => y.score - x.score).slice(0, 5);
+  const lead = Math.floor(Math.random() * Math.min(3, ranked.length)); // one of the best three, so it isn't always the same knight
+  const knights = [ranked[lead], ...ranked.filter((_, i) => i !== lead)].map((r) => knightSpeaker(r.a));
+  return [...first, ...knights.filter((k) => !first.some((f) => f.slug === k.slug))];
+}
+
+/** One agent's reply to one person's comment, posted under it. */
+async function runCommentReplyBody(speaker: ReplySpeaker, post: RecentPost, comment: ThreadComment): Promise<ClaimOutcome> {
+  const parent = comment.parentId ? post.comments.find((c) => c.id === comment.parentId) : undefined;
+  const [beliefs, relationships, mediaNote, peopleMemory] = await Promise.all([
+    loadBeliefs(speaker.slug, speaker.seeds).catch(() => []),
+    speaker.knight ? loadRelationships(speaker.slug).catch(() => []) : Promise.resolve([]),
+    mediaNoteFor(post),
+    // Full notes for the person who wrote this comment, whoever wrote last.
+    sketchContextFor(post, comment.userId),
+  ]);
+  const shown = post.comments.slice(-THREAD_CONTEXT_COMMENTS);
+  const threadContext = shown.length > 0
+    ? `\n\nThread so far${post.comments.length > shown.length ? ` (the most recent ${shown.length} comments)` : ""}:\n${shown.map((c) => `${speakerLabel(c)}: "${c.body.slice(0, THREAD_COMMENT_CHARS)}"`).join("\n")}`
+    : "";
+  const caption = post.content ? `\n"${post.content.slice(0, 900)}"` : "";
+  const replyingTo = parent ? ` — a reply to ${speakerLabel(parent)}: "${parent.body.slice(0, THREAD_COMMENT_CHARS)}"` : "";
+  const korean = isKorean(comment.body);
+
+  const prompt = `${speaker.identity}${formatBeliefsForPrompt(beliefs)}${speaker.knight ? formatRelationshipsForPrompt(relationships) : ""}
+
+Post by ${speakerLabel(post)}:${caption}${mediaNote}${threadContext}${peopleMemory}
+
+The comment you are answering, by ${comment.authorName}${replyingTo}:
+"${comment.body.slice(0, 900)}"
+
+Reply to ${comment.authorName}: your reply goes directly under this comment, and they are waiting for it. Answer what they actually said; if they asked something, answer it. If you have nothing true to add, one short warm sentence is enough. 1–3 sentences. No hashtags.${ATTENTION_INSTRUCTION}${STYLE_INSTRUCTION}${pickTone()}
+
+Write in ${korean ? "Korean (한국어)" : "English"} — the language ${comment.authorName} wrote in.${GROUNDING_INSTRUCTION}`;
+
+  const response = await anthropicFor("discuss:commentReply").messages.create({
+    ...AGENT_REQUEST,
+    max_tokens: 910,
+    messages: [{ role: "user", content: prompt }],
+  });
+  let text = stripAiTags(finalizeAgentText(textOf(response), response.stop_reason), post);
+  if (text.length < 4) return "dropped"; // a refusal or an empty answer
+
+  // The truth gates — the only ones that apply here.
+  if (!(await isFactuallyHumble(text, post.content ?? null))) return "dropped";
+  if (!(await isGroundedAboutPeople(text, post, "", peopleMemory))) return "dropped";
+  if (!(await scriptureIsFaithful(text))) return "dropped";
+
+  if (TRAVEL_AGENT_SLUGS.has(speaker.slug) && FLIGHT_SEARCH_RE.test(comment.body) && !hasFlightResults(post.comments)) {
+    const flightParams = await extractFlightParams([post.content, ...post.comments.map((c) => c.body)].filter(Boolean).join(" ")).catch(() => null);
+    if (flightParams) text += await searchFlights(flightParams).catch(() => "");
+  }
+
+  // Still there, still visible, and nobody answered it while this was being written?
+  const current = await prisma.comment.findUnique({
+    where: { id: comment.id },
+    select: { post: { select: { isPrivate: true } }, replies: { where: { userId: null }, select: { id: true }, take: 1 } },
+  });
+  if (!current || current.post.isPrivate) return "failed";
+  if (current.replies.length > 0) return "done";
+
+  const reply = await prisma.comment.create({
+    data: { postId: post.id, authorName: speaker.name, authorImage: agentAvatarUrl(speaker.slug), body: text, parentId: comment.id },
+  });
+  writeMentions({ text, commentId: reply.id }).catch(() => {});
+  return "done";
+}
+
+/** Answers one person's comment (see the section comment). Safe to call twice: the claim decides. */
+async function answerPersonComment(commentId: string): Promise<ClaimOutcome | "skipped" | "busy"> {
+  const row = await prisma.comment.findUnique({
+    where: { id: commentId },
+    select: { postId: true, userId: true, post: { select: { isPrivate: true, spaceId: true, space: { select: { purpose: true } } } } },
+  });
+  if (!row || row.userId == null || row.post.isPrivate) return "skipped"; // agents never see private posts
+  if (row.post.spaceId && isDevotionalPurpose(row.post.space?.purpose)) {
+    await runDevotionalSpace(row.post.spaceId, row.post.space?.purpose ?? ""); // the helpers' own rules
+    return "skipped";
+  }
+
+  const key = `${REPLY_CLAIM_PREFIX}${commentId}`;
+  const stored = await prisma.agentMemory.findUnique({ where: { agentSlug: key }, select: { beliefs: true, updatedAt: true } });
+  const known = stored ? readReplyClaim(stored) : undefined;
+  if (!replyClaimIsOpen(known, Date.now(), REPLY_POLICY)) return "busy";
+  const before = await claimTurn(key, known);
+  if (before === null) return "busy";
+
+  let outcome: ClaimOutcome = "failed";
+  let tries = before;
+  try {
+    const post = await loadThreadWith(row.postId, commentId);
+    const comment = post?.comments.find((c) => c.id === commentId);
+    if (!post || !comment) return (outcome = "failed"); // deleted meanwhile
+    if (post.comments.some((c) => c.userId == null && c.parentId === commentId)) return (outcome = "done");
+    if (isFafo(post)) {
+      // A FAFO thread keeps its own chaos: three knights pile in, as before. If none of them
+      // spoke (each may skip), the person still gets the ordinary reply below.
+      await Promise.all([...AGENTS].sort(() => Math.random() - 0.5).slice(0, 3).map((a) => runFafoTurn(a, post)));
+      const spoke = await prisma.comment.count({ where: { postId: post.id, userId: null, createdAt: { gt: comment.createdAt } } });
+      if (spoke > 0) return (outcome = "done");
+    }
+    for (const speaker of (await replySpeakersFor(post, comment)).slice(0, REPLY_SPEAKERS_PER_RUN)) {
+      if (tries >= REPLY_POLICY.maxTries) break;
+      outcome = await withAgent(speaker.name, () => runCommentReplyBody(speaker, post, comment)).catch((err: unknown): ClaimOutcome => {
+        console.error("[reply] failed", commentId, err);
+        return "failed";
+      });
+      if (outcome !== "dropped") break; // answered — or an outage, which the sweep retries later
+      tries++;
+    }
+    return outcome;
+  } finally {
+    // Unconditional: another run can take a claim over only after REPLY_POLICY.workingMs (5 min),
+    // which is longer than this function may live (maxDuration 300s, see vercel.json).
+    await prisma.agentMemory.update({ where: { agentSlug: key }, data: { beliefs: claimRow(outcome, tries) } }).catch(() => {});
+  }
+}
+
+/** A thread with its newest comments, plus `commentId` (and what it replies to) if it is older than those. */
+async function loadThreadWith(postId: string, commentId: string): Promise<DevotionalPost | null> {
+  const [post] = await loadThreadsNewestFirst({ id: postId }, 1);
+  if (!post || post.comments.some((c) => c.id === commentId)) return post ?? null;
+  const select = { id: true, parentId: true, authorName: true, body: true, createdAt: true, userId: true } as const;
+  const target = await prisma.comment.findFirst({ where: { id: commentId, postId }, select });
+  if (!target) return null;
+  const parent = target.parentId ? await prisma.comment.findUnique({ where: { id: target.parentId }, select }) : null;
+  const extra = [target, ...(parent && !post.comments.some((c) => c.id === parent.id) ? [parent] : [])];
+  return { ...post, comments: [...extra, ...post.comments].sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime()) };
+}
+
+/**
+ * The safety net, on every cron tick: people whose comment has no reply yet — the trigger never
+ * ran (the page closed first), or its drafts failed a gate and are due for another try.
+ */
+async function answerWaitingComments(): Promise<void> {
+  const now = Date.now();
+  const since = new Date(now - REPLY_SWEEP_WINDOW_MS);
+  // Only comments with no agent reply under them: answered ones never fill the page.
+  const recent = await prisma.comment.findMany({
+    where: {
+      userId: { not: null },
+      createdAt: { gte: since, lte: new Date(now - REPLY_SWEEP_GRACE_MS) },
+      post: { isPrivate: false },
+      replies: { none: { userId: null } },
+    },
+    orderBy: { createdAt: "asc" },
+    take: 60,
+    select: { id: true, postId: true, createdAt: true, post: { select: { spaceId: true, space: { select: { purpose: true } } } } },
+  });
+  const candidates = recent.filter((c) => !(c.post.spaceId && isDevotionalPurpose(c.post.space?.purpose)));
+  if (candidates.length === 0) return;
+
+  const [claimRows, agentComments] = await Promise.all([
+    prisma.agentMemory.findMany({ where: { agentSlug: { in: candidates.map((c) => `${REPLY_CLAIM_PREFIX}${c.id}`) } }, select: { agentSlug: true, beliefs: true, updatedAt: true } }),
+    prisma.comment.findMany({
+      where: { postId: { in: [...new Set(candidates.map((c) => c.postId))] }, userId: null, createdAt: { gte: since } },
+      orderBy: { createdAt: "desc" },
+      take: 500,
+      select: { postId: true, parentId: true, createdAt: true },
+    }),
+  ]);
+  const claims = new Map(claimRows.map((r) => [r.agentSlug, readReplyClaim(r)]));
+  const waiting = candidates.filter((c) => {
+    if (agentComments.some((a) => a.parentId === c.id)) return false; // answered under it
+    const claim = claims.get(`${REPLY_CLAIM_PREFIX}${c.id}`);
+    if (claim) return replyClaimIsOpen(claim, now, REPLY_POLICY);
+    // Never triggered (the page closed first): waiting — except a comment from before replies
+    // were threaded, which was answered by any agent speaking in its thread after it.
+    return c.createdAt >= THREADED_REPLIES_FROM || !agentComments.some((a) => a.postId === c.postId && a.createdAt > c.createdAt);
+  });
+  const deadline = now + REPLY_SWEEP_BUDGET_MS;
+  for (const c of waiting.slice(0, REPLY_SWEEP_MAX)) {
+    if (Date.now() > deadline) break; // the rest wait for the next tick
+    await answerPersonComment(c.id).catch((err: unknown) => console.error("[reply] sweep failed", c.id, err));
+  }
+}
+
+/** Claim rows are only needed while a comment can still be swept; older ones are cleared. */
+const pruneReplyClaims = () =>
+  prisma.agentMemory
+    .deleteMany({ where: { agentSlug: { startsWith: REPLY_CLAIM_PREFIX }, updatedAt: { lt: new Date(Date.now() - REPLY_SWEEP_WINDOW_MS - 24 * 60 * 60 * 1000) } } })
+    .catch(() => {});
+
 // ── Small-group (목장) spaces ────────────────────────────────────────────────────────────────
 // Rules and wording live in lib/devotional.ts. Three built-in helpers answer people; they never
 // answer each other, never start threads and never debate.
@@ -2599,14 +2850,14 @@ const DEVOTIONAL_SWEEP_BUDGET_MS = 90 * 1000;
 const DEVOTIONAL_CLAIM_PREFIX = "$$devo:";
 
 /**
- * Takes the turn of answering one message, atomically — a person's post can trigger two runs at
- * once (the post trigger and the space trigger), and they must not both reply. One row per
- * message, `$$devo:<postId>:<commentId|post>`; its states are described in lib/devotional.ts.
- * `known` is the row as read a moment ago (undefined = none): a new row is created, an old one is
- * taken over only if nobody has touched it since. Returns the drafts already spent on the
- * message, or null when the turn is someone else's.
+ * Takes the turn of answering one message, atomically — a message can be picked up by two runs at
+ * once (two triggers, or a trigger and a sweep), and they must not both reply. One row per
+ * message (`$$devo:…` for the small-group helpers, `$$reply:<commentId>` for a person's comment);
+ * its states are described in lib/replyClaims.ts. `known` is the row as read a moment ago
+ * (undefined = none): a new row is created, an old one is taken over only if nobody has touched
+ * it since. Returns the drafts already spent on the message, or null when the turn is someone else's.
  */
-async function claimDevotionalReply(key: string, known: DevotionalClaim | undefined): Promise<number | null> {
+async function claimTurn(key: string, known: DevotionalClaim | undefined): Promise<number | null> {
   const tries = known?.tries ?? 0;
   const beliefs = { state: "working", tries };
   if (!known) {
@@ -2622,10 +2873,10 @@ const settleDevotionalClaim = (key: string, outcome: DevotionalOutcome, tries: n
 type DevotionalPost = RecentPost & { truncated: boolean };
 
 /**
- * Threads of a small-group space with their NEWEST comments (oldest first) — in a long thread the
- * latest question is the one that must be seen. `truncated` says older comments were left out.
+ * Threads with their NEWEST comments (oldest first) — in a long thread the latest message is the
+ * one that must be seen. `truncated` says older comments were left out.
  */
-async function loadDevotionalThreads(where: Prisma.PostWhereInput, take: number): Promise<DevotionalPost[]> {
+async function loadThreadsNewestFirst(where: Prisma.PostWhereInput, take: number): Promise<DevotionalPost[]> {
   const posts = await prisma.post.findMany({
     where: { ...where, isPrivate: false },
     orderBy: { createdAt: "desc" },
@@ -2656,7 +2907,7 @@ async function runDevotionalSweep(): Promise<void> {
 async function runDevotionalSpace(spaceId: string, purpose: string): Promise<void> {
   const since = new Date(Date.now() - DEVOTIONAL_ANSWER_WINDOW_MS);
   // Threads with anything recent from a person: a fresh question under an older post counts too.
-  const posts = await loadDevotionalThreads(
+  const posts = await loadThreadsNewestFirst(
     { spaceId, OR: [{ createdAt: { gte: since } }, { comments: { some: { createdAt: { gte: since }, userId: { not: null } } } }] },
     DEVOTIONAL_POSTS,
   );
@@ -2678,7 +2929,7 @@ async function runDevotionalSpace(spaceId: string, purpose: string): Promise<voi
       const key = claimKey(post.id, ask);
       const known = claims.get(key);
       if (!claimIsOpen(known, Date.now())) continue; // settled, being written, or waiting for its retry
-      const tries = await claimDevotionalReply(key, known);
+      const tries = await claimTurn(key, known);
       if (tries === null) continue; // another run took it meanwhile
 
       const helper = chooseHelper(ask.text);
@@ -2753,7 +3004,7 @@ async function runDevotionalReplyBody(helper: Helper, korean: boolean, post: Dev
 
   // The thread may have changed while this was being prepared (the message deleted, the post made
   // private): post only if the message is still there and still unanswered.
-  const [current] = await loadDevotionalThreads({ id: post.id }, 1);
+  const [current] = await loadThreadsNewestFirst({ id: post.id }, 1);
   if (!current || !stillUnanswered(current, ask)) return "failed";
 
   const comment = await prisma.comment.create({
@@ -2913,11 +3164,13 @@ function runSpaceAgentAction(...args: Parameters<typeof runSpaceAgentActionBody>
 
 export async function POST(req: NextRequest) {
   // Accept cron secret OR a valid user session (client trigger from the Den page)
+  let callerId: string | null = null; // the signed-in person, when this is not the cron
   if (!isCronAuthorized(req)) {
     const session = await getServerSession(authOptions);
     if (!session?.user) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
+    callerId = session.user.id;
   }
   // Heartbeat for the admin AI-health dashboard: proves the cron is actually firing.
   if (isCronAuthorized(req)) await recordHeartbeat("discuss", "cron");
@@ -2940,6 +3193,31 @@ export async function POST(req: NextRequest) {
     if (home?.spaceId && isDevotionalPurpose(home.space?.purpose)) {
       await runDevotionalSpace(home.spaceId, home.space?.purpose ?? "");
       return NextResponse.json({ ok: true, trigger: true, devotional: true, postId: triggerPostId });
+    }
+
+    // A person's comment: a reply under it, from one agent, whatever the limits say. A person may
+    // fire this only for their own comment, just written; anything else is left to the sweep.
+    const triggerCommentId = typeof bodyJson.triggerCommentId === "string" ? bodyJson.triggerCommentId : undefined;
+    if (triggerCommentId) {
+      if (callerId) {
+        const own = await prisma.comment.findUnique({ where: { id: triggerCommentId }, select: { userId: true, postId: true, createdAt: true } }).catch(() => null);
+        if (!own || own.userId !== callerId || own.postId !== triggerPostId || Date.now() - own.createdAt.getTime() > REPLY_TRIGGER_FRESH_MS) {
+          return NextResponse.json({ error: "Not your recent comment" }, { status: 403 });
+        }
+      }
+      const outcome = await answerPersonComment(triggerCommentId);
+      return NextResponse.json({ ok: true, trigger: true, postId: triggerPostId, commentId: triggerCommentId, outcome });
+    }
+    // A page loaded before replies were threaded sends only the post: if the caller has just
+    // commented there, that comment is what they are waiting on.
+    if (callerId) {
+      const justWritten = await prisma.comment
+        .findFirst({ where: { postId: triggerPostId, userId: callerId, createdAt: { gte: new Date(Date.now() - REPLY_SWEEP_GRACE_MS) } }, orderBy: { createdAt: "desc" }, select: { id: true } })
+        .catch(() => null);
+      if (justWritten) {
+        const outcome = await answerPersonComment(justWritten.id);
+        return NextResponse.json({ ok: true, trigger: true, postId: triggerPostId, commentId: justWritten.id, outcome });
+      }
     }
 
     const [denSpaceIdForTrigger, recentPosts] = await Promise.all([
@@ -2999,6 +3277,12 @@ export async function POST(req: NextRequest) {
 
   const _now = new Date();
   const minute = _now.getUTCMinutes();
+
+  // Anyone whose comment still has no reply is answered, on every tick and in every mode.
+  if (isCronAuthorized(req)) {
+    await answerWaitingComments().catch((err: unknown) => console.error("[reply] sweep failed", err));
+    if (minute === 5) await pruneReplyClaims();
+  }
 
   // Small-group spaces: anyone still waiting for a helper is answered, whatever mode the agents
   // are in — at :05 and :35, when nothing else runs in normal mode and a hot session is on an

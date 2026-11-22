@@ -50,9 +50,9 @@ export function SpaceAgentEditPanel({
         <p className="text-sm text-gray-700 leading-relaxed">{personality}</p>
         <button
           onClick={() => setEditing(true)}
-          className="mt-2 text-xs text-gray-400 hover:text-orange-500 transition-colors"
+          className="mt-2 rounded-full border border-gray-200 px-3 py-1 text-xs text-gray-500 hover:border-orange-200 hover:text-orange-500 transition-colors"
         >
-          Edit
+          ✏️ Edit name &amp; personality · 이름·성격 편집
         </button>
       </div>
     );
@@ -71,14 +71,14 @@ export function SpaceAgentEditPanel({
       </div>
       <div className="flex flex-col gap-1.5">
         <label className="text-[11px] text-gray-400">
-          Personality description
-          <span className="ml-1 text-gray-300">{personality.length}/600</span>
+          Personality description · 성격 (add to it or rewrite it)
+          <span className="ml-1 text-gray-300">{personality.length}/1000</span>
         </label>
         <textarea
           value={personality}
           onChange={(e) => setPersonality(e.target.value)}
-          maxLength={600}
-          rows={5}
+          maxLength={1000}
+          rows={6}
           className="border border-gray-200 rounded-xl px-3 py-2 text-sm resize-none focus:outline-none focus:ring-2 focus:ring-orange-200 text-gray-700"
         />
       </div>

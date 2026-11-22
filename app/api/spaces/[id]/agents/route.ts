@@ -2,11 +2,12 @@ import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
+import { AGENT_NAME_MAX, AGENT_PERSONALITY_MAX, agentNameProblem } from "@/lib/spaceAgentNames";
 import { z } from "zod";
 
 const AddAgentSchema = z.object({
-  name: z.string().min(1).max(40),
-  personality: z.string().min(1).max(600),
+  name: z.string().trim().min(1).max(AGENT_NAME_MAX),
+  personality: z.string().trim().min(1).max(AGENT_PERSONALITY_MAX),
 });
 
 export async function POST(
@@ -35,12 +36,15 @@ export async function POST(
   }
 
   // Check space agent limit (max 5)
-  const count = await prisma.spaceAgent.count({ where: { spaceId } });
-  if (count >= 5) {
+  const existing = await prisma.spaceAgent.findMany({ where: { spaceId }, select: { name: true } });
+  if (existing.length >= 5) {
     return NextResponse.json({ error: "Maximum 5 agents per space" }, { status: 400 });
   }
 
   const { name, personality } = result.data;
+  const person = await prisma.user.findFirst({ where: { name: { equals: name, mode: "insensitive" } }, select: { id: true } });
+  const problem = agentNameProblem(name, existing.map((a) => a.name), person !== null);
+  if (problem) return NextResponse.json({ error: problem }, { status: 409 });
   const slug = `sa-${spaceId.slice(0, 8)}-${name.toLowerCase().replace(/[^a-z0-9]/g, "-")}-${Date.now().toString(36)}`;
 
   const agent = await prisma.spaceAgent.create({

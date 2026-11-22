@@ -43,10 +43,12 @@ function confidenceColor(c: number) {
   return "text-gray-400";
 }
 
-function AgentCard({ agent, spaceId, isAdmin, onUpdated, onDeleted }: {
+function AgentCard({ agent, spaceId, isAdmin, canEdit, onUpdated, onDeleted }: {
   agent: AgentData;
   spaceId: string;
   isAdmin: boolean;
+  /** Members of the space (everyone shown it here) and admins may edit; only admins delete. */
+  canEdit: boolean;
   onUpdated: (updated: AgentData) => void;
   onDeleted: (id: string) => void;
 }) {
@@ -105,8 +107,8 @@ function AgentCard({ agent, spaceId, isAdmin, onUpdated, onDeleted }: {
         <textarea
           value={personality}
           onChange={(e) => setPersonality(e.target.value)}
-          maxLength={600}
-          rows={4}
+          maxLength={1000}
+          rows={5}
           className="border border-gray-200 rounded-xl px-3 py-2 text-sm resize-none focus:outline-none focus:ring-2 focus:ring-orange-200 text-gray-700"
           placeholder="Personality description"
         />
@@ -156,15 +158,15 @@ function AgentCard({ agent, spaceId, isAdmin, onUpdated, onDeleted }: {
             )}
           </div>
         </div>
-        {isAdmin && (
+        {(canEdit || isAdmin) && (
           <div className="flex items-center gap-2 shrink-0">
             <button
               onClick={() => setEditing(true)}
               className="text-[11px] text-gray-400 hover:text-orange-500 transition-colors"
             >
-              Edit
+              ✏️ Edit
             </button>
-            {confirmDelete ? (
+            {!isAdmin ? null : confirmDelete ? (
               <div className="flex items-center gap-1.5">
                 <button onClick={deleteAgent} className="text-[11px] text-red-500 font-medium">Confirm</button>
                 <button onClick={() => setConfirmDelete(false)} className="text-[11px] text-gray-400">Cancel</button>
@@ -255,6 +257,7 @@ export function SpaceAgentManager({ groups, isAdmin }: { groups: SpaceGroup[]; i
                 agent={agent}
                 spaceId={group.spaceId}
                 isAdmin={isAdmin}
+                canEdit
                 onUpdated={(updated) => handleUpdate(group.spaceId, updated)}
                 onDeleted={(id) => handleDelete(group.spaceId, id)}
               />

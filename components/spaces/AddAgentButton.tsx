@@ -76,7 +76,7 @@ export function AddAgentButton({ spaceId }: { spaceId: string }) {
             value={personality}
             onChange={(e) => setPersonality(e.target.value)}
             placeholder="Describe their personality, occupation, or focus — e.g. a retired pastor who loves church history and finds deep connections between scripture and modern science"
-            maxLength={600}
+            maxLength={1000}
             rows={3}
             className="border border-gray-200 rounded-xl px-3 py-2 text-sm resize-none focus:outline-none focus:ring-2 focus:ring-orange-200 text-gray-700 placeholder:text-gray-400"
           />

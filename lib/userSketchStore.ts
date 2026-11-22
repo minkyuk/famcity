@@ -1,4 +1,6 @@
 import type { Prisma } from "@prisma/client";
+import { heartsBlock, personHeartsLine, threadHeartsLine } from "@/lib/hearts";
+import { personHearts, threadHearts } from "@/lib/heartsStore";
 import { prisma } from "@/lib/prisma";
 import { emptySketch, readSketch, sketchBlock, sketchNote, sketchSlug, SKETCH_SLUG_PREFIX, type UserSketch } from "@/lib/userSketch";
 
@@ -80,32 +82,55 @@ export async function resetSketch(userId: string, name: string): Promise<UserSke
 }
 
 type ThreadPeople = {
+  id: string;
   userId: string | null;
   spaceId: string | null;
-  comments: { userId: string | null }[];
+  comments: { id: string; userId: string | null; authorName: string; body: string }[];
 };
 
 /**
  * The memory block for an agent about to write in this thread: full notes on the person it is
  * answering (`answeringUserId` when the caller knows, else the last person to comment, or the
- * post's author), and character and ideas only for up to two others who spoke recently. Items said in a members-only space are used only in
- * threads of that space. Returns "" when nobody here has a sketch, or on any error — memory is a
- * help, never a reason for a turn to fail.
+ * post's author), and character and ideas only for up to two others who spoke recently. Items
+ * said in a members-only space are used only in threads of that space. Then the hearts people
+ * left (lib/hearts.ts): in this thread, and the answering person's recent ones. Returns "" when
+ * there is nothing to say, and fails soft — memory is a help, never a reason for a turn to fail.
  */
 export async function sketchContextFor(post: ThreadPeople, answeringUserId?: string | null): Promise<string> {
+  const recentFirst = [...post.comments].reverse().flatMap((c) => (c.userId ? [c.userId] : []));
+  const answering = answeringUserId ?? recentFirst[0] ?? post.userId;
+  const people = answering ? [...new Set([answering, ...recentFirst, ...(post.userId ? [post.userId] : [])])].slice(0, MAX_PEOPLE_PER_THREAD) : [];
+  let rowsReadable = true;
+  const rows = await loadSketchRows(people).catch(() => {
+    rowsReadable = false;
+    return new Map<string, SketchRow>();
+  });
+
+  const now = Date.now();
+  const memory = sketchBlock(
+    people.map((id) => {
+      const row = rows.get(id);
+      return row ? sketchNote(row.sketch, { scope: post.spaceId, answering: id === answering, now }) : "";
+    }),
+  );
+  // A person's own hearts are read only after their last reset; if their row couldn't be read,
+  // it counts as cleared just now — so none.
+  const personHeartsFor = rowsReadable ? answering : null;
+  return memory + (await heartsContext(post, personHeartsFor, rows.get(answering ?? "")?.sketch.resetAt ?? null));
+}
+
+async function heartsContext(post: ThreadPeople, answering: string | null, resetAt: string | null): Promise<string> {
   try {
-    const recentFirst = [...post.comments].reverse().flatMap((c) => (c.userId ? [c.userId] : []));
-    const answering = answeringUserId ?? recentFirst[0] ?? post.userId;
-    if (!answering) return "";
-    const people = [...new Set([answering, ...recentFirst, ...(post.userId ? [post.userId] : [])])].slice(0, MAX_PEOPLE_PER_THREAD);
-    const rows = await loadSketchRows(people);
-    const now = Date.now();
-    return sketchBlock(
-      people.map((id) => {
-        const row = rows.get(id);
-        return row ? sketchNote(row.sketch, { scope: post.spaceId, answering: id === answering, now }) : "";
-      }),
-    );
+    const [inThread, person] = await Promise.all([
+      threadHearts(post.id, post.comments),
+      answering
+        ? prisma.user.findUnique({ where: { id: answering }, select: { name: true } }).then(async (u) => {
+            const name = u?.name ?? "";
+            return personHeartsLine(name, name ? await personHearts(answering, name, post.spaceId, resetAt ? new Date(resetAt) : null) : []);
+          })
+        : Promise.resolve(""),
+    ]);
+    return heartsBlock([threadHeartsLine(inThread), person]);
   } catch {
     return "";
   }

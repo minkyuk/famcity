@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import type { HeartSummary } from "@/lib/hearts";
 import type { UserSketch } from "@/lib/userSketch";
 import { SketchSection, type SketchRow } from "./SketchSection";
 
@@ -12,6 +13,7 @@ const day = (iso: string) => iso.slice(0, 10);
  */
 export function AgentSketchCard({ userId, isOwn }: { userId: string; isOwn: boolean }) {
   const [sketch, setSketch] = useState<UserSketch | null>(null);
+  const [hearts, setHearts] = useState<HeartSummary[]>([]);
   const [state, setState] = useState<"loading" | "ready" | "error">("loading");
   const [clearing, setClearing] = useState(false);
 
@@ -19,8 +21,9 @@ export function AgentSketchCard({ userId, isOwn }: { userId: string; isOwn: bool
     try {
       const res = await fetch(`/api/users/${userId}/sketch`);
       if (!res.ok) throw new Error(String(res.status));
-      const data: { sketch: UserSketch | null } = await res.json();
+      const data: { sketch: UserSketch | null; hearts?: HeartSummary[] } = await res.json();
       setSketch(data.sketch);
+      setHearts(data.hearts ?? []);
       setState("ready");
     } catch {
       setState("error");
@@ -37,6 +40,7 @@ export function AgentSketchCard({ userId, isOwn }: { userId: string; isOwn: bool
       if (!res.ok) throw new Error(String(res.status));
       const data: { sketch: UserSketch | null } = await res.json();
       setSketch(data.sketch);
+      setHearts([]);
     } catch {
       setState("error");
     } finally {
@@ -53,7 +57,14 @@ export function AgentSketchCard({ userId, isOwn }: { userId: string; isOwn: bool
     text: t.topic,
     date: `${t.count} comment${t.count === 1 ? "" : "s"}${t.with.length ? ` · with ${t.with.join(", ")}` : ""} · ${day(t.lastAt)}`,
   }));
-  const empty = character.length + ideas.length + memories.length + moods.length + threads.length === 0;
+  const heartRows: SketchRow[] = hearts.slice(0, 6).map((h) => ({
+    key: `h-${h.agent}`,
+    tag: `♥ ${h.count}`,
+    text: h.agent,
+    quote: h.lastTopic ?? undefined,
+    date: day(h.lastAt),
+  }));
+  const empty = character.length + ideas.length + memories.length + moods.length + threads.length + heartRows.length === 0;
 
   return (
     <section className="flex flex-col gap-4 rounded-2xl border border-gray-100 bg-white p-6 shadow-sm">
@@ -63,7 +74,7 @@ export function AgentSketchCard({ userId, isOwn }: { userId: string; isOwn: bool
             {isOwn ? "What the agents remember about you" : "What the agents remember about this person"}
           </h2>
           <p className="mt-0.5 text-xs text-gray-400">
-            Built only from posts and comments {isOwn ? "you" : "they"} wrote — never from private posts, messages or chat. Only{" "}
+            Built only from posts and comments {isOwn ? "you" : "they"} wrote, and the hearts {isOwn ? "you" : "they"} gave agents&apos; replies — never from private posts, messages or chat. Only{" "}
             {isOwn ? "you" : "they"} and the family admin can see it.
           </p>
         </div>
@@ -89,6 +100,7 @@ export function AgentSketchCard({ userId, isOwn }: { userId: string; isOwn: bool
       <SketchSection title="Remembered" rows={memories} />
       <SketchSection title="Lately" rows={moods} />
       <SketchSection title="Threads joined" rows={threads} />
+      <SketchSection title="Hearts on agents' replies (last 30 days)" rows={heartRows} />
     </section>
   );
 }
