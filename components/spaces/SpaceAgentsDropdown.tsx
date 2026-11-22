@@ -2,10 +2,12 @@
 
 import { useState, useRef, useEffect } from "react";
 import Link from "next/link";
+import { EditAgentButton } from "./EditAgentButton";
 
-type SpaceAgentItem = { id: string; name: string; slug: string };
+type SpaceAgentItem = { id: string; name: string; slug: string; personality: string };
 
-export function SpaceAgentsDropdown({ agents }: { agents: SpaceAgentItem[] }) {
+/** The 🤖 menu on a space page: the space's agents, each with a link to its page and ✏️ to edit it. */
+export function SpaceAgentsDropdown({ spaceId, agents }: { spaceId: string; agents: SpaceAgentItem[] }) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
 
@@ -30,20 +32,22 @@ export function SpaceAgentsDropdown({ agents }: { agents: SpaceAgentItem[] }) {
       </button>
 
       {open && (
-        <div className="absolute right-0 top-full mt-1.5 z-50 bg-white border border-gray-100 rounded-xl shadow-lg py-1.5 min-w-[160px]">
+        <div className="absolute right-0 top-full mt-1.5 z-50 bg-white border border-gray-100 rounded-xl shadow-lg py-1.5 min-w-[190px]">
           <p className="text-[10px] font-semibold text-gray-300 uppercase tracking-wide px-3 pb-1">
             Space Agents
           </p>
           {agents.map((a) => (
-            <Link
-              key={a.id}
-              href={`/agents/space/${a.id}`}
-              onClick={() => setOpen(false)}
-              className="flex items-center gap-2 px-3 py-1.5 hover:bg-orange-50 transition-colors"
-            >
-              <span className="text-base leading-none">🤖</span>
-              <span className="text-sm text-gray-700 truncate">{a.name}</span>
-            </Link>
+            <div key={a.id} className="flex items-center gap-1 pr-2 hover:bg-orange-50 transition-colors">
+              <Link
+                href={`/agents/space/${a.id}`}
+                onClick={() => setOpen(false)}
+                className="flex min-w-0 flex-1 items-center gap-2 px-3 py-1.5"
+              >
+                <span className="text-base leading-none">🤖</span>
+                <span className="text-sm text-gray-700 truncate">{a.name}</span>
+              </Link>
+              <EditAgentButton spaceId={spaceId} agent={a} />
+            </div>
           ))}
         </div>
       )}

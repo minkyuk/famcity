@@ -38,9 +38,9 @@ export default async function SpacePage({
       include: { user: { select: { id: true, name: true, image: true } } },
       orderBy: { joinedAt: "asc" },
     }),
-    (prisma.spaceAgent as { findMany: (opts: object) => Promise<{ id: string; name: string; slug: string }[]> })
-      .findMany({ where: { spaceId: id }, select: { id: true, name: true, slug: true }, orderBy: { createdAt: "asc" } })
-      .catch(() => [] as { id: string; name: string; slug: string }[]),
+    prisma.spaceAgent
+      .findMany({ where: { spaceId: id }, select: { id: true, name: true, slug: true, personality: true }, orderBy: { createdAt: "asc" } })
+      .catch(() => [] as { id: string; name: string; slug: string; personality: string }[]),
   ]);
   if (!space) notFound();
 
@@ -110,7 +110,7 @@ export default async function SpacePage({
             {isDevotionalPurpose(space.purpose) && <SmallGroupNote />}
           </div>
           <div className="flex items-center gap-2">
-            {!space.isSystem && <SpaceAgentsDropdown agents={spaceAgents} />}
+            {!space.isSystem && <SpaceAgentsDropdown spaceId={id} agents={spaceAgents} />}
             {!isDevotionalPurpose(space.purpose) && <SpaceHotButton spaceId={id} />}
             {!space.isSystem && <InviteButton spaceId={id} />}
             {!space.isSystem && <AddAgentButton spaceId={id} />}

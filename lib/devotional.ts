@@ -1,5 +1,6 @@
 import { parseReferences } from "@/lib/scripture";
 import { HELPER_LABELS, HELPER_NAMES, type HelperRole } from "@/lib/devotionalPurpose";
+import { claimIsOpen as sharedClaimIsOpen, claimRow, readClaim, type Claim, type ClaimOutcome, type ClaimPolicy } from "@/lib/replyClaims";
 
 export { DEVOTIONAL_PURPOSE_PRESET, HELPER_NAMES, isDevotionalPurpose, type HelperRole } from "@/lib/devotionalPurpose";
 
@@ -207,42 +208,24 @@ export function stillUnanswered(post: DevotionalThread, ask: HelperAsk): boolean
 }
 
 // ── One claim per message ───────────────────────────────────────────────────────────────────
-// A row `$$devo:<postId>:<commentId|post>` records where a message stands, so that it is answered
-// by one run only and its outcome is remembered:
-//   working  — a helper is writing; another run may take over only after CLAIM_WORKING_MS
-//   dropped  — no reply came of it; tried again after CLAIM_RETRY_MS, and given up once
-//              CLAIM_MAX_TRIES drafts have failed a gate (outages don't count as tries)
-//   declined — the message was judged not to be for the helpers; never asked again
-//   done     — answered; never again, even if someone deletes the reply
+// The rules are shared with the replies to people's comments (lib/replyClaims.ts); a helper's
+// policy: another run may take over after 5 minutes, a dropped draft is retried after 2 hours,
+// and three drafts that fail a gate end it.
 
-/**
- * How one turn on a message ended: answered; judged not to be for the helpers; a draft that
- * didn't pass a gate; or no draft at all (an outage, or the message was gone by then).
- */
-export type DevotionalOutcome = "done" | "declined" | "dropped" | "failed";
-export type DevotionalClaim = { state: string; tries: number; updatedAt: Date };
+export type DevotionalOutcome = ClaimOutcome;
+export type DevotionalClaim = Claim;
+export { readClaim };
 
 export const CLAIM_WORKING_MS = 5 * 60 * 1000;
 export const CLAIM_RETRY_MS = 2 * 60 * 60 * 1000;
 export const CLAIM_MAX_TRIES = 3;
-
-/** Reads a stored claim row; anything unreadable counts as a turn in progress (it frees itself in a few minutes). */
-export function readClaim(row: { beliefs: unknown; updatedAt: Date }): DevotionalClaim {
-  const b = row.beliefs && typeof row.beliefs === "object" ? (row.beliefs as Record<string, unknown>) : {}; // our own row: { state, tries }
-  return { state: typeof b.state === "string" ? b.state : "working", tries: typeof b.tries === "number" ? b.tries : 0, updatedAt: row.updatedAt };
-}
+const DEVOTIONAL_CLAIM_POLICY: ClaimPolicy = { workingMs: CLAIM_WORKING_MS, retryMs: CLAIM_RETRY_MS, maxTries: CLAIM_MAX_TRIES };
 
 /** May this message's turn be taken now? `claim` is its row as just read (undefined = no row yet). */
-export function claimIsOpen(claim: DevotionalClaim | undefined, now: number): boolean {
-  if (!claim) return true;
-  if (claim.state === "declined" || claim.state === "done" || claim.tries >= CLAIM_MAX_TRIES) return false;
-  return now - claim.updatedAt.getTime() > (claim.state === "dropped" ? CLAIM_RETRY_MS : CLAIM_WORKING_MS);
-}
+export const claimIsOpen = (claim: DevotionalClaim | undefined, now: number) => sharedClaimIsOpen(claim, now, DEVOTIONAL_CLAIM_POLICY);
 
-/** What to store when a turn ends. Only a draft that failed a gate counts as a try. */
-export function settledClaim(outcome: DevotionalOutcome, tries: number): { state: string; tries: number } {
-  return { state: outcome === "failed" ? "dropped" : outcome, tries: outcome === "dropped" ? tries + 1 : tries };
-}
+/** What to store when a helper's turn ends. Only a draft that failed a gate counts as a try. */
+export const settledClaim = (outcome: DevotionalOutcome, tries: number) => claimRow(outcome, outcome === "dropped" ? tries + 1 : tries);
 
 /** The yes/no question put to the model for a candidate (see HelperAsk.sure). */
 export function helperWantedPrompt(o: { purpose: string; thread: string; ask: HelperAsk }): string {

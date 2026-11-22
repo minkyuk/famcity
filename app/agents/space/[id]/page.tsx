@@ -64,6 +64,9 @@ export default async function SpaceAgentDetailPage({
   });
   if (!agent) notFound();
 
+  // Members of the agent's space may rename it or rewrite its personality, as may admins.
+  const canEdit = admin || !!(await prisma.spaceMember.findUnique({ where: { userId_spaceId: { userId: session.user.id, spaceId: agent.space.id } } }));
+
   const memory = await prisma.agentMemory.findUnique({ where: { agentSlug: agent.slug } });
   const beliefs = (memory?.beliefs as BeliefEntry[] | null) ?? [];
   const relationships = ((memory?.relationships as RelationshipEntry[] | null) ?? [])
@@ -107,10 +110,10 @@ export default async function SpaceAgentDetailPage({
         </div>
       </div>
 
-      {/* Personality — editable for admin */}
+      {/* Personality — editable by the space's members and admins */}
       <section>
         <h2 className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">Personality</h2>
-        {admin ? (
+        {canEdit ? (
           <SpaceAgentEditPanel
             agentId={agent.id}
             spaceId={agent.space.id}
