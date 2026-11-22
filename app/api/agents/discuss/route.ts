@@ -12,6 +12,7 @@ import { isCronAuthorized } from "@/lib/cronAuth";
 import { prisma } from "@/lib/prisma";
 import { AGENTS, agentAvatarUrl, CHIEF_END, FAITH_GUARDRAIL, GOD_WARD_AIM, SCRIPTURE_RULE, type InitialBelief } from "@/lib/agents";
 import { claimIsOpen as replyClaimIsOpen, claimRow, readClaim as readReplyClaim, type ClaimOutcome, type ClaimPolicy } from "@/lib/replyClaims";
+import { invitesVoices, isSkip, orderSpeakers, personalityScore, voiceInstruction, voicesAfter, type Said, type SpeakerKind } from "@/lib/replyVoices";
 import { generateInviteCode } from "@/lib/invite";
 import { authOptions } from "@/lib/auth";
 import { fetchRss, SCIENCE_FEEDS } from "@/lib/rss";
@@ -2605,18 +2606,25 @@ async function runAllSpaceAgentTurns(slotMinutes: number, hourlyRound: boolean) 
 // ── Agent-turn wrappers (token attribution per agent) ──
 /** Runs runFafoTurnBody inside withAgent() so every Claude call in the turn is logged under this agent. */
 // ── Every person's comment gets a reply ───────────────────────────────────────────────────────
-// Owner's rule: when a person comments, the most important thing is that a reply comes back to
-// that comment, and none of the agents' limits apply to it (hourly budgets, the Den's budget, the
-// per-post cap, "this agent already spoke here", the novelty gate). One agent answers, directly
-// under the comment. If the comment replies to an agent, that agent answers first. The gates that
-// guard truth stay: nothing invented about a person, no overconfident numbers, every passage real
-// and faithful — a draft that fails one is rewritten by the next agent, and a message is given up
-// only after three such drafts. Small-group (목장) spaces keep their helpers' own rules.
+// Owner's rules: when a person comments, the most important thing is that a reply comes back to
+// that comment, and a person's input is never capped — none of the agents' limits apply (hourly
+// budgets, the Den's budget, the per-post cap, "this agent already spoke here").
+//   1. The first reply is guaranteed, directly under the comment. Asked in this order: the agent
+//      the person was talking to; the space's own agents (they come first in their space); knights
+//      by relevance. The gates that guard truth stay — nothing invented about a person, no
+//      overconfident numbers, every passage real and faithful — and a draft that fails one is
+//      rewritten by the next agent; a message is given up only after three such drafts.
+//   2. Then any other relevant agent may add its own reply under the same comment, from what it
+//      believes and who it is: the rest of the space's own agents, then the most relevant knights.
+//      They are invited, not required (SKIP), and a reply that only repeats is dropped.
+// Small-group (목장) spaces keep their helpers' own rules. Rules: lib/replyVoices.ts.
 
 const REPLY_CLAIM_PREFIX = "$$reply:";
 const REPLY_POLICY: ClaimPolicy = { workingMs: 5 * 60 * 1000, retryMs: 20 * 60 * 1000, maxTries: 3 };
-/** Agents tried in one run before the message waits for the sweep. */
+/** Agents tried for the first reply in one run before the message waits for the sweep. */
 const REPLY_SPEAKERS_PER_RUN = 2;
+/** No further agent is invited to add a reply after this long (the function may live 300s). */
+const REPLY_VOICES_BUDGET_MS = 150 * 1000;
 /** The sweep looks back this far for a person still waiting. */
 const REPLY_SWEEP_WINDOW_MS = 6 * 60 * 60 * 1000;
 /** …and leaves a fresh comment to its own trigger for this long. */
@@ -2635,38 +2643,48 @@ const REPLY_TRIGGER_FRESH_MS = 10 * 60 * 1000;
 const THREADED_REPLIES_FROM = new Date("2026-11-22T05:21:00Z");
 
 type ThreadComment = RecentPost["comments"][number];
-/** Who answers: a knight, or the space agent whose comment the person replied to. */
-type ReplySpeaker = { slug: string; name: string; identity: string; seeds: InitialBelief[]; knight: boolean };
+/** An agent that may answer: a knight, or one of the space's own agents. */
+type ReplySpeaker = { slug: string; name: string; identity: string; seeds: InitialBelief[]; knight: boolean; kind: SpeakerKind; relevance: number };
 
-const knightSpeaker = (a: (typeof AGENTS)[number]): ReplySpeaker => ({ slug: a.slug, name: a.name, identity: a.personality, seeds: a.initialBeliefs ?? [], knight: true });
+const shuffled = <T,>(list: readonly T[]): T[] => [...list].sort(() => Math.random() - 0.5);
 
 /**
- * The agents to try, in order: the one the person was talking to — the author of the comment they
- * replied to, or of the post when they commented on an agent's post — then knights that fit the thread.
+ * Every agent that could answer this comment, in the order they are asked (lib/replyVoices.ts):
+ * the one the person was talking to — the author of the comment they replied to, or of the post
+ * when they commented on an agent's post — then the space's own agents, then knights.
  */
 async function replySpeakersFor(post: RecentPost, comment: ThreadComment): Promise<ReplySpeaker[]> {
   const parent = comment.parentId ? post.comments.find((c) => c.id === comment.parentId) : undefined;
   const addressed = parent ?? (comment.parentId ? undefined : post); // a reply to a comment that isn't loaded: nobody in particular
-  const first: ReplySpeaker[] = [];
-  if (addressed && addressed.userId == null) {
-    const knight = AGENTS.find((a) => a.name === addressed.authorName);
-    if (knight) first.push(knightSpeaker(knight));
-    else if (post.spaceId) {
-      const [own, space] = await Promise.all([
-        prisma.spaceAgent.findFirst({ where: { spaceId: post.spaceId, name: addressed.authorName }, select: { slug: true, name: true, personality: true } }),
-        prisma.space.findUnique({ where: { id: post.spaceId }, select: { purpose: true } }),
-      ]);
-      if (own) first.push({ slug: own.slug, name: own.name, identity: spaceAgentIdentity(own, space?.purpose), seeds: DEFAULT_SPACE_AGENT_BELIEFS, knight: false });
-    }
-  }
-  const ranked = AGENTS.map((a) => ({ a, score: topicScore(post, a.topics, a.keywords) })).sort((x, y) => y.score - x.score).slice(0, 5);
-  const lead = Math.floor(Math.random() * Math.min(3, ranked.length)); // one of the best three, so it isn't always the same knight
-  const knights = [ranked[lead], ...ranked.filter((_, i) => i !== lead)].map((r) => knightSpeaker(r.a));
-  return [...first, ...knights.filter((k) => !first.some((f) => f.slug === k.slug))];
+  const kindOf = (name: string, otherwise: SpeakerKind): SpeakerKind => (addressed && addressed.userId == null && addressed.authorName === name ? "addressed" : otherwise);
+
+  // If the space's agents can't be read, the knights still answer: the person must get a reply.
+  const [own, space] = post.spaceId
+    ? await Promise.all([
+        prisma.spaceAgent.findMany({ where: { spaceId: post.spaceId }, select: { slug: true, name: true, personality: true } }).catch(() => []),
+        prisma.space.findUnique({ where: { id: post.spaceId }, select: { purpose: true } }).catch(() => null),
+      ])
+    : [[], null];
+  const threadText = [post.content ?? "", ...post.comments.slice(-8).map((c) => c.body)].join(" ").toLowerCase();
+
+  const spaceAgents: ReplySpeaker[] = own.map((a) => ({
+    slug: a.slug, name: a.name, identity: spaceAgentIdentity(a, space?.purpose), seeds: DEFAULT_SPACE_AGENT_BELIEFS, knight: false,
+    kind: kindOf(a.name, "space"), relevance: personalityScore(threadText, a.personality),
+  }));
+  const knights: ReplySpeaker[] = AGENTS.map((a) => ({
+    slug: a.slug, name: a.name, identity: a.personality, seeds: a.initialBeliefs ?? [], knight: true,
+    kind: kindOf(a.name, "knight"), relevance: topicScore(post, a.topics, a.keywords),
+  }));
+  return orderSpeakers(shuffled([...spaceAgents, ...knights])); // shuffled first: equally relevant agents take turns
 }
 
-/** One agent's reply to one person's comment, posted under it. */
-async function runCommentReplyBody(speaker: ReplySpeaker, post: RecentPost, comment: ThreadComment): Promise<ClaimOutcome> {
+/**
+ * One agent's reply to one person's comment, posted under it. `said` is empty for the first reply
+ * (the guaranteed one); for an added voice it holds the replies already given, and the agent may
+ * stay silent ("declined"). `body` is set when a reply was posted.
+ */
+async function runCommentReplyBody(speaker: ReplySpeaker, post: RecentPost, comment: ThreadComment, said: Said[] = []): Promise<{ outcome: ClaimOutcome; body?: string }> {
+  const voice = said.length > 0;
   const parent = comment.parentId ? post.comments.find((c) => c.id === comment.parentId) : undefined;
   const [beliefs, relationships, mediaNote, peopleMemory] = await Promise.all([
     loadBeliefs(speaker.slug, speaker.seeds).catch(() => []),
@@ -2682,53 +2700,89 @@ async function runCommentReplyBody(speaker: ReplySpeaker, post: RecentPost, comm
   const caption = post.content ? `\n"${post.content.slice(0, 900)}"` : "";
   const replyingTo = parent ? ` — a reply to ${speakerLabel(parent)}: "${parent.body.slice(0, THREAD_COMMENT_CHARS)}"` : "";
   const korean = isKorean(comment.body);
+  const task = voice
+    ? voiceInstruction(comment.authorName, said)
+    : `Reply to ${comment.authorName}: your reply goes directly under this comment, and they are waiting for it. Answer what they actually said; if they asked something, answer it. If you have nothing true to add, one short warm sentence is enough. 1–3 sentences. No hashtags.`;
 
   const prompt = `${speaker.identity}${formatBeliefsForPrompt(beliefs)}${speaker.knight ? formatRelationshipsForPrompt(relationships) : ""}
 
 Post by ${speakerLabel(post)}:${caption}${mediaNote}${threadContext}${peopleMemory}
 
-The comment you are answering, by ${comment.authorName}${replyingTo}:
+The comment${voice ? "" : " you are answering"}, by ${comment.authorName}${replyingTo}:
 "${comment.body.slice(0, 900)}"
 
-Reply to ${comment.authorName}: your reply goes directly under this comment, and they are waiting for it. Answer what they actually said; if they asked something, answer it. If you have nothing true to add, one short warm sentence is enough. 1–3 sentences. No hashtags.${ATTENTION_INSTRUCTION}${STYLE_INSTRUCTION}${pickTone()}
+${task}${ATTENTION_INSTRUCTION}${STYLE_INSTRUCTION}${pickTone()}
 
 Write in ${korean ? "Korean (한국어)" : "English"} — the language ${comment.authorName} wrote in.${GROUNDING_INSTRUCTION}`;
 
-  const response = await anthropicFor("discuss:commentReply").messages.create({
+  const response = await anthropicFor(voice ? "discuss:commentVoice" : "discuss:commentReply").messages.create({
     ...AGENT_REQUEST,
     max_tokens: 910,
     messages: [{ role: "user", content: prompt }],
   });
   let text = stripAiTags(finalizeAgentText(textOf(response), response.stop_reason), post);
-  if (text.length < 4) return "dropped"; // a refusal or an empty answer
+  if (voice && isSkip(text)) return { outcome: "declined" }; // nothing of its own to add
+  if (text.length < 4) return { outcome: "dropped" }; // a refusal or an empty answer
 
-  // The truth gates — the only ones that apply here.
-  if (!(await isFactuallyHumble(text, post.content ?? null))) return "dropped";
-  if (!(await isGroundedAboutPeople(text, post, "", peopleMemory))) return "dropped";
-  if (!(await scriptureIsFaithful(text))) return "dropped";
+  // The truth gates — on the first reply the only ones that apply.
+  if (!(await isFactuallyHumble(text, post.content ?? null))) return { outcome: "dropped" };
+  if (!(await isGroundedAboutPeople(text, post, "", peopleMemory))) return { outcome: "dropped" };
+  if (!(await scriptureIsFaithful(text))) return { outcome: "dropped" };
+  // An added voice must also say something the replies before it did not.
+  if (voice && !(await isNovel(text, [...post.comments, ...said.map((s) => ({ authorName: s.name, body: s.body }))]))) return { outcome: "declined" };
 
-  if (TRAVEL_AGENT_SLUGS.has(speaker.slug) && FLIGHT_SEARCH_RE.test(comment.body) && !hasFlightResults(post.comments)) {
+  if (!voice && TRAVEL_AGENT_SLUGS.has(speaker.slug) && FLIGHT_SEARCH_RE.test(comment.body) && !hasFlightResults(post.comments)) {
     const flightParams = await extractFlightParams([post.content, ...post.comments.map((c) => c.body)].filter(Boolean).join(" ")).catch(() => null);
     if (flightParams) text += await searchFlights(flightParams).catch(() => "");
   }
 
-  // Still there, still visible, and nobody answered it while this was being written?
+  // Still there and still visible? For the first reply: has nobody answered it while this was
+  // being written? For an added voice: has this agent not already replied here?
   const current = await prisma.comment.findUnique({
     where: { id: comment.id },
-    select: { post: { select: { isPrivate: true } }, replies: { where: { userId: null }, select: { id: true }, take: 1 } },
+    select: {
+      post: { select: { isPrivate: true } },
+      replies: { where: { userId: null, ...(voice ? { authorName: speaker.name } : {}) }, select: { id: true }, take: 1 },
+    },
   });
-  if (!current || current.post.isPrivate) return "failed";
-  if (current.replies.length > 0) return "done";
+  if (!current || current.post.isPrivate) return { outcome: "failed" };
+  if (current.replies.length > 0) return { outcome: "done" };
 
   const reply = await prisma.comment.create({
     data: { postId: post.id, authorName: speaker.name, authorImage: agentAvatarUrl(speaker.slug), body: text, parentId: comment.id },
   });
   writeMentions({ text, commentId: reply.id }).catch(() => {});
-  return "done";
+  return { outcome: "done", body: text };
 }
 
-/** Answers one person's comment (see the section comment). Safe to call twice: the claim decides. */
-async function answerPersonComment(commentId: string): Promise<ClaimOutcome | "skipped" | "busy"> {
+/**
+ * After the first reply: the agents invited to add their own (lib/replyVoices.ts), one after the
+ * other so each sees what was already said. Nothing here can fail the turn — the person has
+ * their reply. Returns how many spoke.
+ */
+async function addVoices(post: RecentPost, comment: ThreadComment, speakers: ReplySpeaker[], heard: Set<string>, said: Said[]): Promise<number> {
+  const deadline = Date.now() + REPLY_VOICES_BUDGET_MS;
+  let added = 0;
+  for (const speaker of voicesAfter(speakers, heard)) {
+    if (Date.now() > deadline) break;
+    const result = await withAgent(speaker.name, () => runCommentReplyBody(speaker, post, comment, said)).catch((err: unknown) => {
+      console.error("[reply] voice failed", comment.id, speaker.name, err);
+      return { outcome: "failed" as const, body: undefined };
+    });
+    if (result.body) {
+      said.push({ name: speaker.name, body: result.body });
+      added++;
+    }
+  }
+  return added;
+}
+
+/**
+ * Answers one person's comment (see the section comment). Safe to call twice: the claim decides.
+ * `voices`: once the comment has its first reply, invite other relevant agents to add theirs —
+ * for the trigger of a comment just written; the sweep only makes sure of the first reply.
+ */
+async function answerPersonComment(commentId: string, opts: { voices?: boolean } = {}): Promise<ClaimOutcome | "skipped" | "busy"> {
   const row = await prisma.comment.findUnique({
     where: { id: commentId },
     select: { postId: true, userId: true, post: { select: { isPrivate: true, spaceId: true, space: { select: { purpose: true } } } } },
@@ -2759,15 +2813,23 @@ async function answerPersonComment(commentId: string): Promise<ClaimOutcome | "s
       const spoke = await prisma.comment.count({ where: { postId: post.id, userId: null, createdAt: { gt: comment.createdAt } } });
       if (spoke > 0) return (outcome = "done");
     }
-    for (const speaker of (await replySpeakersFor(post, comment)).slice(0, REPLY_SPEAKERS_PER_RUN)) {
+    const speakers = await replySpeakersFor(post, comment);
+    const heard = new Set<string>();
+    const said: Said[] = [];
+    for (const speaker of speakers.slice(0, REPLY_SPEAKERS_PER_RUN)) {
       if (tries >= REPLY_POLICY.maxTries) break;
-      outcome = await withAgent(speaker.name, () => runCommentReplyBody(speaker, post, comment)).catch((err: unknown): ClaimOutcome => {
+      heard.add(speaker.slug);
+      const result = await withAgent(speaker.name, () => runCommentReplyBody(speaker, post, comment)).catch((err: unknown) => {
         console.error("[reply] failed", commentId, err);
-        return "failed";
+        return { outcome: "failed" as const, body: undefined };
       });
+      outcome = result.outcome;
+      if (result.body) said.push({ name: speaker.name, body: result.body });
       if (outcome !== "dropped") break; // answered — or an outage, which the sweep retries later
       tries++;
     }
+    // The person has their reply. Now anyone else with something of their own to say may add it.
+    if (opts.voices && said.length > 0 && invitesVoices(comment.body)) await addVoices(post, comment, speakers, heard, said);
     return outcome;
   } finally {
     // Unconditional: another run can take a claim over only after REPLY_POLICY.workingMs (5 min),
@@ -3213,7 +3275,7 @@ export async function POST(req: NextRequest) {
           return NextResponse.json({ error: "Not your recent comment" }, { status: 403 });
         }
       }
-      const outcome = await answerPersonComment(triggerCommentId);
+      const outcome = await answerPersonComment(triggerCommentId, { voices: true });
       return NextResponse.json({ ok: true, trigger: true, postId: triggerPostId, commentId: triggerCommentId, outcome });
     }
     // A page loaded before replies were threaded sends only the post: if the caller has just
@@ -3223,7 +3285,7 @@ export async function POST(req: NextRequest) {
         .findFirst({ where: { postId: triggerPostId, userId: callerId, createdAt: { gte: new Date(Date.now() - REPLY_SWEEP_GRACE_MS) } }, orderBy: { createdAt: "desc" }, select: { id: true } })
         .catch(() => null);
       if (justWritten) {
-        const outcome = await answerPersonComment(justWritten.id);
+        const outcome = await answerPersonComment(justWritten.id, { voices: true });
         return NextResponse.json({ ok: true, trigger: true, postId: triggerPostId, commentId: justWritten.id, outcome });
       }
     }

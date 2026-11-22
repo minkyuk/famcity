@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Image from "next/image";
 import { formatDistanceToNow } from "date-fns";
 import { useToast } from "@/components/shared/Toast";
@@ -27,13 +27,15 @@ function linkify(text: string): React.ReactNode {
 
 const isKorean = (t: string) => (t.match(/[\uAC00-\uD7A3]/g) ?? []).length / Math.max(t.replace(/\s/g, "").length, 1) > 0.3;
 
+/** When the thread looks for replies after a person comments (seconds after sending). */
+const REPLY_WATCH_SECONDS = [5, 10, 16, 24, 34, 48, 66, 90, 120, 160];
+
 interface CommentThreadProps {
   postId: string;
   initialComments: Comment[];
   currentUserId: string;
   currentUserName: string;
   isAdmin?: boolean;
-  spaceId?: string | null;
 }
 
 function Avatar({ name, image }: { name: string; image?: string | null }) {
@@ -247,7 +249,7 @@ function CommentRow({
   );
 }
 
-export function CommentThread({ postId, initialComments, currentUserId, currentUserName, isAdmin, spaceId }: CommentThreadProps) {
+export function CommentThread({ postId, initialComments, currentUserId, currentUserName, isAdmin }: CommentThreadProps) {
   const [comments, setComments] = useState<Comment[]>(initialComments);
   const [open, setOpen] = useState(false);
   const [body, setBody] = useState("");
@@ -267,6 +269,43 @@ export function CommentThread({ postId, initialComments, currentUserId, currentU
     } catch { /* ignore */ }
   };
 
+  // After a person comments, replies arrive over the next minute or two (the first one, then any
+  // other agent with something to add). The thread looks for them for a while so they appear
+  // without a reload.
+  const watchTimers = useRef<ReturnType<typeof setTimeout>[]>([]);
+  /** Comments newer than this are still to be fetched; it moves forward as they arrive. */
+  const watchFrom = useRef<string | null>(null);
+  const watchUntil = useRef(0);
+  const stopWatching = () => {
+    watchTimers.current.forEach(clearTimeout);
+    watchTimers.current = [];
+  };
+  useEffect(() => stopWatching, []);
+
+  const watchForReplies = (since: string) => {
+    stopWatching();
+    // A second comment sent while still watching keeps the earlier starting point, so replies to
+    // the first one that hadn't been fetched yet aren't missed.
+    if (!watchFrom.current || Date.now() > watchUntil.current) watchFrom.current = since;
+    watchUntil.current = Date.now() + REPLY_WATCH_SECONDS[REPLY_WATCH_SECONDS.length - 1] * 1000;
+    const check = async () => {
+      try {
+        const res = await fetch(`/api/posts/${postId}/comments?after=${encodeURIComponent(watchFrom.current ?? since)}`);
+        if (!res.ok) return;
+        const data: { comments: Comment[] } = await res.json();
+        if (data.comments.length > 0) watchFrom.current = new Date(data.comments[data.comments.length - 1].createdAt).toISOString();
+        setComments((prev) => {
+          const known = new Set(prev.map((c) => c.id));
+          const fresh = data.comments.filter((c) => !known.has(c.id));
+          return fresh.length > 0 ? [...prev, ...fresh] : prev;
+        });
+      } catch {
+        /* a missed check is fine: the next one, or a reload, shows the replies */
+      }
+    };
+    watchTimers.current = REPLY_WATCH_SECONDS.map((s) => setTimeout(check, s * 1000));
+  };
+
   /** Saves a comment (a reply when `parentId` is given) and wakes the agents. True when saved. */
   const sendComment = async (text: string, parentId?: string): Promise<boolean> => {
     try {
@@ -283,13 +322,14 @@ export function CommentThread({ postId, initialComments, currentUserId, currentU
       setTimeout(() => {
         document.getElementById(`comment-${comment.id}`)?.scrollIntoView({ block: "nearest", behavior: "smooth" });
       }, 80);
-      // Fire-and-forget: an agent answers this comment, under it (and a space's own agents may join in)
-      if (spaceId) fetch(`/api/spaces/${spaceId}/trigger`, { method: "POST" }).catch(() => {});
+      // Fire-and-forget: an agent answers this comment, under it — in a space, one of that space's
+      // own agents first — and others with something of their own to say may add to it.
       fetch("/api/agents/discuss", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ triggerPostId: postId, triggerCommentId: comment.id }),
       }).catch(() => {});
+      watchForReplies(new Date(comment.createdAt).toISOString());
       return true;
     } catch {
       showToast("Failed to post comment", "error");
