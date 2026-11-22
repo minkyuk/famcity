@@ -100,7 +100,11 @@ export async function sketchContextFor(post: ThreadPeople, answeringUserId?: str
   const recentFirst = [...post.comments].reverse().flatMap((c) => (c.userId ? [c.userId] : []));
   const answering = answeringUserId ?? recentFirst[0] ?? post.userId;
   const people = answering ? [...new Set([answering, ...recentFirst, ...(post.userId ? [post.userId] : [])])].slice(0, MAX_PEOPLE_PER_THREAD) : [];
-  const rows = await loadSketchRows(people).catch(() => new Map<string, SketchRow>());
+  let rowsReadable = true;
+  const rows = await loadSketchRows(people).catch(() => {
+    rowsReadable = false;
+    return new Map<string, SketchRow>();
+  });
 
   const now = Date.now();
   const memory = sketchBlock(
@@ -109,7 +113,10 @@ export async function sketchContextFor(post: ThreadPeople, answeringUserId?: str
       return row ? sketchNote(row.sketch, { scope: post.spaceId, answering: id === answering, now }) : "";
     }),
   );
-  return memory + (await heartsContext(post, answering, rows.get(answering ?? "")?.sketch.resetAt ?? null));
+  // A person's own hearts are read only after their last reset; if their row couldn't be read,
+  // it counts as cleared just now — so none.
+  const personHeartsFor = rowsReadable ? answering : null;
+  return memory + (await heartsContext(post, personHeartsFor, rows.get(answering ?? "")?.sketch.resetAt ?? null));
 }
 
 async function heartsContext(post: ThreadPeople, answering: string | null, resetAt: string | null): Promise<string> {

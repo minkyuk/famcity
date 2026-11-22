@@ -11,6 +11,21 @@ import { prisma } from "@/lib/prisma";
 
 type ThreadComment = { id: string; userId: string | null; authorName: string; body: string };
 
+/**
+ * Post reactions carry only the display name they were given under (agents react too). A name
+ * stands for a person only when it is no agent's and exactly one account has it — otherwise two
+ * people's hearts could be told to agents as one person's.
+ */
+async function namesOfOnePerson(candidates: string[]): Promise<Set<string>> {
+  const agents = await agentNames();
+  const asked = [...new Set(candidates)].filter((name) => name && !agents.has(name) && !KNIGHT_NAMES.has(name));
+  if (asked.length === 0) return new Set();
+  const users = await prisma.user.findMany({ where: { name: { in: asked } }, select: { name: true } });
+  const count = new Map<string, number>();
+  for (const u of users) if (u.name) count.set(u.name, (count.get(u.name) ?? 0) + 1);
+  return new Set(asked.filter((name) => count.get(name) === 1));
+}
+
 /** A members-only space is a scope of its own; system spaces and space-less posts are open. */
 const scopeOf = (post: { spaceId: string | null; space: { isSystem: boolean } | null }) => (post.spaceId && !post.space?.isSystem ? post.spaceId : null);
 
@@ -29,10 +44,7 @@ export async function threadHearts(postId: string, comments: ThreadComment[]): P
     prisma.reaction.findMany({ where: { postId, emoji: HEART_EMOJI }, orderBy: { createdAt: "desc" }, take: 20, select: { name: true } }),
   ]);
 
-  // Post reactions are stored by display name, and agents react too: keep only names of people.
-  const reactors = [...new Set(reactions.map((r) => r.name))].filter((name) => !KNIGHT_NAMES.has(name));
-  const people =
-    reactors.length > 0 ? new Set((await prisma.user.findMany({ where: { name: { in: reactors } }, select: { name: true } })).map((u) => u.name)) : new Set<string | null>();
+  const people = await namesOfOnePerson(reactions.map((r) => r.name));
 
   const byId = new Map(aiComments.map((c) => [c.id, c]));
   const out: ThreadHeart[] = [];
@@ -53,14 +65,14 @@ export async function threadHearts(postId: string, comments: ThreadComment[]): P
 export async function personHearts(userId: string, name: string, scope: string | null | "everywhere", since: Date | null): Promise<PersonHeart[]> {
   const floor = new Date(Math.max(Date.now() - HEART_MEMORY_MS, since?.getTime() ?? 0));
   const postSelect = { userId: true, authorName: true, content: true, spaceId: true, space: { select: { isSystem: true } } } as const;
-  const [likes, reactions, agents] = await Promise.all([
+  const [likes, reactions, agents, nameIsTheirs] = await Promise.all([
     prisma.commentLike.findMany({
       where: { userId, createdAt: { gte: floor }, comment: { userId: null, post: { isPrivate: false } } },
       orderBy: { createdAt: "desc" },
       take: 30,
       select: { createdAt: true, comment: { select: { authorName: true, post: { select: postSelect } } } },
     }),
-    name
+    name // post reactions are found by display name — used only when that name is theirs alone (below)
       ? prisma.reaction.findMany({
           where: { name, emoji: HEART_EMOJI, createdAt: { gte: floor }, post: { userId: null, isPrivate: false } },
           orderBy: { createdAt: "desc" },
@@ -69,6 +81,7 @@ export async function personHearts(userId: string, name: string, scope: string |
         })
       : Promise.resolve([]),
     agentNames(),
+    namesOfOnePerson([name]).then((names) => names.has(name)),
   ]);
 
   const usable = (post: { spaceId: string | null; space: { isSystem: boolean } | null }) => {
@@ -86,7 +99,7 @@ export async function personHearts(userId: string, name: string, scope: string |
     if (!agents.has(comment.authorName) || !usable(comment.post)) continue; // an account-less comment by a person, or another space
     out.push({ agent: comment.authorName, topic: topicOf(comment.post), at: like.createdAt });
   }
-  for (const r of reactions) {
+  for (const r of nameIsTheirs ? reactions : []) {
     if (!agents.has(r.post.authorName) || !usable(r.post)) continue;
     out.push({ agent: r.post.authorName, topic: topicOf(r.post), at: r.createdAt });
   }

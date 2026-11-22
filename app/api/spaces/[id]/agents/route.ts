@@ -42,7 +42,8 @@ export async function POST(
   }
 
   const { name, personality } = result.data;
-  const problem = agentNameProblem(name, existing.map((a) => a.name));
+  const person = await prisma.user.findFirst({ where: { name: { equals: name, mode: "insensitive" } }, select: { id: true } });
+  const problem = agentNameProblem(name, existing.map((a) => a.name), person !== null);
   if (problem) return NextResponse.json({ error: problem }, { status: 409 });
   const slug = `sa-${spaceId.slice(0, 8)}-${name.toLowerCase().replace(/[^a-z0-9]/g, "-")}-${Date.now().toString(36)}`;
 

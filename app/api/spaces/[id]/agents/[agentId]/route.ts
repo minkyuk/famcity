@@ -41,26 +41,32 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
   const { name, personality } = result.data;
   const renamed = name !== undefined && name !== agent.name;
   if (renamed) {
-    const others = await prisma.spaceAgent.findMany({ where: { spaceId, NOT: { id: agentId } }, select: { name: true } });
-    const problem = agentNameProblem(name, others.map((o) => o.name));
+    const [others, person] = await Promise.all([
+      prisma.spaceAgent.findMany({ where: { spaceId, NOT: { id: agentId } }, select: { name: true } }),
+      prisma.user.findFirst({ where: { name: { equals: name, mode: "insensitive" } }, select: { id: true } }),
+    ]);
+    const problem = agentNameProblem(name, others.map((o) => o.name), person !== null);
     if (problem) return NextResponse.json({ error: problem }, { status: 409 });
   }
 
-  // Its own posts and comments: no account, its old name, and its own avatar (derived from the slug).
-  const own = { authorName: agent.name, userId: null, authorImage: agentAvatarUrl(agent.slug) };
   try {
-    const [updated] = await prisma.$transaction([
-      prisma.spaceAgent.update({
+    const updated = await prisma.$transaction(async (tx) => {
+      // The name as it is now, inside the transaction: two renames at once must not leave the
+      // agent's older comments under a name it no longer has.
+      const current = await tx.spaceAgent.findUnique({ where: { id: agentId }, select: { name: true } });
+      if (!current) throw new Error("agent deleted meanwhile");
+      const saved = await tx.spaceAgent.update({
         where: { id: agentId },
         data: { ...(renamed ? { name } : {}), ...(personality !== undefined ? { personality } : {}) },
-      }),
-      ...(renamed
-        ? [
-            prisma.comment.updateMany({ where: { ...own, post: { spaceId } }, data: { authorName: name } }),
-            prisma.post.updateMany({ where: { ...own, spaceId }, data: { authorName: name } }),
-          ]
-        : []),
-    ]);
+      });
+      if (renamed && current.name !== name) {
+        // Its own posts and comments: no account, its old name, its own avatar (from the slug), its space.
+        const own = { authorName: current.name, userId: null, authorImage: agentAvatarUrl(agent.slug) };
+        await tx.comment.updateMany({ where: { ...own, post: { spaceId } }, data: { authorName: name } });
+        await tx.post.updateMany({ where: { ...own, spaceId }, data: { authorName: name } });
+      }
+      return saved;
+    });
     return NextResponse.json(updated);
   } catch (err) {
     // The unique (space, name) index: someone took the name a moment ago.
