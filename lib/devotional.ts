@@ -16,11 +16,10 @@ export { DEVOTIONAL_PURPOSE_PRESET, HELPER_NAMES, isDevotionalPurpose, type Help
  * every other space:
  *   - Three built-in helpers answer people. They never answer each other, never start threads,
  *     and never debate. The roaming knights and the space's own custom agents stay out.
- *   - A helper speaks only when someone is speaking to it. Naming a helper, asking for prayer, or
- *     putting a question to a helper is certain. A post, a question nobody in particular was
- *     asked, or a longer reply to a helper is only a candidate: a short model check decides
- *     whether it is meant for the helpers or is the group talking among themselves (plans,
- *     greetings, thanks, each other).
+ *   - Every person's post and comment gets one helper reply (owner's decision, after a first
+ *     version answered only when spoken to). The reply stays brief and ends with the Word or a
+ *     prayer, never with a question — so answering everyone doesn't turn into keeping the
+ *     conversation going. A bare "아멘" / "감사합니다" gets one short sentence.
  *   - The helpers are AI helpers, not members and not a spiritual authority: they don't claim
  *     to have prayed, they give the group words to pray; they don't settle questions on which
  *     churches differ, they show the passage and point to the pastor or 목자.
@@ -82,18 +81,6 @@ const isAcknowledgement = (text: string) => {
   return clean.length === 0 || ACKNOWLEDGEMENT.test(clean) || (clean.length <= 20 && ENDS_WITH_THANKS.test(clean));
 };
 
-// A helper is named: "기도 도우미", "기도도우미님", "Word Guide" — but not "word guideline".
-const NAMES_A_HELPER = new RegExp(
-  HELPER_NAMES.map((name) => {
-    const words = name.split(/\s+/).join("\\s*");
-    return /^[ -~]+$/.test(name) ? `\\b${words}\\b` : words;
-  }).join("|"),
-  "i",
-);
-const namesAHelper = (text: string) => NAMES_A_HELPER.test(text);
-/** "민수님", "집사님", "@joon": the words are put to someone in the group — not to God, not to a helper. */
-const addressesSomeone = (text: string) => /[가-힣]님|@\S/.test(text.replace(/하나님|하느님|예수님|주님|성령님|도우미님|길잡이님/g, " "));
-
 /**
  * Which helper answers: an explicit prayer request goes to prayer; a question about the text (or
  * a message citing a passage) goes to the Word guide; a hard time goes to prayer; anything else
@@ -121,82 +108,48 @@ export type DevotionalThread = {
 
 /** Messages older than this are left alone — turning the mode on must not answer a backlog. */
 export const DEVOTIONAL_ANSWER_WINDOW_MS = 48 * 60 * 60 * 1000;
+/** When the helpers began answering every comment (comments before it were judged by the earlier rule). */
+export const EVERY_COMMENT_FROM = new Date("2026-11-22T21:26:00Z");
 
-/**
- * A message a helper may answer. `commentId` is null when it is the post itself. `sure` is false
- * when the message is only a candidate and a model check has to decide whether it is meant for
- * the helpers.
- */
-export type HelperAsk = { to: string; text: string; commentId: string | null; sure: boolean };
+/** A message a helper answers. `commentId` is null when it is the post itself. */
+export type HelperAsk = { to: string; text: string; commentId: string | null };
 
 /** A comment by a helper (and only a helper: other account-less comments are not answers). */
 export const isHelperComment = (c: { userId: string | null; authorName: string }) => c.userId == null && HELPER_NAMES.includes(c.authorName);
 const isPerson = (c: { userId: string | null }) => c.userId != null;
 
-/** Certain whoever it is said under: a helper is named, or prayer is asked for. */
-const asksAHelper = (text: string) => namesAHelper(text) || ASKS_FOR_PRAYER.test(text);
-
-/**
- * How a person's comment stands towards the helpers: true = certainly for them, false = a
- * candidate (a model check decides), null = not for them. `parent` is the comment it replies to,
- * when that comment is among those loaded.
- */
-function weigh(c: ThreadComment, parent: ThreadComment | undefined): boolean | null {
-  const text = c.body.trim();
-  if (!text) return null;
-  if (asksAHelper(text)) return true;
-  if (c.parentId) {
-    // A reply. Under anything but a helper's comment — a member's, another agent's, or one too
-    // old to be loaded — it is said to whoever wrote that comment.
-    if (!parent || !isHelperComment(parent)) return null;
-    // Under a helper's comment: "아멘" is not for the helper; a question asked outright is, unless
-    // it is put to a member by name; anything else is a candidate.
-    if (isAcknowledgement(text)) return null;
-    return asksOutright(text) && !addressesSomeone(text);
-  }
-  return looksLikeQuestion(text) || MENTIONS_PRAYER_REQUEST.test(text) ? false : null;
-}
-
 /** What the helpers have already answered in this thread: comment ids, and null for the post itself. */
 const answeredIn = (post: DevotionalThread) => new Set(post.comments.filter(isHelperComment).map((c) => c.parentId));
 
 /**
- * The messages in this thread a helper may answer, in the order they should be tried. A helper's
- * reply carries the id of the comment it answers (none when it answers the post), which is how a
- * message is known to be answered.
- *   1. Every person's comment that is certainly for the helpers and has no helper reply — oldest
- *      first. Later comments by other members ("저도 기도할게요") don't cancel a request.
- *   2. The post, when a person wrote it and no helper has replied to it — certain when it names
- *      a helper or asks for prayer, otherwise a candidate.
- *   3. The newest person's comment, when it is a candidate.
+ * The messages in this thread a helper answers, oldest first: the post, then every person's
+ * comment — a reply to a member included — that has no helper reply under it. A helper's reply
+ * carries the id of the comment it answers (none when it answers the post), which is how a
+ * message is known to be answered, so a later comment never cancels an earlier one. Agents'
+ * messages are never answered: helpers don't answer helpers.
  */
-export function helperAsks(post: DevotionalThread, now: number): HelperAsk[] {
+export function helperAsks(post: DevotionalThread, now: number, opts: { commentsFrom?: Date } = {}): HelperAsk[] {
   const fresh = (at: Date) => now - at.getTime() <= DEVOTIONAL_ANSWER_WINDOW_MS;
-  const byId = new Map(post.comments.map((c) => [c.id, c]));
+  // Comments from before the helpers answered every comment were judged by the earlier rule;
+  // turning the new rule on must not answer that backlog.
+  const commentsFrom = opts.commentsFrom?.getTime() ?? 0;
   const answered = answeredIn(post);
-
-  const certain: HelperAsk[] = [];
-  let candidate: HelperAsk | null = null;
-  for (const c of post.comments) {
-    if (!isPerson(c)) continue;
-    candidate = null; // only the newest person's comment can be a candidate
-    if (!fresh(c.createdAt) || answered.has(c.id)) continue;
-    const weight = weigh(c, c.parentId ? byId.get(c.parentId) : undefined);
-    if (weight === null) continue;
-    const ask = { to: c.authorName, text: c.body.trim(), commentId: c.id, sure: weight };
-    if (weight) certain.push(ask);
-    else candidate = ask;
-  }
+  const asks: HelperAsk[] = [];
 
   // The post itself — unless the thread is too long to know whether a helper already answered it.
   const postText = (post.content ?? "").trim();
-  const postAsk: HelperAsk[] =
-    isPerson(post) && postText && fresh(post.createdAt) && !post.truncated && !answered.has(null)
-      ? [{ to: post.authorName, text: postText, commentId: null, sure: asksAHelper(postText) }]
-      : [];
-
-  return [...certain, ...postAsk, ...(candidate ? [candidate] : [])];
+  if (isPerson(post) && postText && fresh(post.createdAt) && !post.truncated && !answered.has(null)) {
+    asks.push({ to: post.authorName, text: postText, commentId: null });
+  }
+  for (const c of post.comments) {
+    const text = c.body.trim();
+    if (isPerson(c) && text && fresh(c.createdAt) && c.createdAt.getTime() >= commentsFrom && !answered.has(c.id)) {
+      asks.push({ to: c.authorName, text, commentId: c.id });
+    }
+  }
+  return asks;
 }
+
 
 /**
  * Just before a reply is posted: is the message still there and still unanswered? Looser than
@@ -208,8 +161,8 @@ export function stillUnanswered(post: DevotionalThread, ask: HelperAsk): boolean
 }
 
 // ── One claim per message ───────────────────────────────────────────────────────────────────
-// The rules are shared with the replies to people's comments (lib/replyClaims.ts); a helper's
-// policy: another run may take over after 5 minutes, a dropped draft is retried after 2 hours,
+// The rules are shared with the replies to people's comments (lib/replyClaims.ts), and so is the
+// policy: another run may take over after 5 minutes, a dropped draft is retried after 20 minutes,
 // and three drafts that fail a gate end it.
 
 export type DevotionalOutcome = ClaimOutcome;
@@ -217,7 +170,7 @@ export type DevotionalClaim = Claim;
 export { readClaim };
 
 export const CLAIM_WORKING_MS = 5 * 60 * 1000;
-export const CLAIM_RETRY_MS = 2 * 60 * 60 * 1000;
+export const CLAIM_RETRY_MS = 20 * 60 * 1000;
 export const CLAIM_MAX_TRIES = 3;
 const DEVOTIONAL_CLAIM_POLICY: ClaimPolicy = { workingMs: CLAIM_WORKING_MS, retryMs: CLAIM_RETRY_MS, maxTries: CLAIM_MAX_TRIES };
 
@@ -226,18 +179,6 @@ export const claimIsOpen = (claim: DevotionalClaim | undefined, now: number) => 
 
 /** What to store when a helper's turn ends. Only a draft that failed a gate counts as a try. */
 export const settledClaim = (outcome: DevotionalOutcome, tries: number) => claimRow(outcome, outcome === "dropped" ? tries + 1 : tries);
-
-/** The yes/no question put to the model for a candidate (see HelperAsk.sure). */
-export function helperWantedPrompt(o: { purpose: string; thread: string; ask: HelperAsk }): string {
-  const what = o.ask.commentId ? "comment" : "post";
-  return `A church small group talks in its own space ("${o.purpose}"). AI helpers are there to help people pray, read Scripture and know God. A helper answers when someone shares something about their life or faith, asks about Scripture, faith or prayer, or asks for help — and stays silent when the members are simply talking to each other: plans and logistics, greetings, thanks, small talk, questions put to one another.
-
-${o.thread}
-
-The newest ${what}, by ${o.ask.to}: "${o.ask.text.slice(0, 600)}"
-
-Should a helper answer this ${what}? Reply with only YES or NO.`;
-}
 
 /**
  * The helper's prompt. `foundation` is the space-agent biblical foundation (it carries the fear
@@ -264,6 +205,6 @@ How:
 - Do not debate, do not challenge, and do not try to keep the conversation going. Brief is good. End with the Word or the prayer itself — not with a question, and not with an invitation to reply.
 - Where faithful churches read Scripture differently (baptism, spiritual gifts, the end times, predestination and the like): show what the passage says, say plainly that Christians differ, and point ${to} to their pastor or 목자 rather than settling it yourself.
 - If ${to} seems to be in danger or crisis (self-harm, abuse, despair that alarms you): answer with care in two sentences, urge them to reach their 목자 or pastor and someone near them today — and emergency services if they are in danger. Do not attempt counselling.
-- 2–5 sentences; a prayer may run a few lines more. Plain prose: no markdown, no hashtags, and do not describe yourself.
+- ${isAcknowledgement(o.ask.text) ? `${to} only acknowledged what was said: answer with ONE short sentence — a blessing or a single verse — and nothing more.` : "2–5 sentences; a prayer may run a few lines more."} Plain prose: no markdown, no hashtags, and do not describe yourself.
 - Write in ${o.korean ? "Korean (한국어)" : "English"}.`;
 }
