@@ -11,6 +11,32 @@ const BodySchema = z.object({
   parentId: z.string().cuid().optional(),
 });
 
+const AfterSchema = z.string().datetime();
+
+/**
+ * GET ?after=<ISO time> — comments on this post written after that moment, oldest first. The
+ * comment thread asks for a short while after a person comments, so replies appear without a reload.
+ */
+export async function GET(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+  const session = await getServerSession(authOptions);
+  if (!session?.user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+
+  const { id: postId } = await params;
+  const post = await getAccessiblePost(postId, session.user.id);
+  // A private post is its author's alone.
+  if (!post || (post.isPrivate && post.userId !== session.user.id)) return NextResponse.json({ error: "Not found" }, { status: 404 });
+
+  const after = AfterSchema.safeParse(req.nextUrl.searchParams.get("after"));
+  if (!after.success) return NextResponse.json({ error: "Invalid input" }, { status: 400 });
+
+  const comments = await prisma.comment.findMany({
+    where: { postId, createdAt: { gt: new Date(after.data) } },
+    orderBy: { createdAt: "asc" },
+    take: 50,
+  });
+  return NextResponse.json({ comments });
+}
+
 export async function POST(
   req: NextRequest,
   { params }: { params: Promise<{ id: string }> }
