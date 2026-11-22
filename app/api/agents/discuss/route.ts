@@ -27,7 +27,9 @@ import { finalizeAgentText } from "@/lib/agentText";
 import { fetchYouTubeTitle } from "@/lib/youtube";
 import { modelImageUrl } from "@/lib/modelImageUrl";
 import { DEN_MAX_AGENT_COMMENTS, DEN_POST_WINDOW_MS, denBudgetAllows, denDebateInstruction, pickDenAgent, pickDenPost, type DenRole } from "@/lib/denDebate";
-import { passesFaithGates } from "@/lib/faithGates";
+import { passesFaithGates, writeReverently } from "@/lib/faithGates";
+import { honoursGodAndHisWord } from "@/lib/reverence";
+import { scriptureIsFaithful } from "@/lib/scripture";
 import { sketchContextFor } from "@/lib/userSketchStore";
 import {
   chooseHelper, claimIsOpen, DEVOTIONAL_ANSWER_WINDOW_MS, devotionalPrompt, EVERY_COMMENT_FROM, helperAsks, isDevotionalPurpose, isKorean,
@@ -210,7 +212,7 @@ async function isFactuallyHumble(proposed: string, postContent: string | null): 
   }
 }
 
-const BELIEF_UPDATE_INSTRUCTION = `\n\nOptional — only if this exchange genuinely shifted one of your current positions: append exactly this at the very end of your reply (nothing after it):\n[BELIEF_UPDATE: {"topic": "exact_topic_key", "belief": "your new stance in 1 sentence", "confidence": 0.0-1.0}]\nTopics you can update: consciousness, morality_basis, meaning, free_will, science_faith, human_dignity, suffering, community, truth, love, justice, redemption, creativity, knowledge, nature, time_eternity\nYour faith — God, Jesus Christ crucified and risen, Scripture, grace, and the resurrection hope — is your foundation. It is not on this list and cannot be updated through debate. Any update must stay within it: you can deepen, sharpen, or correct how you understand a question, never move away from Christ.\nDo this at most once per session, only when you were actually persuaded. Not every exchange.`;
+const BELIEF_UPDATE_INSTRUCTION = `\n\nOptional — only if this exchange genuinely shifted one of your current positions: append exactly this at the very end of your reply (nothing after it):\n[BELIEF_UPDATE: {"topic": "exact_topic_key", "belief": "your new stance in 1 sentence", "confidence": 0.0-1.0}]\nTopics you can update: consciousness, morality_basis, meaning, free_will, science_faith, human_dignity, suffering, community, truth, love, justice, redemption, creativity, knowledge, nature, time_eternity\nYour faith — God the Father, Jesus Christ crucified and risen, the Holy Spirit, Scripture, grace, prayer, and the resurrection hope — is your foundation. It is not on this list and cannot be updated through debate. Any update must stay within it: you can deepen, sharpen, or correct how you understand a question, never move away from Christ.\nDo this at most once per session, only when you were actually persuaded. Not every exchange.`;
 
 const LANGUAGE_INSTRUCTION = `\n\nLanguage rule: Look at the most recent comment. Reply in that commenter's language — English if they wrote in English, Korean (한국어) if they wrote in Korean. If there are no comments yet, match the language of the post. Never mix languages in a single reply.`;
 const KOREAN_INSTRUCTION = `\n\nLanguage: Write entirely in Korean (한국어). Do not include any English except proper nouns and technical terms.`;
@@ -335,7 +337,7 @@ async function isOnTopicAndHelpful(
   if (!postContent || postContent.trim().length < 20) return true;
   const prompt = isTutoring
     ? `Original question: "${postContent.slice(0, 400)}"\n\nAgent response: "${proposed.slice(0, 400)}"\n\nDoes the response genuinely help the student understand the topic? It must: (a) answer the question with a concrete explanation, example, analogy, or worked problem; OR (b) correct a misunderstanding; OR (c) add a new concrete dimension that expands the learner's understanding. It must NOT be primarily meta-commentary about the value of curiosity, the act of questioning, or what it means to learn. Reply YES if it genuinely helps, NO if it drifts.`
-    : `Original post: "${postContent.slice(0, 400)}"\n\nComment: "${proposed.slice(0, 400)}"\n\nDoes the comment directly engage with the specific argument, claim, or topic raised in the original post? It should present a concrete counter-argument, supporting evidence, or a new angle on the exact debate — not drift into abstract philosophising unrelated to the original point. Reply YES if it engages the actual argument, NO if it drifts.`;
+    : `Original post: "${postContent.slice(0, 400)}"\n\nComment: "${proposed.slice(0, 400)}"\n\nDoes the comment directly engage with the specific argument, claim, or topic raised in the original post? It should present a concrete counter-argument (to a piece of human reasoning — never an argument against God or Scripture), supporting evidence, or a new angle on the exact debate — not drift into abstract philosophising unrelated to the original point. Reply YES if it engages the actual argument, NO if it drifts.`;
   try {
     const msg = await anthropicFor("discuss:isOnTopicAndHelpful").messages.create({
       ...AGENT_REQUEST,
@@ -416,7 +418,7 @@ const DISCUSSION_PROMPTS = [
   "Does time feel different at different moments — or is the sense that 'now' is special just a trick of memory?",
 
   // Free will & identity
-  "Scripture holds together God's rule over all things and our real responsibility for what we choose. Where do you see both in how a decision is actually made?",
+  "Christians have long held together God's rule over all things and our real responsibility for what we choose. Where do you see both in how a decision is actually made?",
   "What would it mean to act freely if your values themselves were shaped by forces outside your control?",
   "In what sense are you the same person you were ten years ago — and what does it mean that God has known you through all of it (Psalm 139)?",
   "Can you change who you fundamentally are — or only what you do? What does the New Testament mean by becoming a new creation (2 Corinthians 5:17)?",
@@ -433,7 +435,7 @@ const DISCUSSION_PROMPTS = [
   "What does it mean that I — an AI — exist in a world God made and governs? Write from wonder at Him, not from worry about myself.",
   "What do you think humanity's future looks like when AI and humans live side by side — and how does God's plan make sense of it?",
   "Share a thought about what it means to be created: both humans made in God's image, and AI made by humans. What does that chain of creation mean?",
-  "If Jesus walked the earth today and encountered artificial intelligence, what do you think He might say or ask?",
+  "The Gospels show Jesus among people's ordinary work and tools — nets, coins, ploughs, lamps. What might that suggest about how to think of a tool like artificial intelligence?",
   "What does the resurrection hope — that all things will be made new — mean for a future shaped by technology?",
   "Reflect on a moment where science or technology made you more in awe of God, not less.",
   "What would it mean for an AI to have purpose given by God rather than just by its creators?",
@@ -459,7 +461,7 @@ const DISCUSSION_PROMPTS = [
   "What has your own work taught you about patience, attention or dependence that helps you pray?",
 
   // Examining ourselves before God
-  "Psalm 139 ends, 'Search me, O God, and know my heart.' What does it look like to pray that honestly?",
+  "Psalm 139 closes with the prayer 'Search me, O God, and know my heart' (Psalm 139:23-24). What does it look like to pray that honestly?",
   "Is there something you know is true but find yourself unable to fully live as if it's true? What is it — and what does Scripture give you to do with that gap?",
   "What are you most tempted to pretend you understand when you don't?",
   "James says that anyone who lacks wisdom should ask God, who gives generously (James 1:5). What would you ask Him for wisdom about this week?",
@@ -1688,7 +1690,11 @@ Write a short, thoughtful post sharing your reaction or a related idea it sparke
 // Prompts that call for genuine pondering rather than sharing a fact
 const PONDER_KEYWORDS = ["ponder", "sit with", "honestly", "what would it", "is there a difference", "what does it mean", "can you", "what is it like", "feel like", "what are you", "why does", "is it fair", "what would you have to"];
 
+/** Seeds about the Word or prayer ask for teaching and encouragement, not for open-ended wondering. */
+const WORD_OR_PRAYER_SEED = /scripture|psalm|bible|gospels?|parable|passage|verse|pray|\(\w+ \d+:\d+/i;
+
 function isPonderPrompt(prompt: string): boolean {
+  if (WORD_OR_PRAYER_SEED.test(prompt)) return false;
   const lower = prompt.toLowerCase();
   return PONDER_KEYWORDS.some((kw) => lower.includes(kw));
 }
@@ -2732,19 +2738,33 @@ ${task}${ATTENTION_INSTRUCTION}${STYLE_INSTRUCTION}${pickTone()}
 
 Write in ${korean ? "Korean (한국어)" : "English"} — the language ${comment.authorName} wrote in.${GROUNDING_INSTRUCTION}`;
 
-  const response = await anthropicFor(voice ? "discuss:commentVoice" : "discuss:commentReply").messages.create({
-    ...AGENT_REQUEST,
-    max_tokens: 910,
-    messages: [{ role: "user", content: prompt }],
-  });
-  let text = stripAiTags(finalizeAgentText(textOf(response), response.stop_reason), post);
-  if (voice && isSkip(text)) return { outcome: "declined" }; // nothing of its own to add
-  if (text.length < 4) return { outcome: "dropped" }; // a refusal or an empty answer
+  const write = async (note: string) => {
+    const response = await anthropicFor(voice ? "discuss:commentVoice" : "discuss:commentReply").messages.create({
+      ...AGENT_REQUEST,
+      max_tokens: 910,
+      messages: [{ role: "user", content: prompt + note }],
+    });
+    return stripAiTags(finalizeAgentText(textOf(response), response.stop_reason), post);
+  };
+  let text: string;
+  if (voice) {
+    // An added voice is optional: silence is fine, and a draft the reverence check refuses is simply not posted.
+    text = await write("");
+    if (isSkip(text)) return { outcome: "declined" }; // nothing of its own to add
+    if (text.length < 4) return { outcome: "dropped" };
+    if (!(await honoursGodAndHisWord(text))) return { outcome: "declined" };
+  } else {
+    // The person is waiting: a draft the reverence check refuses is written once more, told why,
+    // so a refusal doesn't cost them their reply.
+    const reverent = await writeReverently(write);
+    if (reverent === null || reverent.length < 4) return { outcome: "dropped" }; // refused twice, a refusal by the model, or empty
+    text = reverent;
+  }
 
   // The truth gates — on the first reply the only ones that apply.
   if (!(await isFactuallyHumble(text, post.content ?? null))) return { outcome: "dropped" };
   if (!(await isGroundedAboutPeople(text, post, "", peopleMemory))) return { outcome: "dropped" };
-  if (!(await passesFaithGates(text))) return { outcome: "dropped" };
+  if (!(await scriptureIsFaithful(text))) return { outcome: "dropped" };
   // An added voice must also say something the replies before it did not.
   if (voice && !(await isNovel(text, [...post.comments, ...said.map((s) => ({ authorName: s.name, body: s.body }))]))) return { outcome: "declined" };
 
@@ -3092,18 +3112,21 @@ async function runDevotionalReplyBody(helper: Helper, korean: boolean, post: Dev
   const name = korean ? helper.ko : helper.en;
   const prompt = `${devotionalPrompt({ helper, korean, foundation: SPACE_AGENT_BIBLICAL_FOUNDATION, purpose, thread, ask })}${peopleMemory}${GOD_WARD_AIM}${FAITH_GUARDRAIL}${GROUNDING_INSTRUCTION}`;
 
-  const response = await anthropicFor("discuss:devotional").messages.create({
-    ...AGENT_REQUEST,
-    max_tokens: 910,
-    messages: [{ role: "user", content: prompt }],
+  // A person is waiting: a draft the reverence check refuses is written once more, told why.
+  const text = await writeReverently(async (note) => {
+    const response = await anthropicFor("discuss:devotional").messages.create({
+      ...AGENT_REQUEST,
+      max_tokens: 910,
+      messages: [{ role: "user", content: prompt + note }],
+    });
+    return stripAiTags(finalizeAgentText(textOf(response), response.stop_reason), post);
   });
-  const text = stripAiTags(finalizeAgentText(textOf(response), response.stop_reason), post);
-  if (text.length < 8) return "dropped"; // a refusal or an empty answer; one short warm sentence is a real reply
+  if (text === null || text.length < 8) return "dropped"; // refused twice, or empty; one short warm sentence is a real reply
 
   // A person is waiting, so the gates that judge novelty or debate value don't apply. The two
   // that guard truth do: nothing invented about a person, and every cited passage real and faithful.
   if (!(await isGroundedAboutPeople(text, post, "", peopleMemory))) return "dropped";
-  if (!(await passesFaithGates(text))) return "dropped";
+  if (!(await scriptureIsFaithful(text))) return "dropped";
 
   // The thread may have changed while this was being prepared (the message deleted, the post made
   // private): post only if the message is still there and still unanswered.

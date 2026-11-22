@@ -12,7 +12,8 @@ import { isCronAuthorized } from "@/lib/cronAuth";
 import { authOptions } from "@/lib/auth";
 import { finalizeAgentText } from "@/lib/agentText";
 import { fetchArticleText } from "@/lib/articleText";
-import { passesFaithGates } from "@/lib/faithGates";
+import { writeReverently } from "@/lib/faithGates";
+import { scriptureIsFaithful } from "@/lib/scripture";
 import { withAgent } from "@/lib/agentContext";
 import {
   assembleNewsPost, briefIsUsable, briefPrompt, cleanFeedLink, cleanFeedText, clip, dropUnfinishedLine, godViewPrompt,
@@ -199,10 +200,17 @@ async function composeStory(o: {
     // sentence in English, and a cut-off reply loses its last line ("정리:").
     both ? ask("news:report", o.reporter, briefPrompt("en", o.story), 800, "lines") : Promise.resolve(""),
     ask(both ? "news:reportKorean" : "news:koreanFeed", o.reporter, briefPrompt("ko", o.story), 1300, "lines"),
-    ask("news:godView", o.godAgent, godViewPrompt(o.godAgent, o.story, o.langs, FAITH_GUARDRAIL), both ? 1000 : 600, "prose"),
-    ask("news:humanView", o.humanAgent, humanViewPrompt(o.humanAgent, o.story, o.langs, FAITH_GUARDRAIL), both ? 900 : 600, "prose"),
+    // A reading never questions or is cynical about God or His Word (lib/reverence.ts). One that
+    // is refused is written once more, told why; refused twice, it is left out. Each runs under
+    // its agent's name so the check's calls and any refusal are logged there.
+    withAgent(o.godAgent.name, () =>
+      writeReverently((note) => ask("news:godView", o.godAgent, godViewPrompt(o.godAgent, o.story, o.langs, FAITH_GUARDRAIL) + note, both ? 1000 : 600, "prose")),
+    ),
+    withAgent(o.humanAgent.name, () =>
+      writeReverently((note) => ask("news:humanView", o.humanAgent, humanViewPrompt(o.humanAgent, o.story, o.langs, FAITH_GUARDRAIL) + note, both ? 900 : 600, "prose")),
+    ),
   ]);
-  const text = (r: PromiseSettledResult<string>) => (r.status === "fulfilled" ? r.value : "");
+  const text = (r: PromiseSettledResult<string | null>) => (r.status === "fulfilled" ? (r.value ?? "") : "");
   const brief = (lang: NewsLang, raw: string): Brief | null => {
     const b = parseBrief(lang, raw);
     return briefIsUsable(b) ? b : null;
@@ -212,13 +220,11 @@ async function composeStory(o: {
   const ko = brief("ko", text(koRaw));
   if (both ? !en : !ko) return null;
 
-  // A reading must never question or be cynical about God or His Word, and every passage it cites
-  // must exist and say what the reading says it says (lib/faithGates.ts). A reading that fails is
-  // left out (and with it the human view, which never stands without the God-centered one).
-  // Each check runs under the agent that wrote the reading, so its calls and any refusal are logged under that name.
+  // Every passage a reading cites must exist and say what the reading says it says. A reading that
+  // fails is left out (and with it the human view, which never stands without the God-centered one).
   const [godFaithful, humanFaithful] = await Promise.all([
-    withAgent(o.godAgent.name, () => passesFaithGates(text(godRaw))),
-    withAgent(o.humanAgent.name, () => passesFaithGates(text(humanRaw))),
+    withAgent(o.godAgent.name, () => scriptureIsFaithful(text(godRaw))),
+    withAgent(o.humanAgent.name, () => scriptureIsFaithful(text(humanRaw))),
   ]);
 
   return assembleNewsPost({
