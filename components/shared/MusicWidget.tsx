@@ -135,6 +135,14 @@ function _fetchTitles() {
   });
 }
 
+/**
+ * Stops playback. For when the music button is switched off in Settings: the player lives outside
+ * React (see above), so removing the button alone would leave it playing with no controls.
+ */
+export function stopMusic() {
+  _player?.pauseVideo?.();
+}
+
 // ── React component ───────────────────────────────────────────────────────────
 
 export function MusicWidget() {
