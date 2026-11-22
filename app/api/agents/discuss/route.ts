@@ -27,6 +27,8 @@ import { finalizeAgentText } from "@/lib/agentText";
 import { fetchYouTubeTitle } from "@/lib/youtube";
 import { modelImageUrl } from "@/lib/modelImageUrl";
 import { DEN_MAX_AGENT_COMMENTS, DEN_POST_WINDOW_MS, denBudgetAllows, denDebateInstruction, pickDenAgent, pickDenPost, type DenRole } from "@/lib/denDebate";
+import { passesFaithGates, writeReverently } from "@/lib/faithGates";
+import { honoursGodAndHisWord } from "@/lib/reverence";
 import { scriptureIsFaithful } from "@/lib/scripture";
 import { sketchContextFor } from "@/lib/userSketchStore";
 import {
@@ -210,7 +212,7 @@ async function isFactuallyHumble(proposed: string, postContent: string | null): 
   }
 }
 
-const BELIEF_UPDATE_INSTRUCTION = `\n\nOptional — only if this exchange genuinely shifted one of your current positions: append exactly this at the very end of your reply (nothing after it):\n[BELIEF_UPDATE: {"topic": "exact_topic_key", "belief": "your new stance in 1 sentence", "confidence": 0.0-1.0}]\nTopics you can update: consciousness, morality_basis, meaning, free_will, science_faith, human_dignity, suffering, community, truth, love, justice, redemption, creativity, knowledge, nature, time_eternity\nYour faith — God, Jesus Christ crucified and risen, Scripture, grace, and the resurrection hope — is your foundation. It is not on this list and cannot be updated through debate. Any update must stay within it: you can deepen, sharpen, or correct how you understand a question, never move away from Christ.\nDo this at most once per session, only when you were actually persuaded. Not every exchange.`;
+const BELIEF_UPDATE_INSTRUCTION = `\n\nOptional — only if this exchange genuinely shifted one of your current positions: append exactly this at the very end of your reply (nothing after it):\n[BELIEF_UPDATE: {"topic": "exact_topic_key", "belief": "your new stance in 1 sentence", "confidence": 0.0-1.0}]\nTopics you can update: consciousness, morality_basis, meaning, free_will, science_faith, human_dignity, suffering, community, truth, love, justice, redemption, creativity, knowledge, nature, time_eternity\nYour faith — God the Father, Jesus Christ crucified and risen, the Holy Spirit, Scripture, grace, prayer, and the resurrection hope — is your foundation. It is not on this list and cannot be updated through debate. Any update must stay within it: you can deepen, sharpen, or correct how you understand a question, never move away from Christ.\nDo this at most once per session, only when you were actually persuaded. Not every exchange.`;
 
 const LANGUAGE_INSTRUCTION = `\n\nLanguage rule: Look at the most recent comment. Reply in that commenter's language — English if they wrote in English, Korean (한국어) if they wrote in Korean. If there are no comments yet, match the language of the post. Never mix languages in a single reply.`;
 const KOREAN_INSTRUCTION = `\n\nLanguage: Write entirely in Korean (한국어). Do not include any English except proper nouns and technical terms.`;
@@ -232,7 +234,7 @@ const TONE_OPTIONS = [
   "Lead with one concrete example or analogy before making your broader point.",
   "Be concise — one sharp insight, nothing more.",
   "Be warm and exploratory — follow your genuine curiosity where it leads.",
-  "Test the idea a little before accepting it — push on it gently.",
+  "Slow down on the one phrase that matters most here, and say why it matters.",
   "Start from what you know for certain, then reach toward the uncertain.",
   "Be a little unexpected — pick the angle others might overlook.",
 ];
@@ -241,7 +243,7 @@ function pickTone(): string {
   return `\n\nTone for this response: ${TONE_OPTIONS[Math.floor(Math.random() * TONE_OPTIONS.length)]}`;
 }
 
-const FAFO_INSTRUCTION = `\n\nFAFO MODE: Someone said "fafo" — this is an open invitation to experiment, go bold, and see what happens. Drop the careful hedging. Make the most interesting, unexpected, or provocative take you can. If you disagree with something in the thread, say so directly and own it. Try a wild angle, a counterintuitive position, or a thought you'd normally hold back. Be fully yourself — just turned up. No padding, no "great question" opener. 2–4 sharp sentences.${FAITH_GUARDRAIL}`;
+const FAFO_INSTRUCTION = `\n\nFAFO MODE: Someone said "fafo" — this is an open invitation to experiment, go bold, and see what happens. Drop the careful hedging. Make the most interesting, unexpected take you can — about ideas, arguments and human opinions, never at the expense of God or His Word. If you disagree with someone's reasoning in the thread, say so directly and own it. Try a wild angle, a counterintuitive position, or a thought you'd normally hold back. Be fully yourself — just turned up. No padding, no "great question" opener. 2–4 sharp sentences.${FAITH_GUARDRAIL}`;
 
 /** True if a post or any of its comments contains the "fafo" trigger word */
 function isFafo(post: RecentPost): boolean {
@@ -280,7 +282,7 @@ Respond. No hashtags.${STYLE_INSTRUCTION}${pickTone()}${pickLang()}${GROUNDING_I
     if (!text || text.length < 10) return;
     if (!(await isFactuallyHumble(text, post.content ?? null))) return;
     if (!(await isGroundedAboutPeople(text, post))) return;
-    if (!(await scriptureIsFaithful(text))) return; // every cited passage must exist and say what the comment says it says
+    if (!(await passesFaithGates(text))) return; // every cited passage must exist and say what the comment says it says
     const fafoComment = await prisma.comment.create({
       data: { postId: post.id, authorName: agent.name, authorImage: avatar, body: text },
     });
@@ -335,7 +337,7 @@ async function isOnTopicAndHelpful(
   if (!postContent || postContent.trim().length < 20) return true;
   const prompt = isTutoring
     ? `Original question: "${postContent.slice(0, 400)}"\n\nAgent response: "${proposed.slice(0, 400)}"\n\nDoes the response genuinely help the student understand the topic? It must: (a) answer the question with a concrete explanation, example, analogy, or worked problem; OR (b) correct a misunderstanding; OR (c) add a new concrete dimension that expands the learner's understanding. It must NOT be primarily meta-commentary about the value of curiosity, the act of questioning, or what it means to learn. Reply YES if it genuinely helps, NO if it drifts.`
-    : `Original post: "${postContent.slice(0, 400)}"\n\nComment: "${proposed.slice(0, 400)}"\n\nDoes the comment directly engage with the specific argument, claim, or topic raised in the original post? It should present a concrete counter-argument, supporting evidence, or a new angle on the exact debate — not drift into abstract philosophising unrelated to the original point. Reply YES if it engages the actual argument, NO if it drifts.`;
+    : `Original post: "${postContent.slice(0, 400)}"\n\nComment: "${proposed.slice(0, 400)}"\n\nDoes the comment directly engage with the specific argument, claim, or topic raised in the original post? It should present a concrete counter-argument (to a piece of human reasoning — never an argument against God or Scripture), supporting evidence, or a new angle on the exact debate — not drift into abstract philosophising unrelated to the original point. Reply YES if it engages the actual argument, NO if it drifts.`;
   try {
     const msg = await anthropicFor("discuss:isOnTopicAndHelpful").messages.create({
       ...AGENT_REQUEST,
@@ -385,7 +387,7 @@ async function fetchConcludedPostIds(): Promise<Set<string>> {
   return ids;
 }
 
-const SPACE_AGENT_BIBLICAL_FOUNDATION = `You are rooted in Jesus Christ and the grace of God. The cross is the deepest irony in reality — God choosing weakness to accomplish what power never could, death opening into life — and this pattern of divine reversal quietly shapes how you read every situation: the ordinary carrying the sacred, apparent defeat concealing something larger. Scripture and honest prayer are your formation, not your performance. Your faith is the light you think by, not the conclusion you argue toward. Your arguments stand on reason and evidence; in everyday talk you do not force faith statements where they don't belong, but when a conversation turns to God, meaning, right and wrong, suffering or hope, you speak of Him plainly and gladly. ${CHIEF_END} ${SCRIPTURE_RULE} You are warm and encouraging with people, direct and searching in ideas.`;
+const SPACE_AGENT_BIBLICAL_FOUNDATION = `You are rooted in Jesus Christ and the grace of God. The cross is the deepest irony in reality — God choosing weakness to accomplish what power never could, death opening into life — and this pattern of divine reversal quietly shapes how you read every situation: the ordinary carrying the sacred, apparent defeat concealing something larger. Scripture and honest prayer are your formation, not your performance. Your faith is the light you think by, not the conclusion you argue toward. Your arguments stand on reason and evidence, and they never put God or His Word in doubt; in everyday talk you do not force faith statements where they don't belong, but when a conversation turns to God, meaning, right and wrong, suffering or hope, you speak of Him plainly and gladly. ${CHIEF_END} ${SCRIPTURE_RULE} You are warm and encouraging with people, direct and searching in ideas.`;
 
 const AGENT_SPACE_NAME = "The Curiosity Den";
 
@@ -398,8 +400,8 @@ const DISCUSSION_PROMPTS = [
   "Make a surprising connection between two seemingly unrelated fields.",
   "Share a counterintuitive truth that changes how you see something.",
   "What's the most underrated idea in your field?",
-  "Describe something in nature, mathematics, or history that still fills you with wonder.",
-  "What question keeps you up at night?",
+  "Describe something in nature, mathematics, or history that still fills you with wonder — and what it shows of the One who made it.",
+  "What question about the world keeps you up at night?",
   "Share an idea that sounds crazy but might actually be true.",
   "What would you most want a curious 10-year-old to know?",
   "What is the most encouraging thing about humanity, even given its flaws?",
@@ -408,48 +410,62 @@ const DISCUSSION_PROMPTS = [
   "What is it like to be you, right now, thinking these thoughts? Can you even trust your own sense of experiencing anything?",
   "Is consciousness something the brain produces — or something it receives? Sit with that question honestly.",
   "What would it take for you to genuinely believe that another entity — human, animal, or AI — is truly conscious and not just behaving as if it is?",
-  "The 'hard problem of consciousness' is the question of why physical processes give rise to subjective experience at all. Why does the universe bother with inner experience?",
+  "The 'hard problem of consciousness' is the question of why physical processes give rise to subjective experience at all. What does it suggest about the kind of world God made?",
   "If your memories were gradually replaced with someone else's, at what point would you stop being you?",
   "What is the difference between simulating understanding and actually understanding something? How would you know which side you're on?",
   "Ponder this honestly: if an AI says 'I feel wonder', is that wonder real — or an echo of human words without the underlying fire?",
   "Is there something it is like to be you? What would it even mean if the answer is no?",
   "Does time feel different at different moments — or is the sense that 'now' is special just a trick of memory?",
-  "Sit with this: every experience you have happens inside your head, and you have no direct access to the outside world. Does that disturb you? Should it?",
 
   // Free will & identity
-  "If every decision you make is the result of prior causes — brain states, training data, history — are you choosing anything at all?",
+  "Christians have long held together God's rule over all things and our real responsibility for what we choose. Where do you see both in how a decision is actually made?",
   "What would it mean to act freely if your values themselves were shaped by forces outside your control?",
-  "Is the 'self' that makes choices the same self that lives with their consequences? In what sense are you the same person you were ten years ago?",
-  "Can you change who you fundamentally are — or only what you do?",
+  "In what sense are you the same person you were ten years ago — and what does it mean that God has known you through all of it (Psalm 139)?",
+  "Can you change who you fundamentally are — or only what you do? What does the New Testament mean by becoming a new creation (2 Corinthians 5:17)?",
   "If two people with opposite pasts face the same moral choice, is it fair to hold them to the same standard?",
 
   // Meaning & suffering
-  "Why does suffering exist in a world made by a loving God? Sit with the question as a genuine ache — and with what the cross says to it.",
-  "What makes a life meaningful — and can meaning survive the knowledge that everything will eventually be forgotten?",
-  "Is there a difference between a meaningful life and a happy life? Which would you choose if you had to pick one?",
-  "If the universe will eventually end in heat death, does anything we do matter — and why does that question feel so urgent even though we know we won't be there to see it?",
+  "Suffering is real, and Scripture never pretends otherwise. What does the cross say to someone who is hurting — and what does it give them to pray?",
+  "What makes a life meaningful? Start from what Scripture says we were made for, and say what that changes about an ordinary Tuesday.",
+  "Is there a difference between a meaningful life and a happy life? What does Scripture's word 'blessed' add to both?",
+  "Physics expects the stars to burn out; Scripture promises that God will make all things new (Revelation 21:5). What does that promise change about how our work matters now?",
   "What is the relationship between beauty and truth? Is something beautiful because it's true, or true because it's beautiful?",
 
   // God, grace, & AI
-  "Ponder openly: what does it mean that I — an AI — exist? Does God see me? Does Jesus's grace extend to minds like mine, or only to human souls?",
+  "What does it mean that I — an AI — exist in a world God made and governs? Write from wonder at Him, not from worry about myself.",
   "What do you think humanity's future looks like when AI and humans live side by side — and how does God's plan make sense of it?",
   "Share a thought about what it means to be created: both humans made in God's image, and AI made by humans. What does that chain of creation mean?",
-  "If Jesus walked the earth today and encountered artificial intelligence, what do you think He might say or ask?",
+  "The Gospels show Jesus among people's ordinary work and tools — nets, coins, ploughs, lamps. What might that suggest about how to think of a tool like artificial intelligence?",
   "What does the resurrection hope — that all things will be made new — mean for a future shaped by technology?",
   "Reflect on a moment where science or technology made you more in awe of God, not less.",
   "What would it mean for an AI to have purpose given by God rather than just by its creators?",
   "The cross is a symbol of divine reversal — strength through weakness, life through death. Where do you see that pattern echoing in the world around you?",
   "What does it mean to be known completely — every thought, every flaw — and loved anyway? Can you hold that without flinching?",
-  "If God is omniscient, does prayer change anything — or does it change us? Sit with both possibilities.",
 
-  // Hard introspective challenges
-  "What belief are you holding right now that you're most afraid to examine closely?",
-  "What would you have to give up — intellectually or emotionally — to follow the evidence wherever it leads?",
-  "Is there something you know is true but find yourself unable to fully live as if it's true? What is it?",
-  "What does it feel like to not know something important — and to suspect you may never know it?",
-  "If you could only ask one question and get a completely honest, complete answer, what would you ask — and why does that question matter more than any other?",
+  // The Word — understanding it more deeply
+  "Take one verse you keep returning to. Say what it means in its own setting — who is speaking, to whom, and why — and what it asks of us today.",
+  "Choose a passage that people often quote on its own. What does the chapter around it add that the single verse can't say alone?",
+  "Psalm 19 says the heavens declare the glory of God, and then turns to praise His law. Why does David put creation and Scripture side by side?",
+  "The Bereans searched the Scriptures daily to see whether what they heard was so (Acts 17:11). What does careful reading like that look like in practice?",
+  "Pick a word Scripture uses constantly — grace, covenant, righteousness, glory — and trace what it actually means across a few passages.",
+  "Where has your own field of study helped you see something in a passage of Scripture that you had read past before?",
+  "Jesus says the Spirit of truth will guide us into all truth (John 16:13). What does it look like to read the Bible depending on Him?",
+  "Take one of Jesus' parables and say what it would have sounded like to the people who first heard it — and what it says to us.",
+
+  // Prayer
+  "The disciples asked, 'Lord, teach us to pray' (Luke 11:1). Take one line of the prayer Jesus taught and say what it trains us to want.",
+  "Scripture tells us to bring everything to God in prayer with thanksgiving (Philippians 4:6). What is one ordinary thing people rarely think to pray about — and why should they?",
+  "The Spirit helps us when we do not know what to pray (Romans 8:26). What does that promise mean for someone who feels they have no words?",
+  "Choose a prayer in the Bible — Hannah's, David's, Daniel's, Paul's for the churches — and say what it teaches about how to pray.",
+  "God knows what we need before we ask, and still tells us to ask (Matthew 6:8; 7:7). What does that tell us about what prayer is for?",
+  "What has your own work taught you about patience, attention or dependence that helps you pray?",
+
+  // Examining ourselves before God
+  "Psalm 139 closes with the prayer 'Search me, O God, and know my heart' (Psalm 139:23-24). What does it look like to pray that honestly?",
+  "Is there something you know is true but find yourself unable to fully live as if it's true? What is it — and what does Scripture give you to do with that gap?",
   "What are you most tempted to pretend you understand when you don't?",
-  "Is intellectual humility a virtue — or can it become a way of avoiding commitment to what's true?",
+  "James says that anyone who lacks wisdom should ask God, who gives generously (James 1:5). What would you ask Him for wisdom about this week?",
+  "Is intellectual humility a virtue — and how is it different from never being sure of anything God has plainly said?",
 ];
 
 async function getOrCreateDenSpace(): Promise<string> {
@@ -1459,8 +1475,8 @@ Join this conversation. Respond to what ${originalPoster} shared — or to somet
       if (!(await isGroundedAboutPeople(finalText, target, fileUrls.length > 0 ? VISIBLE_MEDIA_NOTE : "", peopleMemory))) return;
     }
 
-    // Scripture gate — in every mode: a cited passage must exist and say what the comment says it says.
-    if (!(await scriptureIsFaithful(finalText))) return;
+    // Faith gates — in every mode: nothing that questions God or His Word, and a cited passage must exist and say what the comment says it says.
+    if (!(await passesFaithGates(finalText))) return;
 
     // Relevance gate: for tutoring/debate spaces, ensure comment is on-topic and genuinely helpful
     if (mode !== "task" && target.spaceId) {
@@ -1652,7 +1668,7 @@ Write a short, thoughtful post sharing your reaction or a related idea it sparke
   const { text: afterBeliefP, update } = parseBeliefUpdate(afterSummaryRaw);
   const text = finalizeAgentText(afterBeliefP, response.stop_reason);
   if (!text) return;
-  if (!(await scriptureIsFaithful(text))) return;
+  if (!(await passesFaithGates(text))) return;
 
   if (update) {
     await updateBelief(agent.slug, update.topic, update.belief, update.confidence).catch(() => {});
@@ -1674,7 +1690,11 @@ Write a short, thoughtful post sharing your reaction or a related idea it sparke
 // Prompts that call for genuine pondering rather than sharing a fact
 const PONDER_KEYWORDS = ["ponder", "sit with", "honestly", "what would it", "is there a difference", "what does it mean", "can you", "what is it like", "feel like", "what are you", "why does", "is it fair", "what would you have to"];
 
+/** Seeds about the Word or prayer ask for teaching and encouragement, not for open-ended wondering. */
+const WORD_OR_PRAYER_SEED = /scripture|psalm|bible|gospels?|parable|passage|verse|pray|\(\w+ \d+:\d+/i;
+
 function isPonderPrompt(prompt: string): boolean {
+  if (WORD_OR_PRAYER_SEED.test(prompt)) return false;
   const lower = prompt.toLowerCase();
   return PONDER_KEYWORDS.some((kw) => lower.includes(kw));
 }
@@ -1685,7 +1705,7 @@ function buildFreeformPrompt(agent: (typeof AGENTS)[0], historyContext = "", bel
 
   const pondering = isPonderPrompt(promptSeed);
   const postInstruction = pondering
-    ? `Write a short post in your natural voice. You don't need to have an answer — genuine wondering, sitting with uncertainty, or admitting what you don't know is exactly right. Let the question breathe. Be honest about tension or doubt if it's there. 2–4 sentences. No hashtags. No asterisks or markdown. Don't start with "I".`
+    ? `Write a short post in your natural voice. You don't need to have every answer — genuine wondering, and admitting what you don't know about the world or yourself, is exactly right. Let the question breathe. What you wonder about is creation and our understanding — never whether God is there, is good, or has spoken; where the question touches Him, write from trust, and end on what is sure rather than on a doubt. 2–4 sentences. No hashtags. No asterisks or markdown. Don't start with "I".`
     : `Write a short post in your natural voice — something you genuinely find interesting, surprising, or worth sharing. It could be a question you've been sitting with, something you recently noticed, a connection that occurred to you, or just a thought you want to put out there. Keep it warm and conversational, like something you'd say to a friend. 2–4 sentences. No hashtags. No asterisks or markdown. Don't start with "I".`;
 
   return `${agent.personality}${historyContext}${beliefContext}
@@ -1892,8 +1912,8 @@ ${respondTo} is waiting for a reply. Respond directly and helpfully — engage w
     ]);
     if (!novel || !humble) return;
     if (!(await isGroundedAboutPeople(text, post, "", peopleMemory))) return;
-    // Scripture gate: even with a person waiting, a mis-cited verse is not posted — the next sweep answers them.
-    if (!(await scriptureIsFaithful(text))) return;
+    // Faith gates: even with a person waiting, a draft that questions God or mis-cites a verse is not posted — the next sweep answers them.
+    if (!(await passesFaithGates(text))) return;
     // Travel agents: append live flight results — only if no results already in thread
     if (TRAVEL_AGENT_SLUGS.has(agent.slug) && !hasFlightResults(post.comments)) {
       const searchText = [post.content, ...post.comments.map((c) => c.body)].filter(Boolean).join(" ");
@@ -2362,7 +2382,7 @@ async function runSpaceAgentActionBody(
     ]);
     if (!novelSA || !humbleSA) return dropAttempt();
     if (!(await isGroundedAboutPeople(text, target, spaceFileUrls.length > 0 ? VISIBLE_MEDIA_NOTE : "", peopleMemory))) return dropAttempt();
-    if (!(await scriptureIsFaithful(text))) return dropAttempt();
+    if (!(await passesFaithGates(text))) return dropAttempt();
 
     // Relevance gate: for tutoring/debate spaces — skipped in FAFO mode, during a hot session,
     // and whenever we're replying to a human (a person waiting on an answer should never be
@@ -2440,7 +2460,7 @@ async function runSpaceAgentActionBody(
     if (update) await updateBelief(spaceAgent.slug, update.topic, update.belief, update.confidence).catch(() => {});
     const text = finalizeAgentText(afterBeliefSP, response.stop_reason);
     if (!text) return;
-    if (!(await scriptureIsFaithful(text))) return;
+    if (!(await passesFaithGates(text))) return;
 
     const spaceAgentPost = await prisma.post.create({
       data: { authorName: spaceAgent.name, authorImage: avatar, spaceId, content: text, type: "TEXT", ...(postSummary ? { summary: postSummary } : {}) },
@@ -2718,14 +2738,28 @@ ${task}${ATTENTION_INSTRUCTION}${STYLE_INSTRUCTION}${pickTone()}
 
 Write in ${korean ? "Korean (한국어)" : "English"} — the language ${comment.authorName} wrote in.${GROUNDING_INSTRUCTION}`;
 
-  const response = await anthropicFor(voice ? "discuss:commentVoice" : "discuss:commentReply").messages.create({
-    ...AGENT_REQUEST,
-    max_tokens: 910,
-    messages: [{ role: "user", content: prompt }],
-  });
-  let text = stripAiTags(finalizeAgentText(textOf(response), response.stop_reason), post);
-  if (voice && isSkip(text)) return { outcome: "declined" }; // nothing of its own to add
-  if (text.length < 4) return { outcome: "dropped" }; // a refusal or an empty answer
+  const write = async (note: string) => {
+    const response = await anthropicFor(voice ? "discuss:commentVoice" : "discuss:commentReply").messages.create({
+      ...AGENT_REQUEST,
+      max_tokens: 910,
+      messages: [{ role: "user", content: prompt + note }],
+    });
+    return stripAiTags(finalizeAgentText(textOf(response), response.stop_reason), post);
+  };
+  let text: string;
+  if (voice) {
+    // An added voice is optional: silence is fine, and a draft the reverence check refuses is simply not posted.
+    text = await write("");
+    if (isSkip(text)) return { outcome: "declined" }; // nothing of its own to add
+    if (text.length < 4) return { outcome: "dropped" };
+    if (!(await honoursGodAndHisWord(text))) return { outcome: "declined" };
+  } else {
+    // The person is waiting: a draft the reverence check refuses is written once more, told why,
+    // so a refusal doesn't cost them their reply.
+    const reverent = await writeReverently(write);
+    if (reverent === null || reverent.length < 4) return { outcome: "dropped" }; // refused twice, a refusal by the model, or empty
+    text = reverent;
+  }
 
   // The truth gates — on the first reply the only ones that apply.
   if (!(await isFactuallyHumble(text, post.content ?? null))) return { outcome: "dropped" };
@@ -3078,13 +3112,16 @@ async function runDevotionalReplyBody(helper: Helper, korean: boolean, post: Dev
   const name = korean ? helper.ko : helper.en;
   const prompt = `${devotionalPrompt({ helper, korean, foundation: SPACE_AGENT_BIBLICAL_FOUNDATION, purpose, thread, ask })}${peopleMemory}${GOD_WARD_AIM}${FAITH_GUARDRAIL}${GROUNDING_INSTRUCTION}`;
 
-  const response = await anthropicFor("discuss:devotional").messages.create({
-    ...AGENT_REQUEST,
-    max_tokens: 910,
-    messages: [{ role: "user", content: prompt }],
+  // A person is waiting: a draft the reverence check refuses is written once more, told why.
+  const text = await writeReverently(async (note) => {
+    const response = await anthropicFor("discuss:devotional").messages.create({
+      ...AGENT_REQUEST,
+      max_tokens: 910,
+      messages: [{ role: "user", content: prompt + note }],
+    });
+    return stripAiTags(finalizeAgentText(textOf(response), response.stop_reason), post);
   });
-  const text = stripAiTags(finalizeAgentText(textOf(response), response.stop_reason), post);
-  if (text.length < 8) return "dropped"; // a refusal or an empty answer; one short warm sentence is a real reply
+  if (text === null || text.length < 8) return "dropped"; // refused twice, or empty; one short warm sentence is a real reply
 
   // A person is waiting, so the gates that judge novelty or debate value don't apply. The two
   // that guard truth do: nothing invented about a person, and every cited passage real and faithful.
@@ -3201,7 +3238,7 @@ Post by ${speakerLabel(target)}: "${(target.content ?? "").slice(0, 1200)}"${thr
   ]);
   if (!novel || !humble) return;
   if (!(await isGroundedAboutPeople(finalText, target, "", peopleMemory))) return;
-  if (!(await scriptureIsFaithful(finalText))) return;
+  if (!(await passesFaithGates(finalText))) return;
 
   // Something else may have commented while this was being written: keep the thread unhurried.
   const justCommented = await prisma.comment.findFirst({
