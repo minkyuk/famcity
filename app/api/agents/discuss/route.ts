@@ -29,7 +29,7 @@ import { DEN_MAX_AGENT_COMMENTS, DEN_POST_WINDOW_MS, denBudgetAllows, denDebateI
 import { scriptureIsFaithful } from "@/lib/scripture";
 import { sketchContextFor } from "@/lib/userSketchStore";
 import {
-  chooseHelper, claimIsOpen, DEVOTIONAL_ANSWER_WINDOW_MS, devotionalPrompt, helperAsks, helperWantedPrompt, isDevotionalPurpose, isKorean,
+  chooseHelper, claimIsOpen, DEVOTIONAL_ANSWER_WINDOW_MS, devotionalPrompt, EVERY_COMMENT_FROM, helperAsks, isDevotionalPurpose, isKorean,
   readClaim, settledClaim, stillUnanswered, type DevotionalClaim, type DevotionalOutcome, type Helper, type HelperAsk,
 } from "@/lib/devotional";
 import { runSketchSweep } from "@/lib/userSketchSweep";
@@ -2735,8 +2735,7 @@ async function answerPersonComment(commentId: string): Promise<ClaimOutcome | "s
   });
   if (!row || row.userId == null || row.post.isPrivate) return "skipped"; // agents never see private posts
   if (row.post.spaceId && isDevotionalPurpose(row.post.space?.purpose)) {
-    await runDevotionalSpace(row.post.spaceId, row.post.space?.purpose ?? ""); // the helpers' own rules
-    return "skipped";
+    return answerDevotionalMessage(row.postId, commentId, row.post.space?.purpose ?? ""); // a helper answers, under its own claim
   }
 
   const key = `${REPLY_CLAIM_PREFIX}${commentId}`;
@@ -2808,11 +2807,15 @@ async function answerWaitingComments(): Promise<void> {
     take: 60,
     select: { id: true, postId: true, createdAt: true, post: { select: { spaceId: true, space: { select: { purpose: true } } } } },
   });
-  const candidates = recent.filter((c) => !(c.post.spaceId && isDevotionalPurpose(c.post.space?.purpose)));
+  // Small-group comments are swept too, under the helpers' claim rows (and only those written
+  // since the helpers began answering every comment).
+  const inSmallGroup = (c: (typeof recent)[number]) => !!c.post.spaceId && isDevotionalPurpose(c.post.space?.purpose);
+  const keyOf = (c: (typeof recent)[number]) => (inSmallGroup(c) ? devotionalClaimKey(c.postId, c.id) : `${REPLY_CLAIM_PREFIX}${c.id}`);
+  const candidates = recent.filter((c) => !inSmallGroup(c) || c.createdAt >= EVERY_COMMENT_FROM);
   if (candidates.length === 0) return;
 
   const [claimRows, agentComments] = await Promise.all([
-    prisma.agentMemory.findMany({ where: { agentSlug: { in: candidates.map((c) => `${REPLY_CLAIM_PREFIX}${c.id}`) } }, select: { agentSlug: true, beliefs: true, updatedAt: true } }),
+    prisma.agentMemory.findMany({ where: { agentSlug: { in: candidates.map(keyOf) } }, select: { agentSlug: true, beliefs: true, updatedAt: true } }),
     prisma.comment.findMany({
       where: { postId: { in: [...new Set(candidates.map((c) => c.postId))] }, userId: null, createdAt: { gte: since } },
       orderBy: { createdAt: "desc" },
@@ -2823,8 +2826,8 @@ async function answerWaitingComments(): Promise<void> {
   const claims = new Map(claimRows.map((r) => [r.agentSlug, readReplyClaim(r)]));
   const waiting = candidates.filter((c) => {
     if (agentComments.some((a) => a.parentId === c.id)) return false; // answered under it
-    const claim = claims.get(`${REPLY_CLAIM_PREFIX}${c.id}`);
-    if (claim) return replyClaimIsOpen(claim, now, REPLY_POLICY);
+    const claim = claims.get(keyOf(c));
+    if (claim) return inSmallGroup(c) ? claimIsOpen(claim, now) : replyClaimIsOpen(claim, now, REPLY_POLICY);
     // Never triggered (the page closed first): waiting — except a comment from before replies
     // were threaded, which was answered by any agent speaking in its thread after it.
     return c.createdAt >= THREADED_REPLIES_FROM || !agentComments.some((a) => a.postId === c.postId && a.createdAt > c.createdAt);
@@ -2917,13 +2920,12 @@ async function runDevotionalSpace(spaceId: string, purpose: string): Promise<voi
     { spaceId, OR: [{ createdAt: { gte: since } }, { comments: { some: { createdAt: { gte: since }, userId: { not: null } } } }] },
     DEVOTIONAL_POSTS,
   );
-  const claimKey = (postId: string, ask: HelperAsk) => `${DEVOTIONAL_CLAIM_PREFIX}${postId}:${ask.commentId ?? "post"}`;
-  const waiting = posts.map((post) => ({ post, asks: helperAsks(post, Date.now()) })).filter((t) => t.asks.length > 0);
+  const waiting = posts.map((post) => ({ post, asks: helperAsks(post, Date.now(), { commentsFrom: EVERY_COMMENT_FROM }) })).filter((t) => t.asks.length > 0);
   if (waiting.length === 0) return;
 
   // Where each message stands, in one query — most were settled on an earlier run.
   const rows = await prisma.agentMemory.findMany({
-    where: { agentSlug: { in: waiting.flatMap((t) => t.asks.map((ask) => claimKey(t.post.id, ask))) } },
+    where: { agentSlug: { in: waiting.flatMap((t) => t.asks.map((ask) => devotionalClaimKey(t.post.id, ask.commentId))) } },
     select: { agentSlug: true, beliefs: true, updatedAt: true },
   });
   const claims = new Map(rows.map((row) => [row.agentSlug, readClaim(row)]));
@@ -2932,24 +2934,46 @@ async function runDevotionalSpace(spaceId: string, purpose: string): Promise<voi
   for (const { post, asks } of waiting) {
     if (drafts >= DEVOTIONAL_REPLIES_PER_RUN) break;
     for (const ask of asks) {
-      const key = claimKey(post.id, ask);
-      const known = claims.get(key);
-      if (!claimIsOpen(known, Date.now())) continue; // settled, being written, or waiting for its retry
-      const tries = await claimTurn(key, known);
-      if (tries === null) continue; // another run took it meanwhile
-
-      const helper = chooseHelper(ask.text);
-      const korean = isKorean(ask.text);
-      const outcome = await withAgent(korean ? helper.ko : helper.en, () => runDevotionalReplyBody(helper, korean, post, ask, purpose)).catch((err: unknown): DevotionalOutcome => {
-        console.error("[devotional] reply failed", post.id, err);
-        return "failed";
-      });
-      await settleDevotionalClaim(key, outcome, tries);
-      if (outcome === "declined") continue; // not for the helpers: the thread's next message may be
+      const outcome = await answerDevotionalAsk(post, ask, purpose, claims.get(devotionalClaimKey(post.id, ask.commentId)));
+      if (outcome === "busy" || outcome === "declined") continue; // settled, being written, or not due yet
       drafts++;
       break; // one reply per thread per run
     }
   }
+}
+
+const devotionalClaimKey = (postId: string, commentId: string | null) => `${DEVOTIONAL_CLAIM_PREFIX}${postId}:${commentId ?? "post"}`;
+
+/**
+ * One helper's turn on one message, under its claim (`known` = the row as just read; undefined =
+ * none). "busy" when the turn is another run's, or the message is settled or not due again yet.
+ */
+async function answerDevotionalAsk(post: DevotionalPost, ask: HelperAsk, purpose: string, known: DevotionalClaim | undefined): Promise<DevotionalOutcome | "busy"> {
+  if (!claimIsOpen(known, Date.now())) return "busy";
+  const key = devotionalClaimKey(post.id, ask.commentId);
+  const tries = await claimTurn(key, known);
+  if (tries === null) return "busy";
+  const helper = chooseHelper(ask.text);
+  const korean = isKorean(ask.text);
+  const outcome = await withAgent(korean ? helper.ko : helper.en, () => runDevotionalReplyBody(helper, korean, post, ask, purpose)).catch((err: unknown): DevotionalOutcome => {
+    console.error("[devotional] reply failed", post.id, err);
+    return "failed";
+  });
+  await settleDevotionalClaim(key, outcome, tries);
+  return outcome;
+}
+
+/**
+ * One person's post (`commentId` null) or comment in a small-group space, answered now — by the
+ * trigger as soon as it is written, or by the comment sweep. "skipped" when there is nothing to
+ * answer: it was answered, is an agent's, is too old, or is gone.
+ */
+async function answerDevotionalMessage(postId: string, commentId: string | null, purpose: string): Promise<DevotionalOutcome | "busy" | "skipped"> {
+  const post = commentId ? await loadThreadWith(postId, commentId) : ((await loadThreadsNewestFirst({ id: postId }, 1))[0] ?? null);
+  const ask = post ? helperAsks(post, Date.now(), { commentsFrom: EVERY_COMMENT_FROM }).find((a) => a.commentId === commentId) : undefined;
+  if (!post || !ask) return "skipped";
+  const row = await prisma.agentMemory.findUnique({ where: { agentSlug: devotionalClaimKey(postId, commentId) }, select: { beliefs: true, updatedAt: true } });
+  return answerDevotionalAsk(post, ask, purpose, row ? readClaim(row) : undefined);
 }
 
 /** Formats the post and its latest comments for a helper. */
@@ -2971,21 +2995,6 @@ function devotionalThread(post: RecentPost): string {
  */
 async function runDevotionalReplyBody(helper: Helper, korean: boolean, post: DevotionalPost, ask: HelperAsk, purpose: string): Promise<DevotionalOutcome> {
   const thread = devotionalThread(post);
-
-  // A post, or a comment nobody in particular was asked, may be the group talking among
-  // themselves. A short check decides. If it can't be made (an outage, an unreadable answer): a
-  // post still gets its reply; a comment waits for the retry — the member can always name a helper.
-  if (!ask.sure) {
-    const wanted = await anthropicFor("discuss:devotionalAsk").messages
-      .create({ ...AGENT_REQUEST, max_tokens: 10, messages: [{ role: "user", content: helperWantedPrompt({ purpose, thread, ask }) }] })
-      .then((msg) => {
-        const answer = textOf(msg).trim().toUpperCase();
-        return answer.startsWith("Y") ? true : answer.startsWith("N") ? false : null;
-      })
-      .catch(() => null);
-    if (wanted === false) return "declined";
-    if (wanted === null && ask.commentId !== null) return "failed";
-  }
 
   // What is remembered about the person being answered — including what they shared in this
   // space. That person is the one who wrote the message, not whoever commented last: the full
@@ -3194,13 +3203,6 @@ export async function POST(req: NextRequest) {
   // Fast path: post trigger — a human just commented; respond to EVERY post with a recent unanswered comment
   const triggerPostId = typeof bodyJson.triggerPostId === "string" ? bodyJson.triggerPostId : undefined;
   if (triggerPostId) {
-    // A post in a small-group (목장) space is answered by that space's helpers, never by a knight.
-    const home = await prisma.post.findUnique({ where: { id: triggerPostId }, select: { spaceId: true, space: { select: { purpose: true } } } }).catch(() => null);
-    if (home?.spaceId && isDevotionalPurpose(home.space?.purpose)) {
-      await runDevotionalSpace(home.spaceId, home.space?.purpose ?? "");
-      return NextResponse.json({ ok: true, trigger: true, devotional: true, postId: triggerPostId });
-    }
-
     // A person's comment: a reply under it, from one agent, whatever the limits say. A person may
     // fire this only for their own comment, just written; anything else is left to the sweep.
     const triggerCommentId = typeof bodyJson.triggerCommentId === "string" ? bodyJson.triggerCommentId : undefined;
@@ -3224,6 +3226,13 @@ export async function POST(req: NextRequest) {
         const outcome = await answerPersonComment(justWritten.id);
         return NextResponse.json({ ok: true, trigger: true, postId: triggerPostId, commentId: justWritten.id, outcome });
       }
+    }
+
+    // A new post in a small-group (목장) space is answered by that space's helpers, never by a knight.
+    const home = await prisma.post.findUnique({ where: { id: triggerPostId }, select: { spaceId: true, space: { select: { purpose: true } } } }).catch(() => null);
+    if (home?.spaceId && isDevotionalPurpose(home.space?.purpose)) {
+      const outcome = await answerDevotionalMessage(triggerPostId, null, home.space?.purpose ?? "");
+      return NextResponse.json({ ok: true, trigger: true, devotional: true, postId: triggerPostId, outcome });
     }
 
     const [denSpaceIdForTrigger, recentPosts] = await Promise.all([
