@@ -15,8 +15,8 @@ export function DisplaySettings({ initial }: { initial: UserPrefs }) {
   const router = useRouter();
 
   const set = async (key: keyof UserPrefs, value: boolean) => {
-    const before = prefs;
-    setPrefs({ ...prefs, [key]: value });
+    if (saving) return; // one change at a time (both switches wait while one is being saved)
+    setPrefs((p) => ({ ...p, [key]: value }));
     setSaving(key);
     try {
       const res = await fetch("/api/user/preferences", {
@@ -30,7 +30,7 @@ export function DisplaySettings({ initial }: { initial: UserPrefs }) {
       if (key === "music" && !value) stopMusic();
       router.refresh(); // the layout shows or hides it right away
     } catch {
-      setPrefs(before);
+      setPrefs((p) => ({ ...p, [key]: !value }));
       showToast("Could not save the setting · 저장하지 못했습니다", "error");
     } finally {
       setSaving(null);
@@ -43,14 +43,14 @@ export function DisplaySettings({ initial }: { initial: UserPrefs }) {
         label="🐱🐶 고양이와 강아지 · Cat & dog"
         hint="화면을 돌아다니는 고양이와 강아지를 보여 줍니다. · The cat and dog that roam the screen."
         checked={prefs.pets}
-        disabled={saving === "pets"}
+        disabled={saving !== null}
         onChange={(v) => set("pets", v)}
       />
       <ToggleRow
         label="🎵 음악 버튼 · Music button"
         hint="왼쪽 아래의 음악 플레이어. 끄면 재생 중인 음악도 멈춥니다. · The player at the bottom left; turning it off also stops the music."
         checked={prefs.music}
-        disabled={saving === "music"}
+        disabled={saving !== null}
         onChange={(v) => set("music", v)}
       />
     </>

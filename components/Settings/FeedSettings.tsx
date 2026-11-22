@@ -13,6 +13,7 @@ export function FeedSettings({ spaces, initialMutedIds }: { spaces: { id: string
   const router = useRouter();
 
   const setShown = async (spaceId: string, shown: boolean) => {
+    if (saving) return; // one change at a time
     setSaving(spaceId);
     try {
       const res = await fetch("/api/user/muted-spaces", {
@@ -41,7 +42,7 @@ export function FeedSettings({ spaces, initialMutedIds }: { spaces: { id: string
   return (
     <>
       {spaces.map((space) => (
-        <ToggleRow key={space.id} label={space.name} checked={!mutedIds.has(space.id)} disabled={saving === space.id} onChange={(v) => setShown(space.id, v)} />
+        <ToggleRow key={space.id} label={space.name} checked={!mutedIds.has(space.id)} disabled={saving !== null} onChange={(v) => setShown(space.id, v)} />
       ))}
     </>
   );

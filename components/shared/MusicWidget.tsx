@@ -83,7 +83,7 @@ function _initPlayer() {
       onReady: (e: any) => {
         e.target.setVolume(_s.volume);
         e.target.mute();
-        e.target.playVideo();
+        if (!_stopped) e.target.playVideo();
         _notify();
       },
       onStateChange: (e: any) => {
@@ -140,8 +140,10 @@ function _fetchTitles() {
  * React (see above), so removing the button alone would leave it playing with no controls.
  */
 export function stopMusic() {
+  _stopped = true; // also for a player that isn't ready yet: it must not start once it is
   _player?.pauseVideo?.();
 }
+let _stopped = false;
 
 // ── React component ───────────────────────────────────────────────────────────
 
@@ -151,7 +153,10 @@ export function MusicWidget() {
   // Stable dispatch reference — used to subscribe to module-level state changes
   const [, rerender] = useReducer((x: number) => x + 1, 0);
 
-  useEffect(() => { setMounted(true); }, []);
+  useEffect(() => {
+    _stopped = false; // the button is on screen again (switched back on in Settings)
+    setMounted(true);
+  }, []);
 
   // Subscribe to singleton state changes; survives remounts
   useEffect(() => {
