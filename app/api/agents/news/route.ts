@@ -12,8 +12,7 @@ import { isCronAuthorized } from "@/lib/cronAuth";
 import { authOptions } from "@/lib/auth";
 import { finalizeAgentText } from "@/lib/agentText";
 import { fetchArticleText } from "@/lib/articleText";
-import { writeReverently } from "@/lib/faithGates";
-import { scriptureIsFaithful } from "@/lib/scripture";
+import { writeFaithfully } from "@/lib/faithGates";
 import { withAgent } from "@/lib/agentContext";
 import {
   assembleNewsPost, briefIsUsable, briefPrompt, cleanFeedLink, cleanFeedText, clip, dropUnfinishedLine, godViewPrompt,
@@ -200,14 +199,16 @@ async function composeStory(o: {
     // sentence in English, and a cut-off reply loses its last line ("정리:").
     both ? ask("news:report", o.reporter, briefPrompt("en", o.story), 800, "lines") : Promise.resolve(""),
     ask(both ? "news:reportKorean" : "news:koreanFeed", o.reporter, briefPrompt("ko", o.story), 1300, "lines"),
-    // A reading never questions or is cynical about God or His Word (lib/reverence.ts). One that
-    // is refused is written once more, told why; refused twice, it is left out. Each runs under
-    // its agent's name so the check's calls and any refusal are logged there.
+    // A reading never questions or is cynical about God or His Word (lib/reverence.ts), and every
+    // passage it cites must exist and say what the reading says it says (lib/scripture.ts). One
+    // that is refused by either is written once more, told why; refused twice, it is left out (and
+    // with the God-centered reading goes the human view, which never stands without it). Each runs
+    // under its agent's name so the checks' calls and any refusal are logged there.
     withAgent(o.godAgent.name, () =>
-      writeReverently((note) => ask("news:godView", o.godAgent, godViewPrompt(o.godAgent, o.story, o.langs, FAITH_GUARDRAIL) + note, both ? 1000 : 600, "prose")),
+      writeFaithfully((note) => ask("news:godView", o.godAgent, godViewPrompt(o.godAgent, o.story, o.langs, FAITH_GUARDRAIL) + note, both ? 1000 : 600, "prose")),
     ),
     withAgent(o.humanAgent.name, () =>
-      writeReverently((note) => ask("news:humanView", o.humanAgent, humanViewPrompt(o.humanAgent, o.story, o.langs, FAITH_GUARDRAIL) + note, both ? 900 : 600, "prose")),
+      writeFaithfully((note) => ask("news:humanView", o.humanAgent, humanViewPrompt(o.humanAgent, o.story, o.langs, FAITH_GUARDRAIL) + note, both ? 900 : 600, "prose")),
     ),
   ]);
   const text = (r: PromiseSettledResult<string | null>) => (r.status === "fulfilled" ? (r.value ?? "") : "");
@@ -220,20 +221,13 @@ async function composeStory(o: {
   const ko = brief("ko", text(koRaw));
   if (both ? !en : !ko) return null;
 
-  // Every passage a reading cites must exist and say what the reading says it says. A reading that
-  // fails is left out (and with it the human view, which never stands without the God-centered one).
-  const [godFaithful, humanFaithful] = await Promise.all([
-    withAgent(o.godAgent.name, () => scriptureIsFaithful(text(godRaw))),
-    withAgent(o.humanAgent.name, () => scriptureIsFaithful(text(humanRaw))),
-  ]);
-
   return assembleNewsPost({
     story: o.story,
     badge: o.badge,
     en,
     ko,
-    godView: godFaithful ? toPerspective(o.godAgent.name, text(godRaw), o.langs) : null,
-    humanView: humanFaithful ? toHumanView(o.humanAgent.name, text(humanRaw), o.langs) : null,
+    godView: toPerspective(o.godAgent.name, text(godRaw), o.langs),
+    humanView: toHumanView(o.humanAgent.name, text(humanRaw), o.langs),
     footer: o.footer,
   });
 }

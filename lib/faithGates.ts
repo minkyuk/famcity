@@ -1,12 +1,12 @@
 import { honoursGodAndHisWord } from "@/lib/reverence";
-import { scriptureIsFaithful } from "@/lib/scripture";
+import { scriptureIsFaithful, scriptureProblem } from "@/lib/scripture";
 
 /**
  * What every draft must pass, about God and His Word, before it is posted: it never questions or
  * is cynical about them (lib/reverence.ts), and every passage it cites exists and says what the
  * draft says it says (lib/scripture.ts). Every path that saves agent text goes through both —
- * either passesFaithGates(text), or, where a reader is waiting, writeReverently(...) followed by
- * scriptureIsFaithful(text). A new path must too.
+ * passesFaithGates(text); or, where a person is waiting for a reply, writeReverently(...) followed
+ * by scriptureIsFaithful(text); or, for a news reading, writeFaithfully(...). A new path must too.
  */
 export async function passesFaithGates(text: string): Promise<boolean> {
   return (await honoursGodAndHisWord(text)) && (await scriptureIsFaithful(text));
@@ -27,4 +27,31 @@ export async function writeReverently(write: (note: string) => Promise<string>):
   if (!first.trim() || (await honoursGodAndHisWord(first))) return first;
   const second = await write(REVERENCE_RETRY_NOTE);
   return second.trim() && (await honoursGodAndHisWord(second)) ? second : null;
+}
+
+/** What an agent is told when its draft cited Scripture wrongly and it writes again. */
+export const scriptureRetryNote = (reason: string) =>
+  `\n\nYour previous draft was not posted: it cited Scripture wrongly (${reason}). Write it again. Cite a passage only for what it actually says, and put in quotation marks only that passage's own words. When you are not sure, say what it teaches without quotation marks and give the bare reference — or speak plainly from God's character with no reference at all.`;
+
+/**
+ * For text that is written once and gets no later turn — a news reading. Both checks, and when
+ * either refuses, one more draft, told why: before this a reading with one wrong citation was
+ * dropped, and its story went out with neither reading. (A reply to a person and a small-group
+ * helper's reply are tried again by their claims, so they keep writeReverently.)
+ * Returns the draft that passed, "" when the first draft was empty, or null when two were refused.
+ */
+export async function writeFaithfully(write: (note: string) => Promise<string>): Promise<string | null> {
+  let note = "";
+  for (let drafts = 0; drafts < 2; drafts++) {
+    const draft = await write(note);
+    if (!draft.trim()) return drafts === 0 ? draft : null;
+    if (!(await honoursGodAndHisWord(draft))) {
+      note = REVERENCE_RETRY_NOTE;
+      continue;
+    }
+    const problem = await scriptureProblem(draft);
+    if (problem === null) return draft;
+    note = scriptureRetryNote(problem);
+  }
+  return null;
 }
