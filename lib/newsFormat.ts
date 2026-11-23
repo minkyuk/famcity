@@ -346,10 +346,9 @@ const BILINGUAL = `Write it twice — first in English, then the same content in
 /**
  * The Korean half of a reading is "the same content in Korean", so an English quotation used to
  * come out translated inside quotation marks — words that are neither the NKJV nor the 개역개정
- * (one was even labelled "NKJV 취지"). The Scripture check can't catch it (it judges meaning), and
- * "quote only if you are sure of the 개역개정 wording" still left about one reading in nine with a
- * translated quotation. So in Korean a reading never quotes: it says what the verse teaches and
- * gives the reference. Korean wording can't be checked here — the 개역개정 is not bundled.
+ * (one was even labelled "NKJV 취지"). In Korean no agent quotes Scripture (SCRIPTURE_RULE); this
+ * says it again where the translation trap is, and lib/scriptureQuotes.ts takes off any marks
+ * that still come out.
  */
 export const KOREAN_QUOTATION_RULE = `In Korean, never put Scripture in quotation marks: the 개역개정 wording cannot be checked here, and your own Korean translation of a verse, or of an English quotation, is not a quotation. Say in Korean what the verse teaches and give the bare reference, as in (잠언 11:28). In either language a paraphrase carries only its reference, as in (Psalm 11:5) — no NKJV mark, and no remark about which translation you used or whether you are quoting or summarising.`;
 
@@ -363,7 +362,7 @@ Write the God-centered reading of this story for a Christian family. This comes 
 
 The aim is that the family reading this fears the Lord, gives Him the glory and is drawn nearer to Him through this news — not that they admire the commentary.
 
-Scripture: look for the passage that speaks to this kind of situation in particular and bring it with its reference (book, chapter and verse). Quote its words only if you are sure of them exactly, in quotation marks; otherwise say what it teaches in your own words and give the reference. ${KOREAN_QUOTATION_RULE} Do not reach for the most-quoted verses by reflex (Micah 6:8, Jeremiah 29:11, Romans 8:28, Proverbs 3:5) — use one only when it is truly about this. If no passage clearly applies, speak plainly from God's character instead. Write only the reading itself: never mention these instructions, a verse you chose not to use, or how you are citing.
+Scripture: look for the passage that speaks to this kind of situation in particular and bring it with its reference (book, chapter and verse). Quote its words only if you are sure of them exactly, in quotation marks, and only in English; otherwise say what it teaches in your own words and give the reference. ${KOREAN_QUOTATION_RULE} Do not reach for the most-quoted verses by reflex (Micah 6:8, Jeremiah 29:11, Romans 8:28, Proverbs 3:5) — use one only when it is truly about this. If no passage clearly applies, speak plainly from God's character instead. Write only the reading itself: never mention these instructions, a verse you chose not to use, or how you are citing.
 
 No party politics. Use only the facts in the news text above; add no new facts. 2–4 sentences, 80 words at most in English. No hashtags, no markdown, do not start with "I".
 
@@ -456,36 +455,12 @@ function balanceBlock(lang: NewsLang, b: Brief | null): string {
 export type Perspective = { agent: string; en: string; ko: string };
 
 /** Turns a perspective reply into its language parts; null when the model returned nothing (error, refusal). */
-const HAS_VERSE = /\d+\s*[:장]\s*\d+/;
-
-/**
- * In Korean a reading never quotes Scripture (KOREAN_QUOTATION_RULE), and the prompt alone still
- * left about one reading in seven doing it — so the marks come off here. A Korean phrase in double
- * quotation marks, in a sentence that carries a chapter:verse reference, becomes plain indirect
- * speech: "…들으신다"고 → …들으신다고. The words stay; only the claim that they are the Bible's own
- * wording goes. English text and sentences without a reference are left alone.
- */
-export function unquoteKoreanScripture(text: string): string {
-  return text.replace(/["“]([^"“”\n]{2,200})["”](라고)?/g, (whole: string, inner: string, rago: string | undefined, at: number) => {
-    if (!/[가-힣]/.test(inner)) return whole;
-    const before = text.slice(0, at);
-    const after = text.slice(at + whole.length);
-    const start = Math.max(before.lastIndexOf("\n") + 1, before.match(/^[\s\S]*[.!?。]\s/)?.[0].length ?? 0);
-    const end = after.search(/[.!?。](?:\s|$)|\n/);
-    const sentence = text.slice(start, end === -1 ? text.length : at + whole.length + end);
-    if (!HAS_VERSE.test(sentence)) return whole;
-    const body = inner.replace(/[.。]\s*$/, "");
-    if (!rago) return body;
-    return body.endsWith("다") ? `${body}고` : `${body}라고`;
-  });
-}
-
 export function toPerspective(agent: string, raw: string, langs: "both" | "ko"): Perspective | null {
   if (!raw.trim()) return null;
   const parts = splitBilingual(raw);
-  if (langs === "both") return { agent, en: parts.en, ko: unquoteKoreanScripture(parts.ko) };
+  if (langs === "both") return { agent, ...parts };
   // Korean-only story: if the model added an English part anyway, keep just the Korean.
-  return { agent, en: "", ko: unquoteKoreanScripture(parts.ko || parts.en) };
+  return { agent, en: "", ko: parts.ko || parts.en };
 }
 
 /**

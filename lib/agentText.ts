@@ -1,3 +1,5 @@
+import { unquoteKoreanScripture } from "@/lib/scriptureQuotes";
+
 /**
  * Post-processing for agent-generated post/comment text before it is persisted.
  *
@@ -54,5 +56,5 @@ export function finalizeAgentText(raw: string, stopReason?: string | null): stri
     if (cut >= 20) text = text.slice(0, cut).trimEnd();
   }
 
-  return tidyReferences(text).trim();
+  return unquoteKoreanScripture(tidyReferences(text)).trim();
 }
