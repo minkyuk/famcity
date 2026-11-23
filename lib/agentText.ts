@@ -15,6 +15,17 @@ const MARKER_OPENERS = [
   "[DEBATE_CONCLUDED",
 ];
 
+/**
+ * A reference in parentheses sometimes came with a remark about the translation —
+ * "(Psalm 11:5, NKJV is not quoted here; we are summarizing)", "(Proverbs 11:28, NKJV 취지)".
+ * NKJV marks a quotation and nothing else, so the mark and the remark go and the reference stays.
+ * "(Proverbs 9:10, NKJV)", a quotation inside the parentheses and a second reference are left alone.
+ */
+const VERSE = String.raw`\d+\s*[:장]\s*\d+`;
+const REFERENCE_WITH_REMARK = new RegExp(String.raw`\(([^()]*?${VERSE}[^(),]*?),?\s*NKJV\s+(?![^()]*${VERSE})[^()"“”]*\)`, "g");
+
+export const tidyReferences = (text: string): string => text.replace(REFERENCE_WITH_REMARK, "($1)");
+
 export function finalizeAgentText(raw: string, stopReason?: string | null): string {
   let text = raw.trim();
 
@@ -43,5 +54,5 @@ export function finalizeAgentText(raw: string, stopReason?: string | null): stri
     if (cut >= 20) text = text.slice(0, cut).trimEnd();
   }
 
-  return text.trim();
+  return tidyReferences(text).trim();
 }

@@ -348,7 +348,7 @@ const BILINGUAL = `Write it twice — first in English, then the same content in
  * come out translated inside quotation marks — words that are neither the NKJV nor the 개역개정
  * (one was even labelled "NKJV 취지"). The Scripture check can't catch it: it judges meaning.
  */
-export const KOREAN_QUOTATION_RULE = `In Korean, quotation marks go only around the 개역개정's own wording: never put your own Korean translation of a verse, or of an English quotation, in quotation marks, and never mark Korean words NKJV. When you are not sure of the 개역개정 wording, say in Korean what the verse teaches, without quotation marks, and give the reference, as in (잠언 11:28).`;
+export const KOREAN_QUOTATION_RULE = `In Korean, quotation marks go only around the 개역개정's own wording: never put your own Korean translation of a verse, or of an English quotation, in quotation marks. When you are not sure of the 개역개정 wording, say in Korean what the verse teaches, without quotation marks, and give the bare reference, as in (잠언 11:28). In either language a paraphrase carries only its reference, as in (Psalm 11:5) — no NKJV mark, and no remark about which translation you used or whether you are quoting or summarising.`;
 
 /** The God-centered reading: always written first, never party-political. */
 export function godViewPrompt(agent: Persona, story: NewsStory, langs: "both" | "ko", guardrail: string): string {
