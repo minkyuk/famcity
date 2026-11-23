@@ -305,12 +305,17 @@ Reply with one line per number, nothing else: "1 OK" or "1 NO".`,
  * shows how often drafts are dropped for Scripture and why.
  */
 export async function scriptureIsFaithful(text: string): Promise<boolean> {
+  return (await scriptureProblem(text)) === null;
+}
+
+/** The same gate, saying why: null when the text passes, otherwise the reason (logged like any refusal). */
+export async function scriptureProblem(text: string): Promise<string | null> {
   const verdict = await checkScripture(text);
-  if (verdict.ok) return true;
+  if (verdict.ok) return null;
   void recordAiCall({
     route: "scripture:rejected", model: AGENT_MODEL, agent: currentAgent(), ok: false, status: 422,
     errorType: "invalid_request", errorMessage: `${verdict.reason} — draft: ${text.slice(0, 300)}`,
     inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, durationMs: 0,
   });
-  return false;
+  return verdict.reason;
 }
