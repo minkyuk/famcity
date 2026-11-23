@@ -346,9 +346,12 @@ const BILINGUAL = `Write it twice — first in English, then the same content in
 /**
  * The Korean half of a reading is "the same content in Korean", so an English quotation used to
  * come out translated inside quotation marks — words that are neither the NKJV nor the 개역개정
- * (one was even labelled "NKJV 취지"). The Scripture check can't catch it: it judges meaning.
+ * (one was even labelled "NKJV 취지"). The Scripture check can't catch it (it judges meaning), and
+ * "quote only if you are sure of the 개역개정 wording" still left about one reading in nine with a
+ * translated quotation. So in Korean a reading never quotes: it says what the verse teaches and
+ * gives the reference. Korean wording can't be checked here — the 개역개정 is not bundled.
  */
-export const KOREAN_QUOTATION_RULE = `In Korean, quotation marks go only around the 개역개정's own wording: never put your own Korean translation of a verse, or of an English quotation, in quotation marks. When you are not sure of the 개역개정 wording, say in Korean what the verse teaches, without quotation marks, and give the bare reference, as in (잠언 11:28). In either language a paraphrase carries only its reference, as in (Psalm 11:5) — no NKJV mark, and no remark about which translation you used or whether you are quoting or summarising.`;
+export const KOREAN_QUOTATION_RULE = `In Korean, never put Scripture in quotation marks: the 개역개정 wording cannot be checked here, and your own Korean translation of a verse, or of an English quotation, is not a quotation. Say in Korean what the verse teaches and give the bare reference, as in (잠언 11:28). In either language a paraphrase carries only its reference, as in (Psalm 11:5) — no NKJV mark, and no remark about which translation you used or whether you are quoting or summarising.`;
 
 /** The God-centered reading: always written first, never party-political. */
 export function godViewPrompt(agent: Persona, story: NewsStory, langs: "both" | "ko", guardrail: string): string {
