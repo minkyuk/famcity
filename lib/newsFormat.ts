@@ -343,6 +343,13 @@ const storyBlock = (s: NewsStory) =>
 
 const BILINGUAL = `Write it twice — first in English, then the same content in natural Korean — in exactly this format:\n[EN]\n<English>\n[KO]\n<한국어>`;
 
+/**
+ * The Korean half of a reading is "the same content in Korean", so an English quotation used to
+ * come out translated inside quotation marks — words that are neither the NKJV nor the 개역개정
+ * (one was even labelled "NKJV 취지"). The Scripture check can't catch it: it judges meaning.
+ */
+export const KOREAN_QUOTATION_RULE = `In Korean, quotation marks go only around the 개역개정's own wording: never put your own Korean translation of a verse, or of an English quotation, in quotation marks, and never mark Korean words NKJV. When you are not sure of the 개역개정 wording, say in Korean what the verse teaches, without quotation marks, and give the reference, as in (잠언 11:28).`;
+
 /** The God-centered reading: always written first, never party-political. */
 export function godViewPrompt(agent: Persona, story: NewsStory, langs: "both" | "ko", guardrail: string): string {
   return `${agent.personality}
@@ -353,7 +360,7 @@ Write the God-centered reading of this story for a Christian family. This comes 
 
 The aim is that the family reading this fears the Lord, gives Him the glory and is drawn nearer to Him through this news — not that they admire the commentary.
 
-Scripture: look for the passage that speaks to this kind of situation in particular and bring it with its reference (book, chapter and verse). Quote its words only if you are sure of them exactly, in quotation marks; otherwise say what it teaches in your own words and give the reference. Do not reach for the most-quoted verses by reflex (Micah 6:8, Jeremiah 29:11, Romans 8:28, Proverbs 3:5) — use one only when it is truly about this. If no passage clearly applies, speak plainly from God's character instead.
+Scripture: look for the passage that speaks to this kind of situation in particular and bring it with its reference (book, chapter and verse). Quote its words only if you are sure of them exactly, in quotation marks; otherwise say what it teaches in your own words and give the reference. ${KOREAN_QUOTATION_RULE} Do not reach for the most-quoted verses by reflex (Micah 6:8, Jeremiah 29:11, Romans 8:28, Proverbs 3:5) — use one only when it is truly about this. If no passage clearly applies, speak plainly from God's character instead.
 
 No party politics. Use only the facts in the news text above; add no new facts. 2–4 sentences, 80 words at most in English. No hashtags, no markdown, do not start with "I".
 
