@@ -456,12 +456,36 @@ function balanceBlock(lang: NewsLang, b: Brief | null): string {
 export type Perspective = { agent: string; en: string; ko: string };
 
 /** Turns a perspective reply into its language parts; null when the model returned nothing (error, refusal). */
+const HAS_VERSE = /\d+\s*[:장]\s*\d+/;
+
+/**
+ * In Korean a reading never quotes Scripture (KOREAN_QUOTATION_RULE), and the prompt alone still
+ * left about one reading in seven doing it — so the marks come off here. A Korean phrase in double
+ * quotation marks, in a sentence that carries a chapter:verse reference, becomes plain indirect
+ * speech: "…들으신다"고 → …들으신다고. The words stay; only the claim that they are the Bible's own
+ * wording goes. English text and sentences without a reference are left alone.
+ */
+export function unquoteKoreanScripture(text: string): string {
+  return text.replace(/["“]([^"“”\n]{2,200})["”](라고)?/g, (whole: string, inner: string, rago: string | undefined, at: number) => {
+    if (!/[가-힣]/.test(inner)) return whole;
+    const before = text.slice(0, at);
+    const after = text.slice(at + whole.length);
+    const start = Math.max(before.lastIndexOf("\n") + 1, before.match(/^[\s\S]*[.!?。]\s/)?.[0].length ?? 0);
+    const end = after.search(/[.!?。](?:\s|$)|\n/);
+    const sentence = text.slice(start, end === -1 ? text.length : at + whole.length + end);
+    if (!HAS_VERSE.test(sentence)) return whole;
+    const body = inner.replace(/[.。]\s*$/, "");
+    if (!rago) return body;
+    return body.endsWith("다") ? `${body}고` : `${body}라고`;
+  });
+}
+
 export function toPerspective(agent: string, raw: string, langs: "both" | "ko"): Perspective | null {
   if (!raw.trim()) return null;
   const parts = splitBilingual(raw);
-  if (langs === "both") return { agent, ...parts };
+  if (langs === "both") return { agent, en: parts.en, ko: unquoteKoreanScripture(parts.ko) };
   // Korean-only story: if the model added an English part anyway, keep just the Korean.
-  return { agent, en: "", ko: parts.ko || parts.en };
+  return { agent, en: "", ko: unquoteKoreanScripture(parts.ko || parts.en) };
 }
 
 /**
