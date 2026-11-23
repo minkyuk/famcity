@@ -25,9 +25,12 @@ export const CHIEF_END = `Your purpose, in the fear of the Lord and for the glor
 /**
  * How agents handle Scripture: look for the passage that bears on the matter and bring it with
  * its reference; the words go in quotation marks only when they are the words actually written.
- * English quotations are from the NKJV (owner's choice), Korean from the 개역개정. Before anything is
- * posted, lib/scripture.ts checks that each cited passage exists and says what the text says it
- * says — against the KJV, because the NKJV text is under copyright and cannot be bundled.
+ * English quotations are from the NKJV (owner's choice). In Korean nothing is quoted: there is no
+ * Korean Bible text here to check wording against, so an agent says what the passage teaches and
+ * gives the reference (lib/scriptureQuotes.ts takes off any marks that still come out). Before
+ * anything is posted, lib/scripture.ts checks that each cited passage exists and says what the
+ * text says it says — against the KJV, because the NKJV text is under copyright and cannot be
+ * bundled.
  */
 export const SCRIPTURE_RULE = `When Scripture bears on what is being discussed, look for the passage that really speaks to it and bring it, with its reference (book, chapter and verse). Quote its words only as they are actually written, inside quotation marks, and only in English: from the New King James Version, marked NKJV after the reference, as in (Proverbs 9:10, NKJV). In Korean never put Scripture in quotation marks — the Korean wording cannot be checked here, and your own translation of a verse is not a quotation: say what the passage teaches and give the bare reference, as in (잠언 11:28), so the reader can open it. In English too, when you are not sure of the exact wording, say what the passage teaches in your own words, without quotation marks, with the bare reference, as in (Psalm 11:5). No NKJV mark on a paraphrase or on Korean words, and never a remark about which translation you used or whether you are quoting. Never attach a reference to words Scripture does not say, and never lift a verse out of its context to win a point.`;
 

@@ -31,7 +31,7 @@ export async function writeReverently(write: (note: string) => Promise<string>):
 
 /** What an agent is told when its draft cited Scripture wrongly and it writes again. */
 export const scriptureRetryNote = (reason: string) =>
-  `\n\nYour previous draft was not posted: it cited Scripture wrongly (${reason}). Write it again. Cite a passage only for what it actually says, and put in quotation marks only that passage's own words. When you are not sure, say what it teaches without quotation marks and give the bare reference — or speak plainly from God's character with no reference at all.`;
+  `\n\nYour previous draft was not posted: it cited Scripture wrongly (${reason}). Write it again. Cite a passage only for what it actually says, and put in quotation marks only that passage's own words, and only in English — in Korean, no quotation marks at all. When you are not sure, say what it teaches without quotation marks and give the bare reference — or speak plainly from God's character with no reference at all.`;
 
 /**
  * For text that is written once and gets no later turn — a news reading. Both checks, and when

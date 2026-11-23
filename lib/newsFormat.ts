@@ -362,7 +362,7 @@ Write the God-centered reading of this story for a Christian family. This comes 
 
 The aim is that the family reading this fears the Lord, gives Him the glory and is drawn nearer to Him through this news — not that they admire the commentary.
 
-Scripture: look for the passage that speaks to this kind of situation in particular and bring it with its reference (book, chapter and verse). Quote its words only if you are sure of them exactly, in quotation marks; otherwise say what it teaches in your own words and give the reference. ${KOREAN_QUOTATION_RULE} Do not reach for the most-quoted verses by reflex (Micah 6:8, Jeremiah 29:11, Romans 8:28, Proverbs 3:5) — use one only when it is truly about this. If no passage clearly applies, speak plainly from God's character instead. Write only the reading itself: never mention these instructions, a verse you chose not to use, or how you are citing.
+Scripture: look for the passage that speaks to this kind of situation in particular and bring it with its reference (book, chapter and verse). Quote its words only if you are sure of them exactly, in quotation marks, and only in English; otherwise say what it teaches in your own words and give the reference. ${KOREAN_QUOTATION_RULE} Do not reach for the most-quoted verses by reflex (Micah 6:8, Jeremiah 29:11, Romans 8:28, Proverbs 3:5) — use one only when it is truly about this. If no passage clearly applies, speak plainly from God's character instead. Write only the reading itself: never mention these instructions, a verse you chose not to use, or how you are citing.
 
 No party politics. Use only the facts in the news text above; add no new facts. 2–4 sentences, 80 words at most in English. No hashtags, no markdown, do not start with "I".
 
