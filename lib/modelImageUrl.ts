@@ -11,8 +11,16 @@ const CLOUDINARY_IMAGE = /^(https:\/\/res\.cloudinary\.com\/[^/?#]+\/image\/uplo
 const UNREADABLE_EXTENSION = /\.(heic|heif|avif|tiff?|bmp)$/i;
 
 export function modelImageUrl(url: string): string {
+  return cloudinaryAsJpeg(url, UNREADABLE_EXTENSION, "c_limit,w_1568,h_1568");
+}
+
+/**
+ * A Cloudinary image whose extension matches `convert`, asked for as a JPEG with `transform`
+ * applied (Cloudinary converts on delivery). Any other URL is returned exactly as given.
+ */
+export function cloudinaryAsJpeg(url: string, convert: RegExp, transform: string): string {
   const m = url.match(CLOUDINARY_IMAGE);
-  if (!m || !UNREADABLE_EXTENSION.test(m[2])) return url;
+  if (!m || !convert.test(m[2])) return url;
   const [, base, path, rest] = m;
-  return `${base}c_limit,w_1568,h_1568/${path.replace(UNREADABLE_EXTENSION, ".jpg")}${rest}`;
+  return `${base}${transform}/${path.replace(convert, ".jpg")}${rest}`;
 }
