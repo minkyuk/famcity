@@ -2,9 +2,11 @@
 
 import { useState } from "react";
 import Image from "next/image";
+import { displayImageUrl } from "@/lib/displayImageUrl";
 
 export function ImagePost({ url }: { url: string }) {
   const [lightbox, setLightbox] = useState(false);
+  const src = displayImageUrl(url);
 
   return (
     <>
@@ -13,7 +15,7 @@ export function ImagePost({ url }: { url: string }) {
         className="block w-full rounded-xl overflow-hidden focus:outline-none"
       >
         <Image
-          src={url}
+          src={src}
           alt="Post image"
           width={800}
           height={600}
@@ -28,7 +30,7 @@ export function ImagePost({ url }: { url: string }) {
           onClick={() => setLightbox(false)}
         >
           <Image
-            src={url}
+            src={src}
             alt="Full size"
             width={1200}
             height={900}

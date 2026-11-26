@@ -2,6 +2,7 @@
 
 import { useState, useRef, useEffect, useCallback } from "react";
 import Image from "next/image";
+import { displayImageUrl } from "@/lib/displayImageUrl";
 
 interface ImageGalleryProps {
   images: { url: string; order: number }[];
@@ -9,7 +10,7 @@ interface ImageGalleryProps {
 
 export function ImageGallery({ images }: ImageGalleryProps) {
   const [lightbox, setLightbox] = useState<number | null>(null);
-  const sorted = [...images].sort((a, b) => a.order - b.order);
+  const sorted = [...images].sort((a, b) => a.order - b.order).map((img) => ({ ...img, url: displayImageUrl(img.url) }));
   const count = sorted.length;
 
   // Direct DOM refs — no state during drag, zero re-renders, buttery smooth

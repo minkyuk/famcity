@@ -1,3 +1,5 @@
+import { displayImageUrl } from "@/lib/displayImageUrl";
+import { browserSupport, sniffFormat, type BrowserSupport } from "@/lib/imageFormat";
 import { prisma } from "@/lib/prisma";
 
 /**
@@ -10,8 +12,6 @@ import { prisma } from "@/lib/prisma";
  * Never returns a photo URL or any post text — only the host, the format, the space's name and
  * the post id, so the endpoint stays a monitoring tool and not a way to read members-only posts.
  */
-
-export type BrowserSupport = "all" | "safari_only" | "none" | "unknown";
 
 export type ImageCheck = {
   space: string;
@@ -32,6 +32,8 @@ export type ImageCheck = {
   cldError: string | null;
   /** Why the file could not be fetched at all (timeout, network), or why it wasn't tried. */
   error: string | null;
+  /** For a file not every browser can show: what the site's converted URL (displayImageUrl) returns. */
+  shownAs?: { status: number | null; sniffed: string | null; browsers: BrowserSupport; error: string | null };
 };
 
 export type ImageHealth = {
@@ -51,35 +53,6 @@ const FETCH_MS = 5000;
 
 const IMAGE_LINK = /https?:\/\/[^\s)]+/gi;
 const IMAGE_LIKE = /\.(jpe?g|png|gif|webp|heic|heif|avif|tiff?|bmp)(\?|$)|photos\.app\.goo\.gl|photos\.google\.com|kakaocdn|kakao\.com|icloud\.com|drive\.google\.com|dropbox/i;
-
-/** Reads the format from a file's first bytes. */
-export function sniffFormat(head: Uint8Array): string | null {
-  const at = (i: number) => head[i] ?? -1;
-  const ascii = (from: number, to: number) => String.fromCharCode(...Array.from(head.slice(from, to)));
-  if (at(0) === 0xff && at(1) === 0xd8 && at(2) === 0xff) return "jpeg";
-  if (at(0) === 0x89 && ascii(1, 4) === "PNG") return "png";
-  if (ascii(0, 4) === "GIF8") return "gif";
-  if (ascii(0, 4) === "RIFF" && ascii(8, 12) === "WEBP") return "webp";
-  if (ascii(0, 2) === "BM") return "bmp";
-  if (ascii(0, 4) === "II*\0" || ascii(0, 4) === "MM\0*") return "tiff";
-  if (ascii(4, 8) === "ftyp") {
-    const brand = ascii(8, 12);
-    if (brand === "avif" || brand === "avis") return "avif";
-    if (/^(heic|heix|hevc|hevx|heim|heis|mif1|msf1)$/.test(brand)) return "heic";
-    return `isobmff:${brand.trim()}`;
-  }
-  if (/^\s*</.test(ascii(0, 16))) return "html_or_xml";
-  return head.length === 0 ? null : "unknown";
-}
-
-/** Which browsers can show this format in an <img>. */
-export function browserSupport(format: string | null): BrowserSupport {
-  if (!format) return "unknown";
-  if (["jpeg", "png", "gif", "webp", "avif", "bmp"].includes(format)) return "all";
-  if (format === "heic" || format === "tiff") return "safari_only";
-  if (format === "html_or_xml") return "none";
-  return "unknown";
-}
 
 const extOf = (url: URL) => url.pathname.match(/\.([A-Za-z0-9]{2,5})$/)?.[1]?.toLowerCase() ?? null;
 
@@ -176,7 +149,13 @@ export async function checkRecentImages(opts: { spaceName: string | null; days: 
     if (hosts.size > 0) links.push({ space: p.space?.name ?? "(no space)", postId: p.id, hosts: [...hosts] });
   }
 
-  const checks = await inBatches(files.slice(0, MAX_FILES), PARALLEL, (f) => checkOne(f.url, f.base));
+  const checks = await inBatches(files.slice(0, MAX_FILES), PARALLEL, async (f) => {
+    const check = await checkOne(f.url, f.base);
+    const shown = displayImageUrl(f.url);
+    if (check.browsers === "all" || shown === f.url) return check;
+    const s = await checkOne(shown, f.base);
+    return { ...check, shownAs: { status: s.status, sniffed: s.sniffed, browsers: s.browsers, error: s.cldError ?? s.error } };
+  });
   const summary: Record<string, number> = {};
   for (const c of checks) {
     const key = c.status === null ? `no_answer:${c.error}` : c.status >= 400 ? `http_${c.status}` : `${c.sniffed ?? "unknown"}:${c.browsers}`;
