@@ -6,6 +6,7 @@ import { isCronAuthorized, presentedCronSecret } from "@/lib/cronAuth";
 import { loadAiHealth } from "@/lib/aiHealth";
 import { pingAgentModel } from "@/lib/aiPing";
 import { loadDailyActivity } from "@/lib/activityHistory";
+import { checkRecentImages } from "@/lib/imageHealth";
 import { AgentStatusQuerySchema } from "@/lib/validators";
 
 /**
@@ -35,6 +36,8 @@ function forbiddenReason(req: NextRequest): string {
  * GET — machine-readable version of the /admin/agents dashboard, for monitoring without a browser.
  * Auth: CRON_SECRET (x-cron-secret header / Bearer, same as the crons) or an admin session.
  * Read-only, except `?ping=1`, which also sends one 1-token live request (fraction of a cent).
+ * `?images=1` (with optional `space=<part of a name>` and `days=<n>`) also fetches the newest
+ * photo files and reports what each one really is — never a photo URL or post text.
  */
 export async function GET(req: NextRequest) {
   if (!isCronAuthorized(req)) {
@@ -48,13 +51,22 @@ export async function GET(req: NextRequest) {
     }
   }
 
-  const parsed = AgentStatusQuerySchema.safeParse({ ping: req.nextUrl.searchParams.get("ping") ?? undefined });
+  const q = req.nextUrl.searchParams;
+  const parsed = AgentStatusQuerySchema.safeParse({
+    ping: q.get("ping") ?? undefined,
+    images: q.get("images") ?? undefined,
+    space: q.get("space") ?? undefined,
+    days: q.get("days") ?? undefined,
+  });
   if (!parsed.success) return NextResponse.json({ error: "Invalid query" }, { status: 400 });
 
-  const [health, ping, dailyActivity] = await Promise.all([
+  const [health, ping, dailyActivity, images] = await Promise.all([
     loadAiHealth(),
     parsed.data.ping ? pingAgentModel() : Promise.resolve(null),
     loadDailyActivity().catch(() => []),
+    parsed.data.images
+      ? checkRecentImages({ spaceName: parsed.data.space ?? null, days: parsed.data.days ?? 30 }).catch((err: unknown) => ({ error: err instanceof Error ? err.message : "image check failed" }))
+      : Promise.resolve(null),
   ]);
-  return NextResponse.json({ checkedAt: new Date().toISOString(), ping, health, dailyActivity });
+  return NextResponse.json({ checkedAt: new Date().toISOString(), ping, health, dailyActivity, images });
 }
